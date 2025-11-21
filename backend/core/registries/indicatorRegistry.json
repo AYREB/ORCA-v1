@@ -1,0 +1,38 @@
+{
+    "INDICATORS": {
+        "PRICE": {
+            "function": "get_price",
+            "args": ["field", "offset"],
+            "defaults": {"field": "close", "offset": 0}
+        },
+        "VOLUME": {
+            "function": "get_volume",
+            "args": ["offset"],
+            "defaults": {"offset": 0}
+        },
+        "SMA": {
+            "function": "compute_sma",
+            "args": ["period", "timeframe", "offset"],
+            "defaults": {"period": 14, "timeframe": "1h", "offset": 0}, 
+            "supports_timeframe": true
+        },
+        "EMA": {
+            "function": "compute_ema",
+            "args": ["period", "timeframe", "offset"], 
+            "defaults": {"period": 14, "offset": 0},
+            "supports_timeframe": true
+        },
+        "RSI": {
+            "function": "compute_rsi",
+            "args": ["period", "timeframe", "offset"],  
+            "defaults": {"period": 14, "timeframe": "1h", "offset": 0}, 
+            "supports_timeframe": true
+        },
+        "MACD": {
+            "function": "compute_macd",
+            "args": ["fast", "slow", "signal", "timeframe", "offset"], 
+            "defaults": {"fast": 12, "slow": 26, "signal": 9, "timeframe": "1h", "offset": 0}, 
+            "supports_timeframe": true
+        }
+    }
+}

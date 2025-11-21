@@ -1,0 +1,63 @@
+{
+    "LONG": {
+        "OPEN": {
+            "CONDITIONS": {
+                "left": {
+                    "func": "RSI",
+                    "arg": {
+                        "period": 14,
+                        "timeframe": "1h",
+                        "offset": 0
+                    }
+                },
+                "operator": "<",
+                "right": {
+                    "value": 30
+                }
+            },
+            "ARGUMENTS": {
+                "initialOpenPositionInvestType": "percentCashBalance",
+                "initialOpenPositionInvestAmount": 0.1,
+                "recurring": false,
+                "stopLossPercent": 6,
+                "takeProfitPercent": 10,
+                "recurringPeriod": 5,
+                "recurringInvestType": "percentCashBalance",
+                "recurringInvestAmount": 0.1,
+                "maxRecurringCount": 0
+            }
+        },
+        "CLOSE": {
+            "CONDITIONS": {
+                "left": {
+                    "func": "RSI",
+                    "arg": {
+                        "period": 14,
+                        "timeframe": "1h",
+                        "offset": 1
+                    }
+                },
+                "operator": ">",
+                "right": {
+                    "value": 75
+                }
+            },
+            "ARGUMENTS": {
+                "test": 0.5
+            }
+        },
+        "context": {
+            "tickers": [
+                "AAPL"
+            ],
+            "execution_timeframe": "1h",
+            "data_timeframes": [
+                "1h"
+            ],
+            "dateframe": {
+                "start": "2024-01-01",
+                "end": "2025-11-01"
+            }
+        }
+    }
+}

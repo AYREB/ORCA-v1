@@ -1,0 +1,62 @@
+{
+  "ARGUMENTS": {
+    "LONG": {
+      "OPEN": {
+        "initialOpenPositionInvestType": {
+          "options": ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"],
+          "default": "fixedValue",
+          "description": "Specifies how the initial investment amount is calculated."
+        },
+        "initialOpenPositionInvestAmount": {
+          "type": "float",
+          "default": 0.2,
+          "description": "Defines the numeric value used when the investment type requires a fixed or percent-based amount."
+        },
+        "recurring": {
+          "type": "bool",
+          "default": false,
+          "description": "Enable/disable recurring trades for this position."
+        },
+        "recurringPeriod": {
+          "type": "int",
+          "default": 5,
+          "description": "Minimum number of bars/periods between additional investments."
+        },
+        "recurringInvestType": {
+          "options": ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"],
+          "default": "percentCashBalance",
+          "description": "Investment type for recurring trades."
+        },
+        "recurringInvestAmount": {
+          "type": "float",
+          "default": 0.1,
+          "description": "Amount to invest each recurring trade, interpreted according to recurringInvestType."
+        },
+        "maxRecurringCount": {
+          "type": "int",
+          "default": 0,
+          "description": "Maximum number of recurring investments per position (0 = unlimited)."
+        },
+        "stopLossPercent": {
+          "type": "float",
+          "default": null,
+          "description": "Optional stop-loss percentage below the execution price."
+        },
+        "takeProfitPercent": {
+          "type": "float",
+          "default": null,
+          "description": "Optional take-profit percentage above the execution price."
+        }
+      },
+      "CLOSE": {
+        "test": {
+          "type": "float",
+          "default": 0.5,
+          "description": "test"
+        }
+      }
+    },
+    "SHORT": {
+    }
+  }
+}

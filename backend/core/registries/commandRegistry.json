@@ -1,0 +1,10 @@
+{
+    "COMMANDS":{
+        "LONG":{
+            "CONTROLS":["OPEN","CLOSE"]
+        },
+        "SHORT":{
+            "CONTROLS":["OPEN","CLOSE"]
+            }
+    }
+}
