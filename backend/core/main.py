@@ -18,7 +18,7 @@ DATA_CSV_FOLDER = "Data_CSVs"
 dsl_text_example = """
 :TICKER(AAPL)
 :EXECUTION_TIMEFRAME(1h)
-:DATA_TIMEFRAMES(1h)
+:DATA_TIMEFRAMES(1h,8h)
 :DATEFRAME(2024-01-01, 2025-11-01)
 :LONG(
    OPEN{
@@ -206,10 +206,30 @@ def main(dsl_command: str) -> str:
     with open("trades_output.json", "w") as f:
         json.dump(trade_log, f, indent=4)
 
+    
+    data_return = {
+        "cash": cash,
+        "invested": invested,
+        "total_portfolio": total_portfolio,
+        "pct_change": pct_change,
+        "trades": trade_log,
+        "data": {
+            ticker: {
+                tf: df.reset_index()
+                    .assign(Datetime=lambda x: x["Datetime"].astype(str))
+                    .to_dict(orient="records")
+                for tf, df in data_dict[ticker].items()
+            }
+            for ticker in data_dict
+        }
+    }
+    with open("return_data_output.json", "w") as f:
+        json.dump(data_return, f, indent=4)
 
     print_trade_summary(trade_log)
-    return "\n💰 Final Cash: ${:.2f}".format(cash)
-    
+
+    return data_return
+      
 
 if __name__ == "__main__":
     main()
