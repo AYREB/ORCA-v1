@@ -4,7 +4,7 @@ import os
 import json
 import itertools
 import pandas as pd
-from Backtesting.backtesterCore import backtester
+from backtesting.backtesterCore import backtester
 
 def run_optimizer(param_grid, parsed_dsl, data_dict, INDICATOR_FUNCTIONS):
     # Run all combinations
@@ -108,7 +108,7 @@ def run_param_grid_backtest(parsed_dsl, param_grid, data_dict, INDICATOR_FUNCTIO
 
 import os
 import pandas as pd
-from DataPulling import datapull
+from data_pulling import datapull
 
 def load_data_dict(TICKERS, DATA_TFS, start_date, end_date, INDICATOR_FUNCTIONS, internetConnection, DATA_CSV_FOLDER):
     data_dict = {}
@@ -159,7 +159,7 @@ if __name__ == "__main__":
     with open("Core/Registries/indicatorRegistry.json") as f:
         INDICATORS_DEF = json.load(f)["INDICATORS"]
 
-    from Fetchers_Calculators import indicatorEvaluator
+    from fetcher_calculators import indicatorEvaluator
     INDICATOR_FUNCTIONS = indicatorEvaluator.build_indicator_functions(INDICATORS_DEF)
 
     # Load data_dict somewhere in your workflow
