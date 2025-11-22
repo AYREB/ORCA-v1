@@ -58,7 +58,7 @@ def get_data_with_indicator(
 
     # 4. Save to CSV if requested
     if save_path:
-        actualSavePath = f"{save_path}/{ticker}.csv"
+        actualSavePath = f"{save_path}/{ticker}_{interval}.csv"
         data.to_csv(actualSavePath, index=True)
         print(f"✅ Data saved to: {actualSavePath}")
 
