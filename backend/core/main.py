@@ -23,7 +23,7 @@ dsl_text_example = """
 :LONG(
    OPEN{
        CONDITIONS{
-           RSI() < 30
+           RSI() < 30 AND SMA() < 20 AND PRICE() > 30
        }
        |ARGUMENTS{
            initialOpenPositionInvestType = percentCashBalance

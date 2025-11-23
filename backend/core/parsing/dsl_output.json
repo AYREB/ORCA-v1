@@ -2,18 +2,35 @@
     "LONG": {
         "OPEN": {
             "CONDITIONS": {
-                "left": {
-                    "func": "RSI",
-                    "arg": {
-                        "period": 14,
-                        "timeframe": "1h",
-                        "offset": 0
+                "AND": [
+                    {
+                        "left": {
+                            "func": "RSI",
+                            "arg": {
+                                "period": 14,
+                                "timeframe": "1h",
+                                "offset": 0
+                            }
+                        },
+                        "operator": "<",
+                        "right": {
+                            "value": 30
+                        }
+                    },
+                    {
+                        "left": {
+                            "func": "PRICE",
+                            "arg": {
+                                "field": "close",
+                                "offset": 0
+                            }
+                        },
+                        "operator": ">",
+                        "right": {
+                            "value": 150
+                        }
                     }
-                },
-                "operator": "<",
-                "right": {
-                    "value": 30
-                }
+                ]
             },
             "ARGUMENTS": {
                 "initialOpenPositionInvestType": "percentCashBalance",

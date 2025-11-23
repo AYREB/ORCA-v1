@@ -16,7 +16,7 @@ export default function Home() {
 
   const [tickers, setTickers] = useState(["AAPL"]);
   const [dataTimeframes, setDataTimeframes] = useState([]);
-  const [executionTF, setExecutionTF] = useState([]);
+  const [executionTF, setExecutionTF] = useState("");
   const [dateStart, setDateStart] = useState("");
   const [dateEnd, setDateEnd] = useState("");
   const [side, setSide] = useState("LONG");
@@ -47,7 +47,7 @@ export default function Home() {
 
   const addBlock = (blockName) => {
     const updated = { ...blocks };
-    updated[side][blockName] = { CONDITIONS: [], ARGUMENTS: {} };
+    updated[side][blockName] = { ARGUMENTS: {} };
     setBlocks(updated);
   };
   const removeBlock = (blockName) => {
@@ -56,69 +56,57 @@ export default function Home() {
     setBlocks(updated);
   };
 
-  const addCondition = (blockName) => {
-    const updated = { ...blocks };
-    updated[side][blockName].CONDITIONS.push({
-      type: "condition",
-      left: { func: "", args: {} },
-      operator: "<",
-      right: { value: 0 },
-      join: "AND"
-    });
-    setBlocks(updated);
-  };
-
-  const updateCondition = (block, idx, newNode) => {
-    const updated = { ...blocks };
-    updated[side][block].CONDITIONS[idx] = newNode;
-    setBlocks(updated);
-  };
-
-  const removeCondition = (block, idx) => {
-    const updated = { ...blocks };
-    updated[side][block].CONDITIONS = updated[side][block].CONDITIONS.filter(
-      (_, i) => i !== idx
-    );
-    setBlocks(updated);
-  };
-
   const updateArgument = (block, arg, value) => {
     const updated = { ...blocks };
+    if (!updated[side][block]) updated[side][block] = { ARGUMENTS: {} };
     updated[side][block].ARGUMENTS[arg] = value;
     setBlocks(updated);
   };
 
-  const buildJsonDsl = () => ({
-    [side]: {
-      ...blocks[side],
-      context: {
-        tickers,
-        execution_timeframe: executionTF,
-        data_timeframes,
-        dateframe: { start: dateStart, end: dateEnd }
-      }
-    }
-  });
+  const buildJsonDsl = () => {
+    const outBlocks = {};
+    Object.keys(blocks[side] || {}).forEach((b) => {
+      outBlocks[b] = { ARGUMENTS: blocks[side][b].ARGUMENTS || {} };
+    });
 
-  const runDsl = async () => {
-    try {
-      const payloadDsl = mode === "advanced" ? JSON.parse(dslText) : buildJsonDsl();
-      setLoading(true);
-      const res = await API.post("/api/backtest/", { dsl: payloadDsl });
-      setResults(res.data);
-      navigate("/analysis");
-    } catch (err) {
-      setError(err?.response?.data?.detail || err.message || "Error running DSL");
-    } finally {
-      setLoading(false);
-    }
+    return {
+      [side]: {
+        ...outBlocks,
+        context: {
+          tickers,
+          execution_timeframe: executionTF,
+          data_timeframes,
+          dateframe: { start: dateStart, end: dateEnd }
+        }
+      }
+    };
   };
+
+  const addExample = () => {
+    const exampleText = ':TICKER(AAPL,MSFT,GOOG) :EXECUTION_TIMEFRAME(1h) :DATA_TIMEFRAMES(1h,4h) :DATEFRAME(2024-01-01, 2025-11-01) :LONG(    OPEN{        CONDITIONS{            RSI() < 30 AND PRICE() > 150        }        |ARGUMENTS{            initialOpenPositionInvestType = percentCashBalance            |initialOpenPositionInvestAmount = 0.1            |recurring=true            |stopLossPercent =6            |takeProfitPercent = 10        }    }    |CLOSE{         CONDITIONS{             RSI(offset=1) > 75         }    } )';
+    setDslText(exampleText);
+  };
+
+
+    const runDsl = async () => {
+    try {
+        // If in advanced mode, just send the raw DSL text instead of parsing
+        const payloadDsl = mode === "advanced" ? dslText : buildJsonDsl();
+
+        setLoading(true);
+        const res = await API.post("/api/backtest/", { dsl: payloadDsl });
+        setResults(res.data);
+        navigate("/analysis");
+    } catch (err) {
+        setError(err?.response?.data?.detail || err.message || "Error running DSL");
+    } finally {
+        setLoading(false);
+    }
+    };
+
 
   if (!registry) return <div>Loading registry...</div>;
 
-  const indicatorList = registry.indicators?.INDICATORS
-    ? Object.keys(registry.indicators.INDICATORS)
-    : [];
   const blockNames = Object.keys(blocks[side] || {});
   const allowedArgs = registry.arguments?.ARGUMENTS?.[side] || {};
 
@@ -150,41 +138,42 @@ export default function Home() {
           ))}
           <button onClick={addTicker}>+ Add Ticker</button>
 
-        {/* Data Timeframes */}
-        <h4 style={{ marginTop: 20 }}>Data Timeframes</h4>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        {["1m", "5m", "15m", "1h", "4h", "1d"].map(tf => (
-            <label key={tf} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <input
-                type="checkbox"
-                checked={dataTimeframes.includes(tf)}
-                onChange={(e) => {
-                if (e.target.checked) setDataTimeframes([...dataTimeframes, tf]);
-                else setDataTimeframes(dataTimeframes.filter(t => t !== tf));
-                }}
-            />
-            {tf}
-            </label>
-        ))}
-        </div>
+          {/* Data Timeframes */}
+          <h4 style={{ marginTop: 20 }}>Data Timeframes</h4>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {["1m", "5m", "15m", "1h", "4h", "1d"].map(tf => (
+              <label key={tf} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={dataTimeframes.includes(tf)}
+                  onChange={(e) => {
+                    if (e.target.checked) setDataTimeframes([...dataTimeframes, tf]);
+                    else setDataTimeframes(dataTimeframes.filter(t => t !== tf));
+                    if (!e.target.checked && executionTF === tf) setExecutionTF("");
+                  }}
+                />
+                {tf}
+              </label>
+            ))}
+          </div>
 
-        {/* Execution Timeframe */}
-        <h4 style={{ marginTop: 20 }}>Execution Timeframe</h4>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        {dataTimeframes.map(tf => (
-            <label key={tf} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <input
-                type="radio"
-                name="executionTF"
-                value={tf}
-                checked={executionTF === tf}
-                onChange={() => setExecutionTF(tf)}
-            />
-            {tf}
-            </label>
-        ))}
-        </div>
-
+          {/* Execution Timeframe */}
+          <h4 style={{ marginTop: 20 }}>Execution Timeframe</h4>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {dataTimeframes.length === 0 && <div style={{ color: "#777" }}>Select data timeframes first</div>}
+            {dataTimeframes.map(tf => (
+              <label key={tf} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <input
+                  type="radio"
+                  name="executionTF"
+                  value={tf}
+                  checked={executionTF === tf}
+                  onChange={() => setExecutionTF(tf)}
+                />
+                {tf}
+              </label>
+            ))}
+          </div>
 
           {/* Dates */}
           <h4 style={{ marginTop: 20 }}>Dateframe</h4>
@@ -209,47 +198,13 @@ export default function Home() {
             ) : null
           )}
 
-          {/* Render blocks */}
+          {/* Render blocks with arguments only */}
           {blockNames.map((block) => (
             <div key={block} style={{ marginTop: 20, border: "1px solid #888", padding: 10 }}>
               <h3>
                 {block}{" "}
                 <button onClick={() => removeBlock(block)} style={{ marginLeft: 10 }}>- Remove</button>
               </h3>
-
-              <h4>Conditions</h4>
-              {blocks[side][block].CONDITIONS.map((c, idx) => (
-                <div key={idx} style={{ border: "1px solid #444", padding: 5, marginBottom: 5 }}>
-                  <select
-                    value={c.left.func}
-                    onChange={(e) =>
-                      updateCondition(block, idx, {
-                        ...c,
-                        left: { func: e.target.value, args: {} }
-                      })
-                    }
-                  >
-                    <option value="">Select Indicator</option>
-                    {indicatorList.map((ind) => (
-                      <option key={ind} value={ind}>{ind}</option>
-                    ))}
-                  </select>
-                  <select value={c.operator} onChange={(e) => updateCondition(block, idx, { ...c, operator: e.target.value })}>
-                    {["<", ">", "<=", ">=", "=="].map(op => <option key={op}>{op}</option>)}
-                  </select>
-                  <input
-                    type="number"
-                    value={c.right.value}
-                    onChange={(e) => updateCondition(block, idx, { ...c, right: { value: Number(e.target.value) } })}
-                  />
-                  <select value={c.join} onChange={(e) => updateCondition(block, idx, { ...c, join: e.target.value })}>
-                    <option>AND</option>
-                    <option>OR</option>
-                  </select>
-                  <button onClick={() => removeCondition(block, idx)}>-</button>
-                </div>
-              ))}
-              <button onClick={() => addCondition(block)}>+ Add Condition</button>
 
               <h4 style={{ marginTop: 10 }}>Arguments</h4>
               <NestedArgumentSelector
@@ -272,6 +227,11 @@ export default function Home() {
           <h2>Advanced DSL</h2>
           <textarea value={dslText} onChange={(e) => setDslText(e.target.value)} rows={15} style={{ width: "100%" }} />
           <div style={{ marginTop: 10 }}>
+
+            <button className="btn" style={{ marginTop: 10, marginRight: 10 }} onClick={addExample}>
+                Add Example
+            </button>
+
             <button className="btn" onClick={runDsl} disabled={loading}>
               {loading ? "Running..." : "Run DSL"}
             </button>
@@ -290,6 +250,10 @@ function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange })
     Object.keys(currentArgs || {}).filter(arg => !availableArgs[arg]?.parent)
   );
 
+  useEffect(() => {
+    setAddedArgs(Object.keys(currentArgs || {}).filter(arg => !availableArgs[arg]?.parent));
+  }, [currentArgs, availableArgs]);
+
   const addArg = (arg) => {
     if (!addedArgs.includes(arg)) setAddedArgs([...addedArgs, arg]);
   };
@@ -297,53 +261,39 @@ function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange })
   const removeArg = (arg) => {
     setAddedArgs(addedArgs.filter(a => a !== arg));
     onChange(arg, undefined);
-    // remove children if any
     Object.keys(availableArgs)
       .filter(a => availableArgs[a].parent === arg)
       .forEach(c => onChange(c, undefined));
   };
 
-  // Only top-level args for the main dropdown
   const topLevelArgs = Object.keys(availableArgs).filter(a => !availableArgs[a].parent);
 
   return (
     <div>
-      {addedArgs.map(arg => {
+      {addedArgs.map((arg) => {
         const argData = availableArgs[arg];
         if (!argData) return null;
-
         const isBool = argData.type === "bool";
 
         return (
           <div key={arg} style={{ marginBottom: 10, paddingLeft: 0 }}>
             <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-              <label>{arg}</label>
+              <label style={{ minWidth: 180 }}>{arg}</label>
               {isBool ? (
-                <select
-                  value={currentArgs[arg] ?? argData.default}
-                  onChange={e => onChange(arg, e.target.value === "true")}
-                >
+                <select value={currentArgs?.[arg] ?? argData.default} onChange={(e) => onChange(arg, e.target.value === "true")}>
                   <option value="true">true</option>
                   <option value="false">false</option>
                 </select>
               ) : argData.options ? (
-                <select
-                  value={currentArgs[arg] ?? argData.default}
-                  onChange={e => onChange(arg, e.target.value)}
-                >
-                  {argData.options.map(opt => <option key={opt}>{opt}</option>)}
+                <select value={currentArgs?.[arg] ?? argData.default} onChange={(e) => onChange(arg, e.target.value)}>
+                  {argData.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                 </select>
               ) : (
-                <input
-                  type="text"
-                  value={currentArgs[arg] ?? argData.default}
-                  onChange={e => onChange(arg, e.target.value)}
-                />
+                <input type="text" value={currentArgs?.[arg] ?? argData.default} onChange={(e) => onChange(arg, e.target.value)} />
               )}
               <button onClick={() => removeArg(arg)}>-</button>
             </div>
 
-            {/* Render children only if parent arg is selected */}
             {Object.keys(availableArgs)
               .filter(child => availableArgs[child].parent === arg)
               .map(child => {
@@ -352,29 +302,19 @@ function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange })
                 const childIsBool = childData.type === "bool";
 
                 return (
-                  <div key={child} style={{ marginLeft: 20, marginTop: 5, display: "flex", gap: 5, alignItems: "center" }}>
-                    <label>{child}</label>
+                  <div key={child} style={{ marginLeft: 24, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
+                    <label style={{ minWidth: 160 }}>{child}</label>
                     {childIsBool ? (
-                      <select
-                        value={currentArgs[child] ?? childData.default}
-                        onChange={e => onChange(child, e.target.value === "true")}
-                      >
+                      <select value={currentArgs?.[child] ?? childData.default} onChange={(e) => onChange(child, e.target.value === "true")}>
                         <option value="true">true</option>
                         <option value="false">false</option>
                       </select>
                     ) : childData.options ? (
-                      <select
-                        value={currentArgs[child] ?? childData.default}
-                        onChange={e => onChange(child, e.target.value)}
-                      >
-                        {childData.options.map(opt => <option key={opt}>{opt}</option>)}
+                      <select value={currentArgs?.[child] ?? childData.default} onChange={(e) => onChange(child, e.target.value)}>
+                        {childData.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                       </select>
                     ) : (
-                      <input
-                        type="text"
-                        value={currentArgs[child] ?? childData.default}
-                        onChange={e => onChange(child, e.target.value)}
-                      />
+                      <input type="text" value={currentArgs?.[child] ?? childData.default} onChange={(e) => onChange(child, e.target.value)} />
                     )}
                   </div>
                 );
@@ -383,12 +323,8 @@ function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange })
         );
       })}
 
-      {/* Dropdown to add new top-level args */}
       {topLevelArgs.length > 0 && (
-        <select
-          onChange={e => { addArg(e.target.value); e.target.value = ""; }}
-          defaultValue=""
-        >
+        <select onChange={(e) => { if (e.target.value) addArg(e.target.value); e.target.value = ""; }} defaultValue="">
           <option value="" disabled>Add argument...</option>
           {topLevelArgs.filter(a => !addedArgs.includes(a)).map(arg => (
             <option key={arg} value={arg}>{arg}</option>
@@ -398,7 +334,3 @@ function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange })
     </div>
   );
 }
-
-
-
-
