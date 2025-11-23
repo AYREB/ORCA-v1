@@ -23,3 +23,26 @@ def backtest(request):
             return JsonResponse({"error": str(e)}, status=500)
 
     return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def registry(request):
+    from pathlib import Path
+    import json
+
+    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
+
+    with open(base / "commandRegistry.json") as f:
+        commands = json.load(f)
+
+    with open(base / "indicatorRegistry.json") as f:
+        indicators = json.load(f)
+
+    with open(base / "argumentsRegistry.json") as f:
+        arguments = json.load(f)
+
+    return JsonResponse({
+        "commands": commands,
+        "indicators": indicators,
+        "arguments": arguments
+    })
+

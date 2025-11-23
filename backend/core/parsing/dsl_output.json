@@ -18,7 +18,7 @@
             "ARGUMENTS": {
                 "initialOpenPositionInvestType": "percentCashBalance",
                 "initialOpenPositionInvestAmount": 0.1,
-                "recurring": false,
+                "recurring": true,
                 "stopLossPercent": 6,
                 "takeProfitPercent": 10,
                 "recurringPeriod": 5,
@@ -49,8 +49,8 @@
         "context": {
             "tickers": [
                 "AAPL",
-                "TSLA",
-                "MSFT"
+                "MSFT",
+                "GOOG"
             ],
             "execution_timeframe": "1h",
             "data_timeframes": [

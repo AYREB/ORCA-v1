@@ -1,16 +1,191 @@
-:root{
-  --bg:#f7f9fc;
-  --card:#ffffff;
-  --accent:#2b7cff;
-  --muted:#6b7280;
+/* ------------------------------
+   DARK MODE – GOLDMAN SACHS STYLE
+   ------------------------------ */
+
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --card-light: #1d232d;
+  --accent: #2b7cff;
+  --accent-hover: #3c8aff;
+  --text: #e6edf3;
+  --muted: #8b98a5;
+  --border: #2a3038;
+  --success: #2ecc71;
+  --danger: #e74c3c;
 }
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);font-family:Inter,InterVar,Arial,sans-serif;color:#0f172a}
-.app-root{max-width:1100px;margin:28px auto;padding:16px}
-.card{background:var(--card);border-radius:10px;padding:16px;box-shadow:0 6px 18px rgba(20,30,60,0.06)}
-.row{display:flex;gap:12px;align-items:center}
-.btn{background:var(--accent);color:white;border:none;padding:10px 14px;border-radius:8px;cursor:pointer}
-.small{font-size:14px;color:var(--muted)}
-textarea{font-family:inherit}
-table{width:100%;border-collapse:collapse}
-th,td{padding:8px;border-bottom:1px solid #eef2f7;text-align:left}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  color: var(--text);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+/* Layout */
+.app-root {
+  max-width: 1200px;
+  margin: 30px auto;
+  padding: 20px;
+}
+
+.btn.small {
+  background: var(--card-light);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn.small:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--card);
+}
+
+/* Cards */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transition: 0.2s ease;
+}
+
+.card:hover {
+  border-color: #3a4453;
+}
+
+/* Headings */
+h2, h3, h4 {
+  margin: 0 0 12px 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Buttons */
+.btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: 0.2s ease;
+  font-size: 15px;
+}
+
+.btn:hover {
+  background: var(--accent-hover);
+}
+
+.btn.small {
+  font-size: 14px;
+  padding: 8px 12px;
+}
+
+/* Inputs */
+input, select, textarea {
+  background: var(--card-light);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px;
+  border-radius: 6px;
+  outline: none;
+  transition: border 0.2s;
+}
+
+input:hover, select:hover, textarea:hover {
+  border-color: var(--accent);
+}
+
+/* Checkbox label */
+.small {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  color: var(--text);
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--card);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2f36;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3c4450;
+}
+
+/* Navigation buttons */
+.nav-btn {
+  background: #11161f;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: 10px;
+  transition: 0.2s;
+}
+
+.nav-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Chart container */
+.recharts-wrapper {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+/* Candlestick chart tweaks */
+.candle-chart-container {
+  background: var(--card);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 12px;
+}
+
+/* Dropdowns row */
+select {
+  cursor: pointer;
+}
+
+/* Summary numbers */
+.summary-box {
+  background: var(--card-light);
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}

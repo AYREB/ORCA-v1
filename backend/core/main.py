@@ -16,8 +16,8 @@ DATA_CSV_FOLDER = "Data_CSVs"
 
 # ---------------- DSL ----------------
 dsl_text_example = """
-:TICKER(AAPL)
-:EXECUTION_TIMEFRAME(1h)
+:TICKER(AAPL,TSLA,MSFT)
+:EXECUTION_TIMEFRAME(1h,4h)
 :DATA_TIMEFRAMES(1h)
 :DATEFRAME(2024-01-01, 2025-11-01)
 :LONG(
@@ -28,7 +28,7 @@ dsl_text_example = """
        |ARGUMENTS{
            initialOpenPositionInvestType = percentCashBalance
            |initialOpenPositionInvestAmount = 0.1
-           |recurring=false
+           |recurring=true
            |stopLossPercent =6
            |takeProfitPercent = 10
        }

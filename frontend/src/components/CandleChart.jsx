@@ -12,7 +12,28 @@ export default function CandleChart({ candles = [], trades = [], showTrades = tr
       chartRef.current.remove();
       chartRef.current = null;
     }
-    const chart = createChart(ref.current, { width: ref.current.clientWidth, height: 420 });
+    const chart = createChart(ref.current, {
+        width: ref.current.clientWidth,
+        height: 420,
+        layout: {
+            background: { color: "#161b22" },   // matches --card
+            textColor: "#e6edf3"                // matches --text
+        },
+        grid: {
+            vertLines: { color: "#1d232d" },    // subtle GS-style grid
+            horzLines: { color: "#1d232d" }
+        },
+        crosshair: {
+            mode: 1
+        },
+        rightPriceScale: {
+            borderColor: "#2a3038"
+        },
+        timeScale: {
+            borderColor: "#2a3038"
+        }
+    });
+
     chartRef.current = chart;
 
     const series = chart.addCandlestickSeries();
@@ -34,18 +55,37 @@ export default function CandleChart({ candles = [], trades = [], showTrades = tr
     series.setData(data);
 
     if (showTrades && trades && trades.length) {
-      const markers = trades.map((t) => {
-        let time = Math.floor(new Date(t.timestamp).getTime() / 1000);
-        return {
-          time,
-          position: t.type === "BUY" ? "belowBar" : "aboveBar",
-          color: t.type === "BUY" ? "green" : "red",
-          shape: t.type === "BUY" ? "arrowUp" : "arrowDown",
-          text: `${t.type} ${t.ticker}`
-        };
-      });
-      series.setMarkers(markers);
+        const markers = trades.map((t) => {
+            const time = Math.floor(new Date(t.timestamp).getTime() / 1000);
+
+            // default values
+            let position = "belowBar";
+            let color = "green";
+            let shape = "arrowUp";
+
+            if (t.type === "SELL") {
+            position = "aboveBar";
+            color = "red";
+            shape = "arrowDown";
+            } 
+            else if (t.type === "RECURRING_BUY") {
+            position = "belowBar";
+            color = "#2b7cff";        // blue
+            shape = "arrowUp";
+            }
+
+            return {
+            time,
+            position,
+            color,
+            shape,
+            text: `${t.type} ${t.ticker}`
+            };
+    });
+
+    series.setMarkers(markers);
     }
+
 
     const resize = () => chart.applyOptions({ width: ref.current.clientWidth });
     window.addEventListener("resize", resize);
@@ -55,5 +95,10 @@ export default function CandleChart({ candles = [], trades = [], showTrades = tr
     };
   }, [candles, trades, showTrades]);
 
-  return <div className="card" style={{ padding: 8 }}><div ref={ref} style={{ width: "100%" }} /></div>;
+  return (
+    <div className="card candle-chart-container">
+        <div ref={ref} style={{ width: "100%" }} />
+    </div>
+    );
+
 }

@@ -20,31 +20,35 @@
         "recurringPeriod": {
           "type": "int",
           "default": 5,
-          "description": "Minimum number of bars/periods between additional investments."
+          "description": "Minimum number of bars/periods between additional investments.",
+          "parent":"recurring"
         },
         "recurringInvestType": {
           "options": ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"],
           "default": "percentCashBalance",
-          "description": "Investment type for recurring trades."
+          "description": "Investment type for recurring trades.",
+          "parent":"recurring"
         },
         "recurringInvestAmount": {
           "type": "float",
           "default": 0.1,
-          "description": "Amount to invest each recurring trade, interpreted according to recurringInvestType."
+          "description": "Amount to invest each recurring trade, interpreted according to recurringInvestType.",
+          "parent":"recurring"
         },
         "maxRecurringCount": {
           "type": "int",
           "default": 0,
-          "description": "Maximum number of recurring investments per position (0 = unlimited)."
+          "description": "Maximum number of recurring investments per position (0 = unlimited).",
+          "parent":"recurring"
         },
         "stopLossPercent": {
           "type": "float",
-          "default": null,
+          "default": 0.2,
           "description": "Optional stop-loss percentage below the execution price."
         },
         "takeProfitPercent": {
           "type": "float",
-          "default": null,
+          "default": 0.4,
           "description": "Optional take-profit percentage above the execution price."
         }
       },
