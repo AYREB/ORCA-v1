@@ -48,11 +48,14 @@
         },
         "context": {
             "tickers": [
-                "AAPL"
+                "AAPL",
+                "TSLA",
+                "MSFT"
             ],
             "execution_timeframe": "1h",
             "data_timeframes": [
-                "1h"
+                "1h",
+                "4h"
             ],
             "dateframe": {
                 "start": "2024-01-01",

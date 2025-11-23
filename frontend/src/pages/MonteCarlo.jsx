@@ -1,9 +1,35 @@
 import React, { useState } from "react";
+import { useLocation, Link } from "react-router-dom";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
-import { Link } from "react-router-dom";
 import { simulateMC } from "../utils/montecarlo";
+import { useResults } from "../context/ResultsContext";
 
 export default function MonteCarlo() {
+  // -----------------------------
+  // BACKTEST DATA (ticker + tf)
+  // -----------------------------
+const { results } = useResults();
+const data = results ? results.data : {};
+
+  const tickers = Object.keys(data);
+  const [selectedTicker, setSelectedTicker] = useState(tickers[0] || null);
+
+  const timeframes = selectedTicker ? Object.keys(data[selectedTicker]) : [];
+  const [selectedTf, setSelectedTf] = useState(timeframes[0] || null);
+
+  const candles =
+    selectedTicker && selectedTf ? data[selectedTicker][selectedTf] : [];
+
+  const handleTickerChange = (e) => {
+    const newTicker = e.target.value;
+    setSelectedTicker(newTicker);
+    const newTfs = Object.keys(data[newTicker]);
+    setSelectedTf(newTfs[0]);
+  };
+
+  // -----------------------------
+  // MONTE CARLO
+  // -----------------------------
   const [s0, setS0] = useState(100);
   const [mu, setMu] = useState(0.05);
   const [sigma, setSigma] = useState(0.2);
@@ -16,7 +42,6 @@ export default function MonteCarlo() {
     setPaths(p);
   };
 
-  // merge paths for recharts
   const mergedData = [];
   if (paths.length) {
     for (let i = 0; i < paths[0].length; i++) {
@@ -30,6 +55,17 @@ export default function MonteCarlo() {
     <div className="app-root">
       <h2>Monte Carlo - GBM</h2>
       <Link to="/" className="btn small">Home</Link>
+
+      {/* Dropdowns */}
+      <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
+        <select value={selectedTicker} onChange={handleTickerChange}>
+          {tickers.map(t => <option key={t}>{t}</option>)}
+        </select>
+
+        <select value={selectedTf} onChange={(e) => setSelectedTf(e.target.value)}>
+          {timeframes.map(tf => <option key={tf}>{tf}</option>)}
+        </select>
+      </div>
 
       <div className="card" style={{ marginTop: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
@@ -53,7 +89,14 @@ export default function MonteCarlo() {
             <XAxis dataKey="step" />
             <YAxis />
             <Tooltip />
-            {paths.map((_, i) => <Line key={i} type="monotone" dataKey={`Path ${i + 1}`} stroke={`hsl(${i * 36}, 70%, 50%)`} />)}
+            {paths.map((_, i) => (
+              <Line
+                key={i}
+                type="monotone"
+                dataKey={`Path ${i + 1}`}
+                stroke={`hsl(${i * 36}, 70%, 50%)`}
+              />
+            ))}
           </LineChart>
         )}
       </div>
