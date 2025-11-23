@@ -21,6 +21,7 @@ export default function Home() {
   const [dateEnd, setDateEnd] = useState("");
   const [side, setSide] = useState("LONG");
   const [blocks, setBlocks] = useState({});
+  const [conditions, setConditions] = useState({});
 
   // Fetch registry
   useEffect(() => {
@@ -66,8 +67,13 @@ export default function Home() {
   const buildJsonDsl = () => {
     const outBlocks = {};
     Object.keys(blocks[side] || {}).forEach((b) => {
-      outBlocks[b] = { ARGUMENTS: blocks[side][b].ARGUMENTS || {} };
+    outBlocks[b] = { ARGUMENTS: blocks[side][b].ARGUMENTS || {} };
+
+    if (conditions[b] && conditions[b].length > 0) {
+        outBlocks[b].CONDITIONS = conditions[b]; // <-- add this line
+    }
     });
+
 
     return {
       [side]: {
@@ -206,6 +212,14 @@ export default function Home() {
                 <button onClick={() => removeBlock(block)} style={{ marginLeft: 10 }}>- Remove</button>
               </h3>
 
+              <h4 style={{ marginTop: 10 }}>Conditions</h4>
+                <ConditionBuilder
+                conditions={conditions[block] || []}
+                setConditions={(newConds) => setConditions({ ...conditions, [block]: newConds })}
+                registry={registry}
+              />
+
+
               <h4 style={{ marginTop: 10 }}>Arguments</h4>
               <NestedArgumentSelector
                 block={block}
@@ -243,6 +257,154 @@ export default function Home() {
     </div>
   );
 }
+
+// ------------------ Condition / Group Builder ------------------
+function ConditionBuilder({ conditions, setConditions, registry }) {
+    const addCondition = () => {
+    if (conditions.filter(c => c != null).length >= 1) return;
+    setConditions([
+        ...conditions,
+        { type: "cond", left: { func: "", arg: {} }, operator: "<", right: { value: 0 } }
+    ]);
+    };
+
+    const addGroup = () => {
+    if (conditions.filter(c => c != null).length >= 1) return;
+    setConditions([
+        ...conditions,
+        { type: "group", operator: "AND", children: [] }
+    ]);
+    };
+  const updateCondition = (index, newCond) => {
+    const c = [...conditions];
+    if (!newCond) {
+        c.splice(index, 1); // remove the null condition
+    } else {
+        c[index] = newCond;
+    }
+    setConditions(c.filter(Boolean)); // <-- filter out nulls
+  };
+
+
+
+  const removeCondition = (index) => {
+    const c = [...conditions];
+    c.splice(index, 1);
+    setConditions(c);
+  };
+
+  const renderCondition = (cond, index, parentUpdate) => {
+    if (cond.type === "cond") {
+      return (
+        <div key={index} style={{ display: "flex", gap: 5, marginLeft: 20, alignItems: "center" }}>
+          <select
+            value={cond.left.func}
+            onChange={(e) => {
+              const func = e.target.value;
+              const args = {};
+              if (registry.indicators.INDICATORS[func]) {
+                Object.entries(registry.indicators.INDICATORS[func].defaults).forEach(([k, v]) => args[k] = v);
+              }
+              parentUpdate({ ...cond, left: { func, arg: args } });
+            }}
+          >
+            <option value="">Select Indicator</option>
+            {Object.keys(registry.indicators.INDICATORS).map(i => (
+              <option key={i} value={i}>{i}</option>
+            ))}
+          </select>
+
+          <select value={cond.operator} onChange={(e) => parentUpdate({ ...cond, operator: e.target.value })}>
+            {["<", ">", "<=", ">=", "==", "!="].map(op => <option key={op} value={op}>{op}</option>)}
+          </select>
+
+          {cond.left.func ? (
+            <input
+              type="number"
+              value={cond.right.value}
+              onChange={(e) => parentUpdate({ ...cond, right: { value: parseFloat(e.target.value) } })}
+            />
+          ) : (
+            <input
+              type="text"
+              value={cond.right.value}
+              onChange={(e) => parentUpdate({ ...cond, right: { value: e.target.value } })}
+            />
+          )}
+
+            <button onClick={() => parentUpdate(null)}>-</button>
+        </div>
+      );
+    }
+
+    if (cond.type === "group") {
+        const updateChild = (childIndex, child) => {
+            let newChildren = cond.children.filter(c => c != null);
+            if (child === null || child === "REMOVE") {
+                newChildren.splice(childIndex, 1); // remove the child entirely
+            } else {
+                newChildren[childIndex] = child;
+            }
+            parentUpdate({ ...cond, children: newChildren });
+        };
+
+
+
+
+        const addChildCondition = () => {
+            const currentChildren = cond.children.filter(c => c != null);
+            if (currentChildren.length >= 2) return; // max 2 children
+            parentUpdate({ 
+                ...cond, 
+                children: [...currentChildren, { type: "cond", left: { func: "", arg: {} }, operator: "<", right: { value: 0 } }] 
+            });
+        };
+
+
+        const addChildGroup = () => {
+            const currentChildren = cond.children.filter(c => c != null);
+            if (currentChildren.length >= 2) return; // max 2 children
+            parentUpdate({ ...cond, children: [...cond.children, { type: "group", operator: "AND", children: [] }] });
+        };
+
+
+      const removeGroup = () => parentUpdate(null);
+
+
+      return (
+        <div key={index} style={{ marginLeft: 20, borderLeft: "2px solid #aaa", paddingLeft: 10, marginTop: 5 }}>
+          <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+            <strong>Group ({cond.operator})</strong>
+            <button onClick={() => parentUpdate({ ...cond, operator: cond.operator === "AND" ? "OR" : "AND" })}>Toggle AND/OR</button>
+            <button onClick={removeGroup}>Remove Group</button>
+            <button onClick={addChildCondition}>+ Condition</button>
+            <button onClick={addChildGroup}>+ Group</button>
+          </div>
+
+            {cond.children
+                .filter(c => c !== null) 
+                .map((c, i) =>
+                    renderCondition(c, i, (updated) => updateChild(i, updated))
+                )
+            }
+
+        </div>
+      );
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={addCondition}>+ Add Condition</button>
+      <button onClick={addGroup}>+ Add Group</button>
+        {conditions
+        .filter(c => c !== null) // <-- add this
+        .map((c, i) => renderCondition(c, i, (updated) => updateCondition(i, updated)))}
+
+    </div>
+  );
+}
+
 
 // ------------------ Nested Argument Selector ------------------
 function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange }) {
