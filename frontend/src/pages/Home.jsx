@@ -47,33 +47,96 @@ export default function Home() {
   const removeTicker = (i) => setTickers(tickers.filter((_, idx) => idx !== i));
 
   const addBlock = (blockName) => {
-    const updated = { ...blocks };
-    updated[side][blockName] = { ARGUMENTS: {} };
-    setBlocks(updated);
+    setBlocks(prev => {
+      const sideBlocks = { ...(prev[side] || {}) };
+      sideBlocks[blockName] = { ARGUMENTS: {} };
+      return { ...prev, [side]: sideBlocks };
+    });
   };
+
   const removeBlock = (blockName) => {
     const updated = { ...blocks };
     delete updated[side][blockName];
     setBlocks(updated);
   };
 
-  const updateArgument = (block, arg, value) => {
-    const updated = { ...blocks };
-    if (!updated[side][block]) updated[side][block] = { ARGUMENTS: {} };
-    updated[side][block].ARGUMENTS[arg] = value;
-    setBlocks(updated);
+
+  const updateArgument = (block, arg, value, availableArgs = {}) => {
+    const collectChildren = (parent) => {
+      let children = {};
+      Object.keys(availableArgs).forEach(k => {
+        if (availableArgs[k].parent === parent) {
+          children[k] = availableArgs[k].default ?? null;
+          Object.assign(children, collectChildren(k));
+        }
+      });
+      return children;
+    };
+
+    setBlocks(prev => {
+      const sideBlocks = { ...prev[side] };
+      const blockData = { ...(sideBlocks[block] || { ARGUMENTS: {} }) };
+
+      const updatedArgs = { ...blockData.ARGUMENTS, [arg]: value };
+      Object.assign(updatedArgs, collectChildren(arg));
+
+      blockData.ARGUMENTS = updatedArgs;
+      sideBlocks[block] = blockData;
+      return { ...prev, [side]: sideBlocks };
+    });
   };
 
-  const buildJsonDsl = () => {
-    const outBlocks = {};
-    Object.keys(blocks[side] || {}).forEach((b) => {
-    outBlocks[b] = { ARGUMENTS: blocks[side][b].ARGUMENTS || {} };
 
-    if (conditions[b] && conditions[b].length > 0) {
-        outBlocks[b].CONDITIONS = conditions[b]; // <-- add this line
+
+
+  const serializeConditions = (cond) => {
+    if (!cond) return null;
+
+    // Simple condition
+    if (cond.type === "cond") {
+      return {
+        left: cond.left,
+        operator: cond.operator,
+        right: cond.right
+      };
     }
-    });
 
+    // Group
+    if (cond.type === "group") {
+      const children = cond.children
+        .map(serializeConditions)
+        .filter(Boolean);
+
+      return {
+        [cond.operator]: children
+      };
+    }
+
+    return null;
+  };
+
+
+  const buildJsonDsl = () => {
+    if (!blocks[side]) return { [side]: { context: {} } };
+
+    const outBlocks = {};
+
+    Object.entries(blocks[side]).forEach(([blockName, blockData]) => {
+      outBlocks[blockName] = {
+        ARGUMENTS: blockData.ARGUMENTS || {},
+      };
+
+      const conds = conditions[blockName] || [];
+      if (conds.length > 0) {
+        if (conds.length === 1) {
+          outBlocks[blockName].CONDITIONS = serializeConditions(conds[0]);
+        } else {
+          outBlocks[blockName].CONDITIONS = {
+            AND: conds.map(serializeConditions).filter(Boolean),
+          };
+        }
+      }
+    });
 
     return {
       [side]: {
@@ -81,10 +144,10 @@ export default function Home() {
         context: {
           tickers,
           execution_timeframe: executionTF,
-          data_timeframes,
-          dateframe: { start: dateStart, end: dateEnd }
-        }
-      }
+          data_timeframes: dataTimeframes,
+          dateframe: { start: dateStart, end: dateEnd },
+        },
+      },
     };
   };
 
@@ -95,20 +158,37 @@ export default function Home() {
 
 
     const runDsl = async () => {
-    try {
-        // If in advanced mode, just send the raw DSL text instead of parsing
-        const payloadDsl = mode === "advanced" ? dslText : buildJsonDsl();
-
+      try {
         setLoading(true);
-        const res = await API.post("/api/backtest/", { dsl: payloadDsl });
+        setError("");
+
+        let res;
+
+        if (mode === "simple") {
+          // Build JSON from simple mode
+          const payloadDsl = buildJsonDsl();
+          console.log("DSL JSON:", JSON.stringify(payloadDsl, null, 2));
+          alert(JSON.stringify(payloadDsl, null, 2));
+
+          res = await API.post("/api/backtestDSLJSON/", { dsl_json: payloadDsl });
+
+        } else if (mode === "advanced") {
+          // Send raw DSL text for advanced mode
+          console.log("DSL TEXT:", dslText);
+
+          res = await API.post("/api/backtestDSLText/", { dsl_text: dslText });
+        }
+
         setResults(res.data);
         navigate("/analysis");
-    } catch (err) {
+
+      } catch (err) {
         setError(err?.response?.data?.detail || err.message || "Error running DSL");
-    } finally {
+      } finally {
         setLoading(false);
-    }
+      }
     };
+
 
 
   if (!registry) return <div>Loading registry...</div>;
@@ -225,7 +305,7 @@ export default function Home() {
                 block={block}
                 availableArgs={allowedArgs[block] || {}}
                 currentArgs={blocks[side][block].ARGUMENTS}
-                onChange={(arg, val) => updateArgument(block, arg, val)}
+                onChange={(arg, val) => updateArgument(block, arg, val, allowedArgs[block] || {})}
               />
             </div>
           ))}
@@ -417,8 +497,19 @@ function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange })
   }, [currentArgs, availableArgs]);
 
   const addArg = (arg) => {
-    if (!addedArgs.includes(arg)) setAddedArgs([...addedArgs, arg]);
+    if (!addedArgs.includes(arg)) {
+      setAddedArgs([...addedArgs, arg]);
+      // Initialize the argument in blocks with its default value
+      const defaultVal = availableArgs[arg]?.default ?? null;
+      onChange(arg, defaultVal);
+
+      // Optionally, also initialize child arguments
+      Object.keys(availableArgs)
+        .filter(child => availableArgs[child].parent === arg)
+        .forEach(child => onChange(child, availableArgs[child].default ?? null));
+    }
   };
+
 
   const removeArg = (arg) => {
     setAddedArgs(addedArgs.filter(a => a !== arg));
@@ -435,55 +526,86 @@ function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange })
       {addedArgs.map((arg) => {
         const argData = availableArgs[arg];
         if (!argData) return null;
-        const isBool = argData.type === "bool";
+
+        const defaultVal = argData.default;
+        const valType = typeof defaultVal; // "boolean", "number", "string"
 
         return (
           <div key={arg} style={{ marginBottom: 10, paddingLeft: 0 }}>
             <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
               <label style={{ minWidth: 180 }}>{arg}</label>
-              {isBool ? (
-                <select value={currentArgs?.[arg] ?? argData.default} onChange={(e) => onChange(arg, e.target.value === "true")}>
+
+              {valType === "boolean" ? (
+                <select
+                  value={currentArgs?.[arg] ?? defaultVal}
+                  onChange={(e) => onChange(arg, e.target.value === "true")}
+                >
                   <option value="true">true</option>
                   <option value="false">false</option>
                 </select>
+              ) : valType === "number" ? (
+                <input
+                  type="number"
+                  value={currentArgs?.[arg] ?? defaultVal}
+                  onChange={(e) => onChange(arg, parseFloat(e.target.value))}
+                />
               ) : argData.options ? (
-                <select value={currentArgs?.[arg] ?? argData.default} onChange={(e) => onChange(arg, e.target.value)}>
-                  {argData.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                <select
+                  value={currentArgs?.[arg] ?? defaultVal}
+                  onChange={(e) => onChange(arg, e.target.value)}
+                >
+                  {argData.options.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
                 </select>
               ) : (
-                <input type="text" value={currentArgs?.[arg] ?? argData.default} onChange={(e) => onChange(arg, e.target.value)} />
+                <input
+                  type="text"
+                  value={currentArgs?.[arg] ?? defaultVal}
+                  onChange={(e) => onChange(arg, e.target.value)}
+                />
               )}
+
               <button onClick={() => removeArg(arg)}>-</button>
             </div>
 
+            {/* Render children recursively */}
             {Object.keys(availableArgs)
               .filter(child => availableArgs[child].parent === arg)
-              .map(child => {
-                const childData = availableArgs[child];
-                if (!childData) return null;
-                const childIsBool = childData.type === "bool";
-
-                return (
-                  <div key={child} style={{ marginLeft: 24, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
-                    <label style={{ minWidth: 160 }}>{child}</label>
-                    {childIsBool ? (
-                      <select value={currentArgs?.[child] ?? childData.default} onChange={(e) => onChange(child, e.target.value === "true")}>
-                        <option value="true">true</option>
-                        <option value="false">false</option>
-                      </select>
-                    ) : childData.options ? (
-                      <select value={currentArgs?.[child] ?? childData.default} onChange={(e) => onChange(child, e.target.value)}>
-                        {childData.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                      </select>
-                    ) : (
-                      <input type="text" value={currentArgs?.[child] ?? childData.default} onChange={(e) => onChange(child, e.target.value)} />
-                    )}
-                  </div>
-                );
-              })}
+              .map(child => (
+                <div key={child} style={{ marginLeft: 24, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
+                  <label style={{ minWidth: 160 }}>{child}</label>
+                  {typeof availableArgs[child].default === "boolean" ? (
+                    <select
+                      value={currentArgs?.[child] ?? availableArgs[child].default}
+                      onChange={(e) => onChange(child, e.target.value === "true")}
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : availableArgs[child].options ? (
+                    <select
+                      value={currentArgs?.[child] ?? availableArgs[child].default}
+                      onChange={(e) => onChange(child, e.target.value)}
+                    >
+                      {availableArgs[child].options.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={currentArgs?.[child] ?? availableArgs[child].default}
+                      onChange={(e) => onChange(child, e.target.value)}
+                    />
+                  )}
+                </div>
+              ))}
           </div>
         );
       })}
+
+
 
       {topLevelArgs.length > 0 && (
         <select onChange={(e) => { if (e.target.value) addArg(e.target.value); e.target.value = ""; }} defaultValue="">

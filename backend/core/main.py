@@ -93,12 +93,30 @@ def apply_default_arguments(parsed_dsl, registry_path="Core/Registries/arguments
     return parsed_dsl
 
 
-def main(dsl_command: str) -> str:
-    # ---------------- Parse and validate DSL ----------------
-    parsed_dsl = parser.parse_dsl(dsl_command)
+def dslTextToJsonBacktest(dsl_text):
+    print("dsl_GO")
+    print(dsl_text)
+    parsed_dsl = parser.parse_dsl(dsl_text)
+    print(parsed_dsl)
+    trade_data = main(parsed_dsl)
+    return trade_data
 
+def dslJSONBacktest(dsl_json):
+    print("dsl_GO")
+    print(dsl_json)
+
+    with open("/Users/brunoayre/Documents/ORCA-v1/backend/core/mainDEMOJSON.json", "w") as f:
+        json.dump(dsl_json,f,indent=4)
+    
+    trade_data = main(dsl_json)
+    return trade_data
+
+
+def main(parsed_dsl):
+    # ---------------- Parse and validate DSL ----------------
     parsed_dsl = apply_default_arguments(parsed_dsl)
     parsed_dsl = merge_indicator_defaults(parsed_dsl) 
+
 
     with open("Core/Parsing/dsl_output.json", "w") as f:
         json.dump(parsed_dsl, f, indent=4)
@@ -128,7 +146,7 @@ def main(dsl_command: str) -> str:
         start_date = "2024-01-01"
         end_date = "2025-01-01"
 
-    print(DATA_TFS)
+    #print(DATA_TFS)
 
     data_dict = {}
 
@@ -136,7 +154,7 @@ def main(dsl_command: str) -> str:
         data_dict[t] = {}
 
         for tf in DATA_TFS:
-            print(f"Fetching data for {t} @ {tf} between {start_date} → {end_date}")
+            # print(f"Fetching data for {t} @ {tf} between {start_date} → {end_date}")
 
             if internetConnection:
                 # online mode
@@ -173,9 +191,9 @@ def main(dsl_command: str) -> str:
 
 
     # debug print
-    for t in data_dict:
-        for tf in data_dict[t]:
-            print(f"{t} @ {tf}: type={type(data_dict[t][tf])}, columns={data_dict[t][tf].columns.tolist()}")
+    # for t in data_dict:
+    #     for tf in data_dict[t]:
+    #         print(f"{t} @ {tf}: type={type(data_dict[t][tf])}, columns={data_dict[t][tf].columns.tolist()}")
 
     # run backtester
     trade_log, cash, positions, pct_change = backtester(
@@ -202,6 +220,7 @@ def main(dsl_command: str) -> str:
     print_trade_summary(trade_log)
 
 
+
     # Optionally, save trades to JSON
     with open("trades_output.json", "w") as f:
         json.dump(trade_log, f, indent=4)
@@ -226,7 +245,7 @@ def main(dsl_command: str) -> str:
     with open("return_data_output.json", "w") as f:
         json.dump(data_return, f, indent=4)
 
-    print_trade_summary(trade_log)
+    #print_trade_summary(trade_log)
 
     return data_return
       
