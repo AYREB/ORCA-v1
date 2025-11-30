@@ -4,7 +4,7 @@
       "OPEN": {
         "initialOpenPositionInvestType": {
           "options": ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"],
-          "default": "fixedValue",
+          "default": "percentCashBalance",
           "description": "Specifies how the initial investment amount is calculated."
         },
         "initialOpenPositionInvestAmount": {
