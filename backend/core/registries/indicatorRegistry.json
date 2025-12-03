@@ -19,7 +19,7 @@
         "EMA": {
             "function": "compute_ema",
             "args": ["period", "timeframe", "offset"], 
-            "defaults": {"period": 14, "offset": 0},
+            "defaults": {"period": 14, "timeframe": "1h", "offset": 0},
             "supports_timeframe": true
         },
         "RSI": {

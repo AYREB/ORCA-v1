@@ -306,6 +306,7 @@ export default function Home() {
                 availableArgs={allowedArgs[block] || {}}
                 currentArgs={blocks[side][block].ARGUMENTS}
                 onChange={(arg, val) => updateArgument(block, arg, val, allowedArgs[block] || {})}
+                registry={registry}
               />
             </div>
           ))}
@@ -371,64 +372,131 @@ function ConditionBuilder({ conditions, setConditions, registry }) {
     const renderSide = (sideKey) => {
       const side = cond[sideKey];
       return (
-        <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {/* Type selector */}
-          <select
-            value={side.type}
-            onChange={(e) =>
-              parentUpdate({
-                ...cond,
-                [sideKey]: {
-                  type: e.target.value,
-                  value: e.target.value === "value" ? 0 : "",
-                  func: "",
-                  args: {},
-                },
-              })
-            }
-          >
-            <option value="value">Value</option>
-            <option value="indicator">Indicator</option>
-          </select>
-
-          {/* Input based on type */}
-          {side.type === "value" ? (
-            <input
-              type="number"
-              value={side.value}
-              onChange={(e) => {
-                const val = e.target.value;
+          <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+            <select
+              value={side.type}
+              onChange={(e) =>
                 parentUpdate({
                   ...cond,
-                  [sideKey]: { ...side, value: val === "" ? "" : parseFloat(val) },
-                });
-              }}
-            />
-          ) : (
-            <select
-              value={side.func}
-              onChange={(e) => {
-                const func = e.target.value;
-                const args = {};
-                if (registry.indicators.INDICATORS[func]) {
-                  Object.entries(registry.indicators.INDICATORS[func].defaults).forEach(
-                    ([k, v]) => (args[k] = v)
-                  );
-                }
-                parentUpdate({ ...cond, [sideKey]: { ...side, func, args } });
-              }}
+                  [sideKey]: {
+                    type: e.target.value,
+                    value: e.target.value === "value" ? 0 : "",
+                    func: "",
+                    args: {},
+                  },
+                })
+              }
             >
-              <option value="">Select Indicator</option>
-              {Object.keys(registry.indicators.INDICATORS).map((i) => (
-                <option key={i} value={i}>
-                  {i}
-                </option>
-              ))}
+              <option value="value">Value</option>
+              <option value="indicator">Indicator</option>
             </select>
+
+            {/* If type is value */}
+            {side.type === "value" && (
+              <input
+                type="number"
+                value={side.value}
+                onChange={(e) =>
+                  parentUpdate({
+                    ...cond,
+                    [sideKey]: { ...side, value: parseFloat(e.target.value) },
+                  })
+                }
+              />
+            )}
+
+            {/* If type is indicator */}
+            {side.type === "indicator" && (
+              <select
+                value={side.func}
+                onChange={(e) => {
+                  const func = e.target.value;
+                  const args = {};
+                  if (registry.indicators.INDICATORS[func]) {
+                    Object.entries(registry.indicators.INDICATORS[func].defaults).forEach(
+                      ([k, v]) => (args[k] = v)
+                    );
+                  }
+                  parentUpdate({ ...cond, [sideKey]: { ...side, func, args } });
+                }}
+              >
+                <option value="">Select Indicator</option>
+                {Object.keys(registry.indicators.INDICATORS).map((i) => (
+                  <option key={i} value={i}>
+                    {i}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* NEW: Render indicator args */}
+          {side.type === "indicator" && side.func && (
+            <div style={{ marginLeft: 24, display: "flex", flexDirection: "column", gap: 4 }}>
+              {Object.entries(side.args).map(([param, val]) => {
+                const isOHLC = param === "OHLC";
+                return (
+                  <div key={param} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <label style={{ minWidth: 140 }}>{param}</label>
+                    {isOHLC ? (
+                      <select
+                        value={val}
+                        onChange={(e) =>
+                          parentUpdate({
+                            ...cond,
+                            [sideKey]: {
+                              ...side,
+                              args: { ...side.args, [param]: e.target.value },
+                            },
+                          })
+                        }
+                      >
+                        {["open", "high", "low", "close"].map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                    ) : typeof val === "number" ? (
+                      <input
+                        type="number"
+                        value={val}
+                        onChange={(e) =>
+                          parentUpdate({
+                            ...cond,
+                            [sideKey]: {
+                              ...side,
+                              args: { ...side.args, [param]: parseFloat(e.target.value) },
+                            },
+                          })
+                        }
+                      />
+                    ) : (
+                      <input
+                        type="text"
+                        value={val}
+                        onChange={(e) =>
+                          parentUpdate({
+                            ...cond,
+                            [sideKey]: {
+                              ...side,
+                              args: { ...side.args, [param]: e.target.value },
+                            },
+                          })
+                        }
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       );
     };
+
 
     return (
       <div key={index} style={{ display: "flex", gap: 5, marginLeft: 20, alignItems: "center" }}>
@@ -526,7 +594,7 @@ function ConditionBuilder({ conditions, setConditions, registry }) {
 
 
 // ------------------ Nested Argument Selector ------------------
-function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange }) {
+function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange, registry }) {
   const [addedArgs, setAddedArgs] = useState(
     Object.keys(currentArgs || {}).filter(arg => !availableArgs[arg]?.parent)
   );
@@ -538,17 +606,15 @@ function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange })
   const addArg = (arg) => {
     if (!addedArgs.includes(arg)) {
       setAddedArgs([...addedArgs, arg]);
-      // Initialize the argument in blocks with its default value
       const defaultVal = availableArgs[arg]?.default ?? null;
       onChange(arg, defaultVal);
 
-      // Optionally, also initialize child arguments
+      // Initialize child args
       Object.keys(availableArgs)
         .filter(child => availableArgs[child].parent === arg)
         .forEach(child => onChange(child, availableArgs[child].default ?? null));
     }
   };
-
 
   const removeArg = (arg) => {
     setAddedArgs(addedArgs.filter(a => a !== arg));
@@ -560,115 +626,121 @@ function NestedArgumentSelector({ block, availableArgs, currentArgs, onChange })
 
   const topLevelArgs = Object.keys(availableArgs).filter(a => !availableArgs[a].parent);
 
-  return (
-    <div>
-      {addedArgs.map((arg) => {
-        const argData = availableArgs[arg];
-        if (!argData) return null;
+  const renderChildArgs = (arg) => {
+    return Object.keys(availableArgs)
+      .filter(child => availableArgs[child].parent === arg)
+      .map(child => {
+        const childVal = currentArgs?.[child] ?? availableArgs[child]?.default ?? null;
 
-        const defaultVal = argData.default;
-        const valType = typeof defaultVal; // "boolean", "number", "string"
+        // Only show indicator parameters if the value is an indicator
+        const indicatorData = registry?.indicators?.INDICATORS?.[childVal] ?? null;
 
         return (
-          <div key={arg} style={{ marginBottom: 10, paddingLeft: 0 }}>
-            <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-              <label style={{ minWidth: 180 }}>{arg}</label>
+          <div key={child} style={{ marginLeft: 24, marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <label style={{ minWidth: 160 }}>{child}</label>
 
-              {valType === "boolean" ? (
-                <select
-                  value={currentArgs?.[arg] ?? defaultVal}
-                  onChange={(e) => onChange(arg, e.target.value === "true")}
-                >
-                  <option value="true">true</option>
-                  <option value="false">false</option>
-                </select>
-              ) : valType === "number" ? (
-                <input
-                  type="number"
-                  value={currentArgs?.[arg] ?? defaultVal}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    onChange(arg, val === "" ? "" : parseFloat(val));
-                  }}
-                />
-              ) : argData.options ? (
-                <select
-                  value={currentArgs?.[arg] ?? defaultVal}
-                  onChange={(e) => onChange(arg, e.target.value)}
-                >
-                  {argData.options.map(opt => (
+              {indicatorData ? (
+                <select value={childVal} onChange={(e) => onChange(child, e.target.value)}>
+                  <option value="">Select Indicator</option>
+                  {Object.keys(registry.indicators.INDICATORS).map(opt => (
                     <option key={opt} value={opt}>{opt}</option>
                   ))}
                 </select>
+              ) : typeof childVal === "boolean" ? (
+                <select value={childVal} onChange={(e) => onChange(child, e.target.value === "true")}>
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              ) : typeof childVal === "number" ? (
+                <input type="number" value={childVal} onChange={(e) => onChange(child, parseFloat(e.target.value))} />
               ) : (
-                <input
-                  type="text"
-                  value={currentArgs?.[arg] ?? defaultVal}
-                  onChange={(e) => onChange(arg, e.target.value)}
-                />
+                <input type="text" value={childVal} onChange={(e) => onChange(child, e.target.value)} />
               )}
 
-              <button onClick={() => removeArg(arg)}>-</button>
+              <button onClick={() => removeArg(child)}>-</button>
             </div>
 
-            {/* Render children recursively */}
-            {Object.keys(availableArgs)
-            .filter(child => availableArgs[child].parent === arg)
-            .map(child => {
-              const childDefault = availableArgs[child].default;
-              const childVal = currentArgs?.[child] ?? childDefault;
+            {/* Render indicator parameters below */}
+            {indicatorData && indicatorData.args?.map(param => {
+              const val = currentArgs?.[param] ?? indicatorData.defaults[param];
+              const isOHLC = param === "OHLC";
 
               return (
-                <div
-                  key={child}
-                  style={{ marginLeft: 24, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}
-                >
-                  <label style={{ minWidth: 160 }}>{child}</label>
-
-                  {typeof childDefault === "boolean" ? (
-                    <select
-                      value={childVal}
-                      onChange={(e) => onChange(child, e.target.value === "true")}
-                    >
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  ) : typeof childDefault === "number" ? (
-                    <input
-                      type="number"
-                      value={childVal}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        onChange(child, val === "" ? "" : parseFloat(val));
-                      }}
-                    />
-                  ) : childDefault && availableArgs[child].options ? (
-                    <select
-                      value={childVal}
-                      onChange={(e) => onChange(child, e.target.value)}
-                    >
-                      {availableArgs[child].options.map(opt => (
+                <div key={param} style={{ marginLeft: 24, display: "flex", gap: 8, alignItems: "center" }}>
+                  <label style={{ minWidth: 140 }}>{param}</label>
+                  {isOHLC ? (
+                    <select value={val} onChange={(e) => onChange(param, e.target.value)}>
+                      {["open", "high", "low", "close"].map(opt => (
                         <option key={opt} value={opt}>{opt}</option>
                       ))}
                     </select>
                   ) : (
                     <input
-                      type="text"
-                      value={childVal}
-                      onChange={(e) => onChange(child, e.target.value)}
+                      type={typeof val === "number" ? "number" : "text"}
+                      value={val}
+                      onChange={(e) => onChange(param, typeof val === "number" ? parseFloat(e.target.value) : e.target.value)}
                     />
                   )}
                 </div>
               );
             })}
+
+            {renderChildArgs(child)}
+          </div>
+        );
+      });
+  };
+
+
+
+  return (
+    <div>
+      {addedArgs.map(arg => {
+        const argData = availableArgs[arg];
+        if (!argData) return null;
+
+        const defaultVal = argData.default;
+        const valType = typeof defaultVal;
+
+        return (
+          <div key={arg} style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+              <label style={{ minWidth: 180 }}>{arg}</label>
+
+              {valType === "boolean" ? (
+                <select value={currentArgs?.[arg] ?? defaultVal} onChange={(e) => onChange(arg, e.target.value === "true")}>
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              ) : valType === "number" ? (
+                <input type="number" value={currentArgs?.[arg] ?? defaultVal} onChange={(e) => onChange(arg, e.target.value === "" ? "" : parseFloat(e.target.value))} />
+              ) : argData.options ? (
+                <select value={currentArgs?.[arg] ?? defaultVal} onChange={(e) => onChange(arg, e.target.value)}>
+                  {argData.options.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              ) : (
+                <input type="text" value={currentArgs?.[arg] ?? defaultVal} onChange={(e) => onChange(arg, e.target.value)} />
+              )}
+
+              <button onClick={() => removeArg(arg)}>-</button>
+            </div>
+
+            {renderChildArgs(arg)}
           </div>
         );
       })}
 
-
-
       {topLevelArgs.length > 0 && (
-        <select onChange={(e) => { if (e.target.value) addArg(e.target.value); e.target.value = ""; }} defaultValue="">
+        <select
+          onChange={(e) => {
+            if (e.target.value) addArg(e.target.value);
+            e.target.value = "";
+          }}
+          defaultValue=""
+        >
           <option value="" disabled>Add argument...</option>
           {topLevelArgs.filter(a => !addedArgs.includes(a)).map(arg => (
             <option key={arg} value={arg}>{arg}</option>
