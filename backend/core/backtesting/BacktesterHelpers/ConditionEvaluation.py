@@ -89,7 +89,7 @@ def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
 
         # PRICE special case
         if func_name.upper() == "PRICE":
-            field = merged_args.get("field", "close")
+            field = merged_args.get("OHLC", "close")
             offset = merged_args.get("offset", 0)
             # Make sure we select the correct timeframe
             if current_ticker not in data_dict or execution_tf not in data_dict[current_ticker]:

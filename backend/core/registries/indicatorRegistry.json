@@ -2,8 +2,8 @@
     "INDICATORS": {
         "PRICE": {
             "function": "get_price",
-            "args": ["field", "offset"],
-            "defaults": {"field": "close", "offset": 0}
+            "args": ["OHLC", "offset"],
+            "defaults": {"OHLC": "close", "offset": 0}
         },
         "VOLUME": {
             "function": "get_volume",
