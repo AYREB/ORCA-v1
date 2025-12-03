@@ -3,59 +3,32 @@
         "OPEN": {
             "ARGUMENTS": {
                 "recurring": true,
-                "recurringPeriod": 5,
+                "recurringPeriod": 1,
                 "recurringInvestType": "percentCashBalance",
                 "recurringInvestAmount": 0.1,
-                "maxRecurringCount": 0,
-                "initialOpenPositionInvestType": "percentCashBalance",
-                "initialOpenPositionInvestAmount": 0.1,
-                "stopLossPercent": 6,
-                "takeProfitPercent": 5.4
+                "maxRecurringCount": 0
             },
             "CONDITIONS": {
-                "OR": [
-                    {
-                        "left": {
-                            "func": "PRICE",
-                            "arg": {
-                                "field": "close",
-                                "offset": 0
-                            }
-                        },
-                        "operator": ">",
-                        "right": {
-                            "value": 0
-                        }
-                    },
-                    {
-                        "left": {
-                            "func": "VOLUME",
-                            "arg": {
-                                "offset": 0
-                            }
-                        },
-                        "operator": ">",
-                        "right": {
-                            "value": 0
-                        }
-                    }
-                ]
+                "left": {
+                    "value": 0
+                },
+                "operator": "==",
+                "right": {
+                    "value": 0
+                }
             }
         },
         "context": {
             "tickers": [
-                "AAPL",
-                "GOOG",
-                "MSFT",
-                "AMZN"
+                "AAPL"
             ],
             "execution_timeframe": "1h",
             "data_timeframes": [
                 "1h"
             ],
             "dateframe": {
-                "start": "2024-11-30",
-                "end": "2025-11-30"
+                "start": "2025-12-01",
+                "end": "2025-12-03"
             }
         }
     }

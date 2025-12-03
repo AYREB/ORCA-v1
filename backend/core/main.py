@@ -190,10 +190,6 @@ def main(parsed_dsl):
             data_dict[t][tf] = df
 
 
-    # debug print
-    # for t in data_dict:
-    #     for tf in data_dict[t]:
-    #         print(f"{t} @ {tf}: type={type(data_dict[t][tf])}, columns={data_dict[t][tf].columns.tolist()}")
 
     # run backtester
     trade_log, cash, positions, pct_change = backtester(
@@ -231,6 +227,7 @@ def main(parsed_dsl):
         "invested": invested,
         "total_portfolio": total_portfolio,
         "pct_change": pct_change,
+        "json_dsl": parsed_dsl,
         "trades": trade_log,
         "data": {
             ticker: {
@@ -248,7 +245,6 @@ def main(parsed_dsl):
     #print_trade_summary(trade_log)
 
     return data_return
-      
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
