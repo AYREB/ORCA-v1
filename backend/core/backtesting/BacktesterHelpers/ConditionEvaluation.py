@@ -15,7 +15,7 @@ OPS = {
 }
 
 # load registry once (optional)
-with open("Core/Registries/indicatorRegistry.json") as f:
+with open("backend/core/registries/indicatorRegistry.json") as f:
     _INDICATOR_REGISTRY = json.load(f).get("INDICATORS", {})
 
 
