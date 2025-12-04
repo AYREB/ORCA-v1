@@ -21,7 +21,7 @@ function extractOptimizableParameters(node, path = "", parentIndicator = null) {
     Object.entries(node).forEach(([key, value]) => {
       const newPath = path ? `${path}.${key}` : key;
 
-      if (typeof value === "number" && /period|percent|threshold|amount/i.test(key)) {
+      if (typeof value === "number" && /period|percent|threshold|offset|value|amount/i.test(key)) {
         params[newPath] = { value, indicator: currentIndicator };
       }
 
@@ -30,6 +30,21 @@ function extractOptimizableParameters(node, path = "", parentIndicator = null) {
   }
   return params;
 }
+
+function getDisplayName(paramPath, indicator) {
+  const parts = paramPath.split(".");
+  const paramName = parts[parts.length - 1];
+
+  // If the path contains '.arg.', show "Indicator - param"
+  if (paramPath.includes(".arg.") && indicator) {
+    return `${indicator} - ${paramName}`;
+  }
+
+  // Otherwise, just show the last part
+  return paramName;
+}
+
+
 
 export default function ParameterOptimiser() {
   const { results } = useContext(ResultsContext);
@@ -46,27 +61,32 @@ export default function ParameterOptimiser() {
         const params = extractOptimizableParameters(dsl);
         const initialChoices = {};
         Object.entries(params).forEach(([param, info]) => {
-        initialChoices[param] = { mode: "nochange" }; // default is no change
+        initialChoices[param] = { mode: "nochange", indicator: info.indicator }; // include indicator
         });
         setParamChoices(initialChoices);
     }
     }, [dsl]);
 
+
   const handleModeChange = (param, mode) => {
     setParamChoices((prev) => {
+        const current = prev[param] || {};
         const updated = { ...prev };
+
         if (mode === "manual") {
-        updated[param] = { mode, values: [0] }; // start with one value
+        updated[param] = { ...current, mode, values: [0] };
         } else if (mode === "range") {
-        updated[param] = { mode, start: 0, end: 1, steps: 4 }; // default range
+        updated[param] = { ...current, mode, start: 0, end: 1, steps: 4 };
         } else if (mode === "auto") {
-        updated[param] = { mode: "auto" }; // explicit auto
+        updated[param] = { ...current, mode: "auto" };
         } else if (mode === "nochange") {
-        updated[param] = { mode: "nochange" }; // keep nochange in state (optional)
+        updated[param] = { ...current, mode: "nochange" };
         }
+
         return updated;
     });
     };
+
 
 
 
@@ -159,72 +179,70 @@ export default function ParameterOptimiser() {
 
       {dsl &&
         Object.entries(paramChoices).map(([param, choice]) => (
-          <div
+            <div
             key={param}
             style={{ marginBottom: "1rem", border: "1px solid #ccc", padding: "0.5rem" }}
-          >
-            <strong>{param}</strong>
-            {choice.indicator && (
-              <span style={{ marginLeft: "0.5rem", fontStyle: "italic", color: "#555" }}>
-                ({choice.indicator})
-              </span>
-            )}
+            >
+            <strong>{getDisplayName(param, choice.indicator)}</strong>
             <div>
-              Mode:{" "}
-              <select
+                Mode:{" "}
+                <select
                 value={choice.mode || "nochange"}
                 onChange={(e) => handleModeChange(param, e.target.value)}
                 >
                 <option value="nochange">No Change</option>
-                <option value="auto">Auto</option>   {/* explicit auto */}
+                <option value="auto">Auto</option>
                 <option value="manual">Manual</option>
                 <option value="range">Range</option>
-              </select>
+                </select>
             </div>
 
             {choice.mode === "manual" &&
                 choice.values.map((val, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     Value {i + 1}:{" "}
                     <input
-                        type="number"
-                        value={val}
-                        onChange={(e) => handleValueChange(param, i, e.target.value)}
-                        style={{ width: "5rem" }}
+                    type="number"
+                    value={val}
+                    onChange={(e) => handleValueChange(param, i, e.target.value)}
+                    style={{ width: "5rem" }}
                     />
-                    <button type="button" onClick={() => removeManualValue(param, i)}>-</button>
-                    </div>
+                    <button type="button" onClick={() => removeManualValue(param, i)}>
+                    -
+                    </button>
+                </div>
                 ))}
-                {choice.mode === "manual" && (
+            {choice.mode === "manual" && (
                 <button type="button" onClick={() => addManualValue(param)}>
-                    + Add Value
+                + Add Value
                 </button>
             )}
 
             {choice.mode === "range" && (
-              <div>
+                <div>
                 Start:{" "}
                 <input
-                  type="number"
-                  value={choice.start}
-                  onChange={(e) => handleRangeChange(param, "start", e.target.value)}
+                    type="number"
+                    value={choice.start}
+                    onChange={(e) => handleRangeChange(param, "start", e.target.value)}
                 />
                 End:{" "}
                 <input
-                  type="number"
-                  value={choice.end}
-                  onChange={(e) => handleRangeChange(param, "end", e.target.value)}
+                    type="number"
+                    value={choice.end}
+                    onChange={(e) => handleRangeChange(param, "end", e.target.value)}
                 />
                 Steps:{" "}
                 <input
-                  type="number"
-                  value={choice.steps}
-                  onChange={(e) => handleRangeChange(param, "steps", e.target.value)}
+                    type="number"
+                    value={choice.steps}
+                    onChange={(e) => handleRangeChange(param, "steps", e.target.value)}
                 />
-              </div>
+                </div>
             )}
-          </div>
+            </div>
         ))}
+
 
       <button onClick={submitOptimizer} disabled={loading}>
         {loading ? "Running Optimizer..." : "Run Optimizer"}

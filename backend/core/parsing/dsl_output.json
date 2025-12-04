@@ -65,9 +65,7 @@
         },
         "context": {
             "tickers": [
-                "AAPL",
-                "MSFT",
-                "GOOG"
+                "AAPL"
             ],
             "execution_timeframe": "1h",
             "data_timeframes": [

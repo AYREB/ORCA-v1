@@ -9,21 +9,38 @@
                 "maxRecurringCount": 0
             },
             "CONDITIONS": {
-                "left": {
-                    "func": "VOLUME",
-                    "arg": {
-                        "offset": 0
+                "OR": [
+                    {
+                        "left": {
+                            "func": "PRICE",
+                            "arg": {
+                                "OHLC": "open",
+                                "offset": 0
+                            }
+                        },
+                        "operator": ">",
+                        "right": {
+                            "value": 100
+                        }
+                    },
+                    {
+                        "left": {
+                            "func": "SMA",
+                            "arg": {
+                                "period": 14,
+                                "timeframe": "1h",
+                                "offset": 0
+                            }
+                        },
+                        "operator": "<",
+                        "right": {
+                            "func": "VOLUME",
+                            "arg": {
+                                "offset": 0
+                            }
+                        }
                     }
-                },
-                "operator": "<",
-                "right": {
-                    "func": "EMA",
-                    "arg": {
-                        "period": 14,
-                        "timeframe": "1h",
-                        "offset": 0
-                    }
-                }
+                ]
             }
         },
         "context": {
@@ -35,7 +52,7 @@
                 "1h"
             ],
             "dateframe": {
-                "start": "2025-12-01",
+                "start": "2025-04-01",
                 "end": "2025-12-04"
             }
         }
