@@ -1,21 +1,26 @@
 {
     "LONG": {
         "OPEN": {
-            "ARGUMENTS": {},
+            "ARGUMENTS": {
+                "recurring": true,
+                "recurringPeriod": 5,
+                "recurringInvestType": "percentCashBalance",
+                "recurringInvestAmount": 0.1,
+                "maxRecurringCount": 0
+            },
             "CONDITIONS": {
                 "left": {
-                    "func": "SMA",
+                    "func": "VOLUME",
                     "arg": {
-                        "period": 14,
-                        "timeframe": "1h",
                         "offset": 0
                     }
                 },
                 "operator": "<",
                 "right": {
-                    "func": "PRICE",
+                    "func": "EMA",
                     "arg": {
-                        "OHLC": "low",
+                        "period": 14,
+                        "timeframe": "1h",
                         "offset": 0
                     }
                 }
@@ -30,8 +35,8 @@
                 "1h"
             ],
             "dateframe": {
-                "start": "2025-08-01",
-                "end": "2025-12-02"
+                "start": "2025-12-01",
+                "end": "2025-12-04"
             }
         }
     }

@@ -8,6 +8,7 @@ export default function ResultsLayout() {
         <Link to="/analysis" className="small btn">Analysis</Link>
         <Link to="/analysis/garch" className="small btn">GARCH</Link>
         <Link to="/analysis/montecarlo" className="small btn">Monte Carlo</Link>
+        <Link to="/analysis/parameteroptimizer" className="small btn">Optimizer</Link>
         <Link to="/" className="small btn">New DSL</Link>
       </nav>
       <Outlet />

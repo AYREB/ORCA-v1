@@ -1,11 +1,10 @@
 import sys
 import os
-
 # Add project root so 'core' can be imported
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-
+    
 import copy
 import json
 import itertools
@@ -13,136 +12,66 @@ import pandas as pd
 from core.data_pulling.datapull import get_data_with_indicator
 from core.backtesting.backtesterCore import backtester
 from core.fetcher_calculators.indicatorEvaluator import build_indicator_functions
+# ---------------- DSL Parameter Utilities ----------------
 
-
-def cli_build_param_grid(parsed_dsl):
+def extract_optimizable_parameters(parsed_dsl):
     """
-    Simple CLI that lets you choose which DSL parameters to optimize.
-    Returns a param_grid dict.
+    Automatically finds numeric parameters inside the DSL and returns
+    a dict of {dot_path: value}.
+    
+    Now includes keys with 'period', 'percent', 'threshold', or 'amount'.
     """
-    # Step 1: find numeric optimizable params
-    all_params = extract_optimizable_parameters(parsed_dsl)
+    params = {}
 
-    print("\n=== AVAILABLE OPTIMIZABLE PARAMETERS ===")
-    for i, (k, v) in enumerate(all_params.items()):
-        print(f"{i}: {k}  (current={v})")
+    def walk(node, path=""):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                new_path = f"{path}.{k}" if path else k
 
-    print("\nEnter the numbers of the parameters you want to optimize (comma-separated).")
-    print("Example: 0,3,5")
-    selected = input("Choose: ").strip()
+                if isinstance(v, (int, float)):
+                    if any(keyword in k.lower() for keyword in ["period", "percent", "threshold", "amount"]):
+                        params[new_path] = v
 
-    indices = [int(x) for x in selected.split(",")]
+                # Recurse into nested dict/list
+                walk(v, new_path)
 
-    chosen = {}
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                walk(item, f"{path}[{i}]")
 
-    for idx in indices:
-        key = list(all_params.keys())[idx]
-        current_value = all_params[key]
-        print(f"\n--- Parameter: {key} (current={current_value}) ---")
-
-        # Ask for how to generate values
-        mode = input(
-            "Choose mode: (a) auto ±5 (int) / ±20% (float), "
-            "(m) manual list, (r) range: "
-        ).strip().lower()
-
-        if mode == "a":
-            # Use the existing auto grid generator
-            auto_grid = auto_generate_param_grid({key: current_value})
-            chosen[key] = auto_grid[key]
-
-        elif mode == "m":
-            raw = input("Enter comma-separated values: ").strip()
-            chosen[key] = [float(x) for x in raw.split(",")]
-
-        elif mode == "r":
-            start = float(input("Start: "))
-            end = float(input("End: "))
-            steps = int(input("Number of steps: "))
-            chosen[key] = list(
-                start + (end - start) * i / (steps - 1)
-                for i in range(steps)
-            )
-        else:
-            print("Invalid, skipping.")
-
-    print("\n=== FINAL PARAM GRID ===")
-    print(json.dumps(chosen, indent=4))
-
-    return chosen
-
-
-def run_optimizer(param_grid, parsed_dsl, data_dict, INDICATOR_FUNCTIONS):
-
-    base_params = extract_optimizable_parameters(parsed_dsl)
-    print("\nDetected DSL parameters:", base_params)
-
-    if param_grid is None:
-        print("\nAuto-generating grid...")
-        param_grid = auto_generate_param_grid(base_params)
-    else:
-        print("\nUsing manual grid:", param_grid)
-
-    results = run_param_grid_backtest(
-        parsed_dsl=parsed_dsl,
-        param_grid=param_grid,
-        data_dict=data_dict,
-        INDICATOR_FUNCTIONS=INDICATOR_FUNCTIONS
-    )
-
-    sorted_results = results.sort_values("pct_change", ascending=False)
-
-    print("\n===== TOP RESULTS =====")
-    print(sorted_results.head(10))
-
-    best = sorted_results.iloc[0]
-
-    print("\n===== BEST PARAMETERS FOUND =====")
-    print(best)
-
-    return results, best
-
-
+    walk(parsed_dsl)
+    return params
 
 
 def apply_overrides(dsl, overrides):
-    """Override values in a nested DSL dict using dot-path keys."""
+    """Override values in a nested DSL dict using dot-path keys, handling list indices."""
     dsl = copy.deepcopy(dsl)
     for path, value in overrides.items():
-        keys = path.split(".")
         node = dsl
+        keys = path.split(".")
         for k in keys[:-1]:
-            node = node[k]
-        node[keys[-1]] = value
+            # Handle list indices like AND[0]
+            if "[" in k and "]" in k:
+                name, idx = k[:-1].split("[")
+                node = node[name][int(idx)]
+            else:
+                node = node[k]
+
+        # Handle last key
+        last = keys[-1]
+        if "[" in last and "]" in last:
+            name, idx = last[:-1].split("[")
+            node[name][int(idx)] = value
+        else:
+            node[last] = value
     return dsl
+
 
 def generate_neighbor_params(current_value, step=1):
     """Return a small neighborhood of numeric parameter values."""
     if not isinstance(current_value, (int, float)):
         raise ValueError("Only numeric parameters can generate neighbors")
     return [current_value - step, current_value, current_value + step]
-
-# ---------------- Backtester wrapper ----------------
-
-def backtester_wrapper(parsed_dsl, data_dict, INDICATOR_FUNCTIONS, initial_balance=10000):
-    """
-    Runs the backtester and returns a metrics dictionary for optimization.
-    """
-    trade_log, cash, positions, pct_change = backtester(
-        parsed_dsl=parsed_dsl,
-        data_dict=data_dict,
-        indicator_functions=INDICATOR_FUNCTIONS,
-        initial_balance=initial_balance
-    )
-
-    final_value = cash + sum(positions[t]*trade_log[-1]["price"] for t in positions if positions[t] > 0)
-    metrics = {
-        "pct_change": float(pct_change),
-        "final_balance": float(final_value),
-        "num_trades": int(len(trade_log))
-    }
-
-    return metrics
 
 def auto_generate_param_grid(base_params):
     param_grid = {}
@@ -157,21 +86,31 @@ def auto_generate_param_grid(base_params):
             ]
     return param_grid
 
+# ---------------- Backtesting Utilities ----------------
 
+def backtester_wrapper(parsed_dsl, data_dict, INDICATOR_FUNCTIONS, initial_balance=10000):
+    """
+    Runs the backtester and returns a metrics dictionary for optimization.
+    """
+    trade_log, cash, positions, pct_change = backtester(
+        parsed_dsl=parsed_dsl,
+        data_dict=data_dict,
+        indicator_functions=INDICATOR_FUNCTIONS,
+        initial_balance=initial_balance
+    )
+
+    final_value = cash + sum(
+        positions[t] * trade_log[-1]["price"] for t in positions if positions[t] > 0
+    )
+    return {
+        "pct_change": float(pct_change),
+        "final_balance": float(final_value),
+        "num_trades": int(len(trade_log))
+    }
 
 def run_param_grid_backtest(parsed_dsl, param_grid, data_dict, INDICATOR_FUNCTIONS, initial_balance=10000):
     """
     Run backtests for all combinations in param_grid.
-    
-    Args:
-        parsed_dsl: dict of parsed DSL
-        param_grid: dict, keys=DSL dot-paths, values=list of values to try
-        data_dict: dict of dataframes for each ticker/timeframe
-        INDICATOR_FUNCTIONS: dict of indicator functions
-        initial_balance: starting cash
-    
-    Returns:
-        pd.DataFrame with all results
     """
     keys = list(param_grid.keys())
     value_lists = [param_grid[k] for k in keys]
@@ -185,52 +124,37 @@ def run_param_grid_backtest(parsed_dsl, param_grid, data_dict, INDICATOR_FUNCTIO
             path = k.split(".")
             sub = dsl_copy
             for p in path[:-1]:
-                sub = sub[p]
-            sub[path[-1]] = v
+                # handle list indices
+                if "[" in p and "]" in p:
+                    name, idx = p[:-1].split("[")
+                    sub = sub[name][int(idx)]
+                else:
+                    sub = sub[p]
+
+            # handle last key
+            last = path[-1]
+            if "[" in last and "]" in last:
+                name, idx = last[:-1].split("[")
+                sub[name][int(idx)] = v
+            else:
+                sub[last] = v
 
         metrics = backtester_wrapper(dsl_copy, data_dict, INDICATOR_FUNCTIONS, initial_balance)
         result_entry = {k: val for k, val in zip(keys, combo)}
         result_entry.update(metrics)
         results.append(result_entry)
 
-        # Print live feedback
-        print(f"Params: {result_entry}")
 
     return pd.DataFrame(results)
 
-def extract_optimizable_parameters(parsed_dsl):
-    """
-    Automatically finds numeric parameters inside the DSL and returns
-    a dict of {dot_path: value}.
-    """
-    params = {}
-
-    def walk(node, path=""):
-        if isinstance(node, dict):
-            for k, v in node.items():
-                new_path = f"{path}.{k}" if path else k
-                if isinstance(v, (int, float)):
-                    # Only include parameters that look optimizable
-                    if "period" in k.lower() or "percent" in k.lower() or "threshold" in k.lower():
-                        params[new_path] = v
-                walk(v, new_path)
-        elif isinstance(node, list):
-            for i, item in enumerate(node):
-                walk(item, f"{path}[{i}]")
-
-    walk(parsed_dsl)
-    return params
-
+# ---------------- Data Loading ----------------
 
 def load_data_dict(TICKERS, DATA_TFS, start_date, end_date, INDICATOR_FUNCTIONS, internetConnection, DATA_CSV_FOLDER):
     data_dict = {}
 
     for t in TICKERS:
         data_dict[t] = {}
-
         for tf in DATA_TFS:
-            print(f"Fetching data for {t} @ {tf} between {start_date} → {end_date}")
-
             if internetConnection:
                 df = get_data_with_indicator(
                     ticker=t,
@@ -260,38 +184,125 @@ def load_data_dict(TICKERS, DATA_TFS, start_date, end_date, INDICATOR_FUNCTIONS,
 
     return data_dict
 
+# ---------------- Optimizer (Non-Interactive) ----------------
 
-def initialize_and_run_parameter_optimizer():
-    with open("backend/core/parsing/dsl_output.json", "r") as f:
-        parsed_dsl = json.load(f)
+def optimizer(
+    parsed_dsl,
+    param_choices=None,  # dict: {param_path: {'mode': 'auto'/'manual'/'range', 'values': list OR range info}}
+    initial_balance=10000
+):
+    """
+    Run a fully programmatic optimizer and return structured results.
 
-    with open("backend/core/registries/indicatorRegistry.json") as f:
+    param_choices format:
+    {
+        "LONG.strategy.period": {"mode": "manual", "values": [10,20,30]},
+        "LONG.strategy.threshold": {"mode": "range", "start": 0.01, "end": 0.05, "steps": 5},
+        ...
+    }
+
+    Returns:
+        dict with keys:
+        - all_backtests: list of dicts {dsl, params, results}
+        - best_result: dict {dsl, params, results}
+    """
+    # ---------------- Load indicator definitions ----------------
+    current_dir = os.path.dirname(__file__)  # directory of this file
+    registry_path = os.path.join(current_dir, "../registries/indicatorRegistry.json")
+
+    with open(registry_path) as f:
         INDICATORS_DEF = json.load(f)["INDICATORS"]
 
     INDICATOR_FUNCTIONS = build_indicator_functions(INDICATORS_DEF)
 
+    # ---------------- Define tickers, timeframes, dates ----------------
     TICKERS = parsed_dsl["LONG"]["context"]["tickers"]
     DATA_TFS = parsed_dsl["LONG"]["context"]["data_timeframes"]
     start_date = parsed_dsl["LONG"]["context"]["dateframe"]["start"]
     end_date = parsed_dsl["LONG"]["context"]["dateframe"]["end"]
 
-    internetConnection = True   
+    # ---------------- Load data ----------------
     DATA_CSV_FOLDER = "Data_CSVs"
+    internetConnection = True  # Set False if offline
 
     data_dict = load_data_dict(
-        TICKERS, DATA_TFS, start_date, end_date,
-        INDICATOR_FUNCTIONS, internetConnection, DATA_CSV_FOLDER
+        TICKERS, DATA_TFS, start_date, end_date, INDICATOR_FUNCTIONS,
+        internetConnection, DATA_CSV_FOLDER
     )
 
-    #param_grid = None                          # auto-generate grid
-    param_grid = cli_build_param_grid(parsed_dsl)  # <<< ENABLE CLI
+    base_params = extract_optimizable_parameters(parsed_dsl)
 
-    results_df, best = run_optimizer(
-        param_grid=param_grid,
-        parsed_dsl=parsed_dsl,
-        data_dict=data_dict,
-        INDICATOR_FUNCTIONS=INDICATOR_FUNCTIONS
-    )
+    # Build the param grid programmatically
+    if param_choices is None:
+        param_grid = auto_generate_param_grid(base_params)
+    else:
+        param_grid = {}
+        for param, choice in param_choices.items():
+            mode = choice["mode"]
+            if mode == "auto":
+                param_grid[param] = auto_generate_param_grid({param: base_params[param]})[param]
+            elif mode == "manual":
+                param_grid[param] = choice["values"]
+            elif mode == "range":
+                start, end, steps = choice["start"], choice["end"], choice["steps"]
+                param_grid[param] = [start + (end - start) * i / (steps - 1) for i in range(steps)]
+            else:
+                raise ValueError(f"Invalid mode {mode} for {param}")
+
+    # Run the backtests
+    results_df = run_param_grid_backtest(parsed_dsl, param_grid, data_dict, INDICATOR_FUNCTIONS, initial_balance)
+    sorted_results = results_df.sort_values("pct_change", ascending=False)
+    best = sorted_results.iloc[0]
+
+    # ---------------- Build all_backtests ----------------
+    all_backtests = []
+    for _, row in sorted_results.iterrows():
+        combo_params = {k: row[k] for k in param_grid.keys()}
+        dsl_copy = apply_overrides(parsed_dsl, combo_params)
+        result_dict = row.to_dict()
+        
+        all_backtests.append({
+            "dsl": dsl_copy,
+            "params": combo_params,
+            "results": result_dict
+        })
+
+    # Best result with all parameter values
+    best_params = {k: best[k] for k in param_grid.keys()}
+    best_dsl = apply_overrides(parsed_dsl, best_params)
+    best_result_dict = best.to_dict()
+
+    # Final structured output
+    output = {
+        "all_backtests": all_backtests,
+        "best_result": {
+            "dsl": best_dsl,
+            "params": best_params,
+            "results": best_result_dict
+        }
+    }
+
+    return output
 
 
-initialize_and_run_parameter_optimizer()
+# # ---------------- Load DSL ----------------
+# with open("backend/core/Parsing/dsl_output.json", "r") as f:
+#     parsed_dsl = json.load(f)
+
+
+# # ---------------- Define parameter choices ----------------
+# param_choices = {
+#     "LONG.OPEN.ARGUMENTS.recurringPeriod": {"mode": "manual", "values": [3,5]},
+#     "LONG.OPEN.ARGUMENTS.recurringInvestAmount": {"mode": "range", "start": 0.05, "end": 0.2, "steps": 4},
+#     "LONG.OPEN.CONDITIONS.right.arg.period": {"mode": "auto"}
+# }
+
+
+# # ---------------- Run optimizer ----------------
+# output = optimizer(
+#     parsed_dsl=parsed_dsl,
+#     param_choices=param_choices,
+#     initial_balance=10000
+# )
+
+# print(output)

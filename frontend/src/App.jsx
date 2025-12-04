@@ -8,6 +8,7 @@ export default function App() {
         <Link to="/" className="small">Home</Link>
         <Link to="/garch" className="small">GARCH</Link>
         <Link to="/montecarlo" className="small">Monte Carlo</Link>
+        <Link to="/parameteroptimizer" className="small">Optimizer</Link>
       </nav>
 
       <Outlet />

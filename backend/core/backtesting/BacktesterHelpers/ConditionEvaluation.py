@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import numpy as np
 from core.fetcher_calculators import indicatorCalculators
+import os
 
 # Operator mapping (kept as callables)
 OPS = {
@@ -14,8 +15,11 @@ OPS = {
     "!=": operator.ne,
 }
 
+current_dir = os.path.dirname(__file__)  # directory of this file
+registry_path = os.path.join(current_dir, "../../registries/indicatorRegistry.json")
+
 # load registry once (optional)
-with open("backend/core/registries/indicatorRegistry.json") as f:
+with open(registry_path) as f:
     _INDICATOR_REGISTRY = json.load(f).get("INDICATORS", {})
 
 
