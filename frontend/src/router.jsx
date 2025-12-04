@@ -5,6 +5,7 @@ import ResultsLayout from "./pages/ResultsLayout";
 import Results from "./pages/Results";
 import Garch from "./pages/Garch";
 import MonteCarlo from "./pages/MonteCarlo";
+import ParameterOptimiser from "./pages/ParameterOptimiser";
 
 export default function RouterFile() {
   return (
@@ -17,6 +18,8 @@ export default function RouterFile() {
         <Route index element={<Results />} />        {/* default: Results */}
         <Route path="garch" element={<Garch />} />
         <Route path="montecarlo" element={<MonteCarlo />} />
+        <Route path="parameteroptimizer" element={<ParameterOptimiser />} />
+
       </Route>
     </Routes>
   );
