@@ -1,48 +1,5 @@
 {
     "LONG": {
-        "OPEN": {
-            "ARGUMENTS": {
-                "recurring": true,
-                "recurringPeriod": 5,
-                "recurringInvestType": "percentCashBalance",
-                "recurringInvestAmount": 0.1,
-                "maxRecurringCount": 0
-            },
-            "CONDITIONS": {
-                "OR": [
-                    {
-                        "left": {
-                            "func": "PRICE",
-                            "arg": {
-                                "OHLC": "open",
-                                "offset": 0
-                            }
-                        },
-                        "operator": ">",
-                        "right": {
-                            "value": 100
-                        }
-                    },
-                    {
-                        "left": {
-                            "func": "SMA",
-                            "arg": {
-                                "period": 14,
-                                "timeframe": "1h",
-                                "offset": 0
-                            }
-                        },
-                        "operator": "<",
-                        "right": {
-                            "func": "VOLUME",
-                            "arg": {
-                                "offset": 0
-                            }
-                        }
-                    }
-                ]
-            }
-        },
         "context": {
             "tickers": [
                 "AAPL"
@@ -52,8 +9,52 @@
                 "1h"
             ],
             "dateframe": {
-                "start": "2025-04-01",
-                "end": "2025-12-04"
+                "start": "2024-01-01",
+                "end": "2025-01-01"
+            }
+        },
+        "OPEN": {
+            "CONDITIONS": {
+                "OR": [
+                    {
+                        "left": {
+                            "func": "RSI",
+                            "arg": {
+                                "period": 17,
+                                "timeframe": "1h",
+                                "offset": 0
+                            }
+                        },
+                        "operator": "<",
+                        "right": {
+                            "value": 30
+                        }
+                    },
+                    {
+                        "left": {
+                            "func": "PRICE",
+                            "arg": {
+                                "OHLC": "close",
+                                "offset": 0
+                            }
+                        },
+                        "operator": ">",
+                        "right": {
+                            "value": 30
+                        }
+                    }
+                ]
+            },
+            "ARGUMENTS": {
+                "stopLossPercent": 0.2,
+                "initialOpenPositionInvestType": "percentCashBalance",
+                "initialOpenPositionInvestAmount": 0.2,
+                "recurring": false,
+                "recurringPeriod": 5,
+                "recurringInvestType": "percentCashBalance",
+                "recurringInvestAmount": 0.1,
+                "maxRecurringCount": 0,
+                "takeProfitPercent": 0.4
             }
         }
     }

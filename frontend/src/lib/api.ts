@@ -1,0 +1,305 @@
+// Django Backend API Configuration
+// Backend runs on separate repo at http://127.0.0.1:8000
+const API_BASE_URL = import.meta.env.VITE_DJANGO_API_URL || 'http://127.0.0.1:8000/api';
+
+// Backend response types matching Django backend
+export interface TradeEntry {
+  type: 'BUY' | 'SELL' | 'RECURRING_BUY';
+  ticker: string;
+  price: number;
+  shares: number;
+  balance: number;
+  open_positions_value: number;
+  timestamp: string;
+  sl_price?: number;
+  tp_price?: number;
+  close_reason?: 'SL' | 'TP' | 'CLOSE_CONDITION';
+}
+
+export interface OHLCData {
+  Datetime: string;
+  Open: number;
+  High: number;
+  Low: number;
+  Close: number;
+  Volume: number;
+  [key: string]: string | number; // For dynamic indicator columns
+}
+
+export interface BacktestResult {
+  cash: number;
+  invested: number;
+  total_portfolio: number;
+  pct_change: number;
+  json_dsl: Record<string, unknown>;
+  trades: TradeEntry[];
+  data: {
+    [ticker: string]: {
+      [timeframe: string]: OHLCData[];
+    };
+  };
+}
+
+export interface ParameterChoice {
+  mode: 'nochange' | 'auto' | 'manual' | 'range';
+  indicator?: string;
+  values?: number[];
+  start?: number;
+  end?: number;
+  steps?: number;
+}
+
+export interface OptimizationResult {
+  all_backtests: Array<{
+    dsl: Record<string, unknown>;
+    params: Record<string, number>;
+    results: Record<string, number>;
+  }>;
+  best_result: {
+    dsl: Record<string, unknown>;
+    params: Record<string, number>;
+    results: {
+      pct_change: number;
+      final_balance: number;
+      num_trades: number;
+      [key: string]: number;
+    };
+  };
+}
+
+export interface RegistryResponse {
+  commands: Record<string, unknown>;
+  indicators: Record<string, unknown>;
+  arguments: Record<string, unknown>;
+}
+
+export interface MonteCarloResult {
+  paths: Array<{ trade: number; [key: string]: number }>;
+  all_final_values: number[];
+  metrics: {
+    expected_return: number;
+    median_return: number;
+    var_95: number;
+    cvar_95: number;
+    prob_positive: number;
+    prob_gt_10: number;
+    prob_gt_20: number;
+    prob_drawdown_20: number;
+  };
+  distribution: Array<{ return: number; frequency: number }>;
+  params: {
+    win_rate: number;
+    avg_win: number;
+    avg_loss: number;
+    num_simulations: number;
+    cooldown_buffer: number;
+  };
+}
+
+export interface SavedStrategy {
+  id: number;
+  name: string;
+  dsl: string;
+  dslJson?: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+  lastRun?: string | null;
+  lastResult?: BacktestResult | null;
+}
+
+export interface AuthUser {
+  id: number;
+  email: string;
+  name?: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: AuthUser;
+}
+
+class DjangoAPI {
+  private baseUrl: string;
+  private token: string | null = null;
+
+  constructor() {
+    this.baseUrl = API_BASE_URL;
+  }
+
+  setToken(token: string) {
+    this.token = token;
+  }
+
+  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+      ...(this.token && { Authorization: `Token ${this.token}` }),
+      ...options.headers,
+    };
+
+    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+      ...options,
+      headers,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `API Error: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  private normalizeStrategy(raw: any): SavedStrategy {
+    return {
+      id: raw.id,
+      name: raw.name,
+      dsl: raw.dsl || "",
+      dslJson: raw.dsl_json || null,
+      createdAt: raw.created_at,
+      updatedAt: raw.updated_at,
+      lastRun: raw.last_run_at,
+      lastResult: raw.last_result || null,
+    };
+  }
+
+  // Authentication
+  async register(email: string, password: string, name?: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>('/register/', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, name }),
+    });
+  }
+
+  async login(email: string, password: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>('/login/', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+  }
+
+  async getCurrentUser(): Promise<AuthUser> {
+    return this.request<AuthUser>('/me/');
+  }
+
+  // Health check
+  async healthCheck() {
+    return this.request<{ status: string }>('/health/');
+  }
+
+  // Backtest with DSL text (raw DSL string)
+  async backtestDSLText(dslText: string): Promise<BacktestResult> {
+    return this.request<BacktestResult>('/backtestDSLText/', {
+      method: 'POST',
+      body: JSON.stringify({ dsl_text: dslText }),
+    });
+  }
+
+  // Backtest with DSL JSON (parsed DSL object)
+  async backtestDSLJSON(dslJson: Record<string, unknown>): Promise<BacktestResult> {
+    return this.request<BacktestResult>('/backtestDSLJSON/', {
+      method: 'POST',
+      body: JSON.stringify({ dsl_json: dslJson }),
+    });
+  }
+
+  // Parameter optimizer
+  async optimizeParameters(
+    dslJson: Record<string, unknown>,
+    parameterChoice: Record<string, ParameterChoice>,
+    initialBalance: number
+  ): Promise<OptimizationResult> {
+    return this.request<OptimizationResult>('/dslParameterOptimiser/', {
+      method: 'POST',
+      body: JSON.stringify({
+        dsl_json: dslJson,
+        parameter_choice: parameterChoice,
+        initial_balance: initialBalance,
+      }),
+    });
+  }
+
+  // Get registry (commands, indicators, arguments)
+  async getRegistry(): Promise<RegistryResponse> {
+    return this.request<RegistryResponse>('/registry/');
+  }
+
+  // Run Monte Carlo simulation
+  async runMonteCarloSim(
+    trades: TradeEntry[],
+    numSimulations: number = 10000,
+    numTradesForward: number = 100,
+    cooldownBuffer: number = 3
+  ): Promise<MonteCarloResult> {
+    return this.request<MonteCarloResult>('/monteCarloSim/', {
+      method: 'POST',
+      body: JSON.stringify({
+        trades,
+        num_simulations: numSimulations,
+        num_trades_forward: numTradesForward,
+        cooldown_buffer: cooldownBuffer,
+      }),
+    });
+  }
+
+  // Strategies (persisted per user)
+  async fetchStrategies(): Promise<SavedStrategy[]> {
+    const data = await this.request<{ strategies: any[] }>('/strategies/');
+    return data.strategies.map((strategy) => this.normalizeStrategy(strategy));
+  }
+
+  async createStrategy(payload: {
+    name: string;
+    dsl: string;
+    dslJson?: Record<string, unknown> | null;
+    lastResult?: BacktestResult | null;
+  }): Promise<SavedStrategy> {
+    const data = await this.request<{ strategy: any }>('/strategies/', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: payload.name,
+        dsl: payload.dsl,
+        dsl_json: payload.dslJson,
+        last_result: payload.lastResult,
+      }),
+    });
+    return this.normalizeStrategy(data.strategy);
+  }
+
+  async updateStrategy(
+    id: number,
+    payload: Partial<{ name: string; dsl: string; dslJson: Record<string, unknown> | null; lastResult: BacktestResult | null }>
+  ): Promise<SavedStrategy> {
+    const data = await this.request<{ strategy: any }>(`/strategies/${id}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        ...(payload.name !== undefined ? { name: payload.name } : {}),
+        ...(payload.dsl !== undefined ? { dsl: payload.dsl } : {}),
+        ...(payload.dslJson !== undefined ? { dsl_json: payload.dslJson } : {}),
+        ...(payload.lastResult !== undefined ? { last_result: payload.lastResult } : {}),
+      }),
+    });
+    return this.normalizeStrategy(data.strategy);
+  }
+
+  async deleteStrategy(id: number): Promise<void> {
+    await this.request(`/strategies/${id}/`, { method: 'DELETE' });
+  }
+
+  async getStrategy(id: number): Promise<SavedStrategy> {
+    const data = await this.request<{ strategy: any }>(`/strategies/${id}/`);
+    return this.normalizeStrategy(data.strategy);
+  }
+
+  // Store last backtest result for parameter optimizer
+  getLastBacktestResult(): BacktestResult | null {
+    const stored = localStorage.getItem('orca_last_backtest');
+    return stored ? JSON.parse(stored) : null;
+  }
+
+  setLastBacktestResult(result: BacktestResult): void {
+    localStorage.setItem('orca_last_backtest', JSON.stringify(result));
+  }
+}
+
+export const api = new DjangoAPI();

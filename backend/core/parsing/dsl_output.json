@@ -1,13 +1,26 @@
 {
     "LONG": {
+        "context": {
+            "tickers": [
+                "AAPL"
+            ],
+            "execution_timeframe": "1h",
+            "data_timeframes": [
+                "1h"
+            ],
+            "dateframe": {
+                "start": "2024-01-01",
+                "end": "2025-01-01"
+            }
+        },
         "OPEN": {
             "CONDITIONS": {
-                "AND": [
+                "OR": [
                     {
                         "left": {
                             "func": "RSI",
                             "arg": {
-                                "period": 14,
+                                "period": 17,
                                 "timeframe": "1h",
                                 "offset": 0
                             }
@@ -27,54 +40,21 @@
                         },
                         "operator": ">",
                         "right": {
-                            "value": 150
+                            "value": 30
                         }
                     }
                 ]
             },
             "ARGUMENTS": {
+                "stopLossPercent": 0.2,
                 "initialOpenPositionInvestType": "percentCashBalance",
-                "initialOpenPositionInvestAmount": 0.1,
-                "recurring": true,
-                "stopLossPercent": 6,
-                "takeProfitPercent": 10,
+                "initialOpenPositionInvestAmount": 0.2,
+                "recurring": false,
                 "recurringPeriod": 5,
                 "recurringInvestType": "percentCashBalance",
                 "recurringInvestAmount": 0.1,
-                "maxRecurringCount": 0
-            }
-        },
-        "CLOSE": {
-            "CONDITIONS": {
-                "left": {
-                    "func": "RSI",
-                    "arg": {
-                        "period": 14,
-                        "timeframe": "1h",
-                        "offset": 1
-                    }
-                },
-                "operator": ">",
-                "right": {
-                    "value": 75
-                }
-            },
-            "ARGUMENTS": {
-                "test": 0.5
-            }
-        },
-        "context": {
-            "tickers": [
-                "AAPL"
-            ],
-            "execution_timeframe": "1h",
-            "data_timeframes": [
-                "1h",
-                "4h"
-            ],
-            "dateframe": {
-                "start": "2024-01-01",
-                "end": "2025-11-01"
+                "maxRecurringCount": 0,
+                "takeProfitPercent": 0.4
             }
         }
     }
