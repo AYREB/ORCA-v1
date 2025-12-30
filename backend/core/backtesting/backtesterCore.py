@@ -24,6 +24,9 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
 
     # Precompute max rows per ticker for execution timeframe
     exec_dfs = {t: data_dict[t].get(execution_tf, None) for t in data_dict.keys()}
+    for t, df in exec_dfs.items():
+        if df is None or df.empty:
+            raise ValueError(f"No execution data for ticker '{t}' on timeframe '{execution_tf}'")
     max_rows = max(len(df) for df in exec_dfs.values())
 
     open_cond, close_cond = get_long_short_conditions(parsed_dsl)

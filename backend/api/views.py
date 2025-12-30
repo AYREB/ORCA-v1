@@ -10,11 +10,16 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.authtoken.models import Token
 
-from core.analysis.parameter_optimiser import optimizer
+import threading
+import uuid
+
+from core.analysis.parameter_optimiser import optimizer, build_param_grid, genetic_optimizer, build_param_values
 from core.main import dslJSONBacktest, dslTextToJsonBacktest
 from .models import Strategy
 
 User = get_user_model()
+optimizer_jobs = {}
+genetic_jobs = {}
 
 
 def parse_body(request):
@@ -254,6 +259,48 @@ def dslParameterOptimiser(request):
             dsl = body.get("dsl_json", "")
             parameter_choice = body.get("parameter_choice", "")
             initial_balance = body.get("initial_balance", "")
+            async_mode = body.get("async", False)
+
+            # Optional async job: start optimizer in a background thread and return a job id
+            if async_mode:
+                job_id = str(uuid.uuid4())
+                # Compute param grid once to know total runs up front
+                param_grid, _ = build_param_grid(dsl, parameter_choice)
+                total_runs = 1
+                for vals in param_grid.values():
+                    total_runs *= len(vals)
+
+                optimizer_jobs[job_id] = {
+                    "status": "queued",
+                    "completed_runs": 0,
+                    "total_runs": total_runs,
+                    "result": None,
+                    "error": None,
+                }
+
+                def progress_hook(done, total):
+                    optimizer_jobs[job_id]["completed_runs"] = done
+                    optimizer_jobs[job_id]["total_runs"] = total
+                    optimizer_jobs[job_id]["status"] = "running"
+
+                def run_job():
+                    try:
+                        result = optimizer(
+                            parsed_dsl=dsl,
+                            param_choices=parameter_choice,
+                            initial_balance=initial_balance,
+                            progress_hook=progress_hook,
+                            param_grid_override=param_grid,
+                        )
+                        optimizer_jobs[job_id]["result"] = result
+                        optimizer_jobs[job_id]["status"] = "completed"
+                        optimizer_jobs[job_id]["completed_runs"] = optimizer_jobs[job_id].get("total_runs", 0)
+                    except Exception as e:
+                        optimizer_jobs[job_id]["error"] = str(e)
+                        optimizer_jobs[job_id]["status"] = "error"
+
+                threading.Thread(target=run_job, daemon=True).start()
+                return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
             result = optimizer(parsed_dsl=dsl, param_choices=parameter_choice, initial_balance=initial_balance)
             return JsonResponse(result, safe=False)
@@ -265,6 +312,121 @@ def dslParameterOptimiser(request):
             return JsonResponse({"error": str(e)}, status=500)
 
     return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+@csrf_exempt
+def dslParameterOptimiserStatus(request, job_id):
+    job = optimizer_jobs.get(job_id)
+    if not job:
+        return JsonResponse({"error": "Job not found"}, status=404)
+
+    completed = job.get("completed_runs", 0)
+    total = job.get("total_runs", 0)
+    progress = (completed / total * 100) if total else 0
+
+    response = {
+        "status": job["status"],
+        "completed_runs": completed,
+        "total_runs": total,
+        "progress": min(100, max(0, progress)),
+    }
+    if job["status"] == "completed":
+        response["result"] = job.get("result")
+    if job["status"] == "error":
+        response["error"] = job.get("error")
+
+    return JsonResponse(response, safe=False)
+
+
+@csrf_exempt
+def dslGeneticOptimiser(request):
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body)
+            dsl = body.get("dsl_json", "")
+            parameter_choice = body.get("parameter_choice", "")
+            initial_balance = body.get("initial_balance", "")
+            ga_settings = body.get("ga_settings", {})
+            async_mode = body.get("async", False)
+
+            if async_mode:
+                job_id = str(uuid.uuid4())
+                param_values, _ = build_param_values(dsl, parameter_choice)
+                if not param_values:
+                    return JsonResponse({"error": "No parameters selected for optimization"}, status=400)
+                total_runs = ga_settings.get("population", 20) * ga_settings.get("generations", 10)
+
+                genetic_jobs[job_id] = {
+                    "status": "queued",
+                    "completed_runs": 0,
+                    "total_runs": total_runs,
+                    "result": None,
+                    "error": None,
+                }
+
+                def progress_hook(done, total):
+                    genetic_jobs[job_id]["completed_runs"] = done
+                    genetic_jobs[job_id]["total_runs"] = total
+                    genetic_jobs[job_id]["status"] = "running"
+
+                def run_job():
+                    try:
+                        result = genetic_optimizer(
+                            parsed_dsl=dsl,
+                            param_choices=parameter_choice,
+                            initial_balance=initial_balance,
+                            ga_settings=ga_settings,
+                            progress_hook=progress_hook,
+                        )
+                        genetic_jobs[job_id]["result"] = result
+                        genetic_jobs[job_id]["status"] = "completed"
+                        genetic_jobs[job_id]["completed_runs"] = genetic_jobs[job_id].get("total_runs", 0)
+                    except Exception as e:
+                        genetic_jobs[job_id]["error"] = str(e)
+                        genetic_jobs[job_id]["status"] = "error"
+
+                threading.Thread(target=run_job, daemon=True).start()
+                return JsonResponse({"job_id": job_id, "total_runs": total_runs})
+
+            result = genetic_optimizer(
+                parsed_dsl=dsl,
+                param_choices=parameter_choice,
+                initial_balance=initial_balance,
+                ga_settings=ga_settings,
+            )
+            return JsonResponse(result, safe=False)
+
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            return JsonResponse({"error": str(e)}, status=500)
+
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+@csrf_exempt
+def dslGeneticOptimiserStatus(request, job_id):
+    job = genetic_jobs.get(job_id)
+    if not job:
+        return JsonResponse({"error": "Job not found"}, status=404)
+
+    completed = job.get("completed_runs", 0)
+    total = job.get("total_runs", 0)
+    progress = (completed / total * 100) if total else 0
+
+    response = {
+        "status": job["status"],
+        "completed_runs": completed,
+        "total_runs": total,
+        "progress": min(100, max(0, progress)),
+    }
+    if job["status"] == "completed":
+        response["result"] = job.get("result")
+    if job["status"] == "error":
+        response["error"] = job.get("error")
+
+    return JsonResponse(response, safe=False)
 
 
 @csrf_exempt

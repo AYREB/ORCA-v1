@@ -65,6 +65,40 @@ export interface OptimizationResult {
       [key: string]: number;
     };
   };
+  errors?: Array<{
+    params: Record<string, number>;
+    error: string;
+  }>;
+  total_runs?: number;
+}
+
+export interface OptimizerJobStart {
+  job_id: string;
+  total_runs: number;
+}
+
+export interface OptimizerJobStatus {
+  status: "queued" | "running" | "completed" | "error";
+  completed_runs: number;
+  total_runs: number;
+  progress: number;
+  result?: OptimizationResult;
+  error?: string;
+}
+
+export interface GeneticOptimizationResult extends OptimizationResult {}
+export interface GeneticJobStart {
+  job_id: string;
+  total_runs: number;
+}
+
+export interface GeneticJobStatus {
+  status: "queued" | "running" | "completed" | "error";
+  completed_runs: number;
+  total_runs: number;
+  progress: number;
+  result?: GeneticOptimizationResult;
+  error?: string;
 }
 
 export interface RegistryResponse {
@@ -217,6 +251,56 @@ class DjangoAPI {
         initial_balance: initialBalance,
       }),
     });
+  }
+
+  // Async optimizer (job + polling)
+  async startOptimizeJob(
+    dslJson: Record<string, unknown>,
+    parameterChoice: Record<string, ParameterChoice>,
+    initialBalance: number
+  ): Promise<OptimizerJobStart> {
+    return this.request<OptimizerJobStart>("/dslParameterOptimiser/", {
+      method: "POST",
+      body: JSON.stringify({
+        dsl_json: dslJson,
+        parameter_choice: parameterChoice,
+        initial_balance: initialBalance,
+        async: true,
+      }),
+    });
+  }
+
+  async getOptimizeJobStatus(jobId: string): Promise<OptimizerJobStatus> {
+    return this.request<OptimizerJobStatus>(`/dslParameterOptimiser/status/${jobId}/`);
+  }
+
+  // Genetic optimizer (async job)
+  async startGeneticJob(
+    dslJson: Record<string, unknown>,
+    parameterChoice: Record<string, ParameterChoice>,
+    initialBalance: number,
+    gaSettings: {
+      population: number;
+      generations: number;
+      mutation_rate: number;
+      crossover_rate: number;
+      elite_size: number;
+    }
+  ): Promise<GeneticJobStart> {
+    return this.request<GeneticJobStart>("/dslGeneticOptimiser/", {
+      method: "POST",
+      body: JSON.stringify({
+        dsl_json: dslJson,
+        parameter_choice: parameterChoice,
+        initial_balance: initialBalance,
+        ga_settings: gaSettings,
+        async: true,
+      }),
+    });
+  }
+
+  async getGeneticJobStatus(jobId: string): Promise<GeneticJobStatus> {
+    return this.request<GeneticJobStatus>(`/dslGeneticOptimiser/status/${jobId}/`);
   }
 
   // Get registry (commands, indicators, arguments)

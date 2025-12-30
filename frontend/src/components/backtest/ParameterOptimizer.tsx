@@ -7,10 +7,15 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { api, OptimizationResult, ParameterChoice } from "@/lib/api";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { api, OptimizationResult, ParameterChoice, OptimizerJobStatus, BacktestResult, SavedStrategy } from "@/lib/api";
 
 interface ParameterOptimizerProps {
   dslJson: Record<string, unknown> | null;
+  strategyId?: number | null;
+  strategyName?: string | null;
+  onBestApplied?: (result: BacktestResult, strategy?: { id?: number; name: string }) => void;
 }
 
 // Extract optimizable parameters from DSL
@@ -21,9 +26,18 @@ function extractOptimizableParameters(
 ): Record<string, { value: number; indicator: string | null }> {
   const params: Record<string, { value: number; indicator: string | null }> = {};
 
+  // Capture numeric leaf nodes (skip booleans masquerading as numbers)
+  if (typeof node === "number" && Number.isFinite(node)) {
+    if (path) {
+      params[path] = { value: node, indicator: parentIndicator };
+    }
+    return params;
+  }
+
   if (Array.isArray(node)) {
     node.forEach((item, i) => {
-      Object.assign(params, extractOptimizableParameters(item, `${path}[${i}]`, parentIndicator));
+      const itemPath = path ? `${path}[${i}]` : `[${i}]`;
+      Object.assign(params, extractOptimizableParameters(item, itemPath, parentIndicator));
     });
   } else if (typeof node === "object" && node !== null) {
     let currentIndicator = parentIndicator;
@@ -35,11 +49,6 @@ function extractOptimizableParameters(
 
     Object.entries(nodeObj).forEach(([key, value]) => {
       const newPath = path ? `${path}.${key}` : key;
-
-      if (typeof value === "number" && /period|percent|threshold|offset|value|amount/i.test(key)) {
-        params[newPath] = { value, indicator: currentIndicator };
-      }
-
       Object.assign(params, extractOptimizableParameters(value, newPath, currentIndicator));
     });
   }
@@ -58,13 +67,23 @@ function getDisplayName(paramPath: string, indicator: string | null): string {
   return paramName;
 }
 
-const ParameterOptimizer = ({ dslJson }: ParameterOptimizerProps) => {
+const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: ParameterOptimizerProps) => {
   const [paramChoices, setParamChoices] = useState<Record<string, ParameterChoice>>({});
   const [initialBalance, setInitialBalance] = useState(10000);
   const [optimizerResult, setOptimizerResult] = useState<OptimizationResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [completedRuns, setCompletedRuns] = useState(0);
+  const [totalRunsState, setTotalRunsState] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [showAllResults, setShowAllResults] = useState(false);
+  const [runErrors, setRunErrors] = useState<OptimizationResult["errors"]>([]);
+  const [showApplyDialog, setShowApplyDialog] = useState(false);
+  const [applyMode, setApplyMode] = useState<"overwrite" | "new">("overwrite");
+  const [newStrategyName, setNewStrategyName] = useState("");
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [strategiesCache, setStrategiesCache] = useState<SavedStrategy[]>([]);
 
   // Extract parameters when DSL changes
   useEffect(() => {
@@ -144,11 +163,21 @@ const ParameterOptimizer = ({ dslJson }: ParameterOptimizerProps) => {
     setLoading(true);
     setError(null);
     setOptimizerResult(null);
+    setRunErrors([]);
+    setCompletedRuns(0);
+    setTotalRunsState(0);
+    setProgress(0);
 
     try {
       const payload: Record<string, ParameterChoice> = {};
       Object.entries(paramChoices).forEach(([param, choice]) => {
         if (choice.mode !== "nochange") {
+          if (choice.mode === "manual" && (!choice.values || choice.values.length === 0)) {
+            throw new Error(`Add at least one value for ${param}`);
+          }
+          if (choice.mode === "range" && (!choice.steps || choice.steps < 2)) {
+            throw new Error(`Range for ${param} needs at least 2 steps`);
+          }
           payload[param] = choice;
         }
       });
@@ -159,20 +188,167 @@ const ParameterOptimizer = ({ dslJson }: ParameterOptimizerProps) => {
         return;
       }
 
-      const result = await api.optimizeParameters(dslJson, payload, initialBalance);
-      setOptimizerResult(result);
-      toast.success("Optimization complete!");
+      const start = await api.startOptimizeJob(dslJson, payload, initialBalance);
+      setTotalRunsState(start.total_runs || totalRuns);
+
+      const poll = async () => {
+        if (!start.job_id) return;
+        const status: OptimizerJobStatus = await api.getOptimizeJobStatus(start.job_id);
+        setCompletedRuns(status.completed_runs);
+        setTotalRunsState(status.total_runs);
+        setProgress(status.progress);
+
+        if (status.status === "completed" && status.result) {
+          setOptimizerResult(status.result);
+          setRunErrors(status.result.errors || []);
+          setLoading(false);
+          toast.success("Optimization complete!");
+          return;
+        }
+        if (status.status === "error") {
+          setError(status.error || "Optimizer failed");
+          setLoading(false);
+          return;
+        }
+        window.setTimeout(poll, 1000);
+      };
+
+      poll();
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Optimizer request failed";
       setError(errorMessage);
       toast.error(errorMessage);
+      setProgress(0);
     } finally {
       setLoading(false);
+      setTimeout(() => setProgress(0), 500);
     }
   };
 
   const activeParams = useMemo(() => {
     return Object.entries(paramChoices).filter(([_, choice]) => choice.mode !== "nochange").length;
+  }, [paramChoices]);
+
+  const ensureStrategies = async () => {
+    if (strategiesCache.length > 0) return strategiesCache;
+    try {
+      const list = await api.fetchStrategies();
+      setStrategiesCache(list);
+      return list;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unable to load strategies for apply");
+      return [];
+    }
+  };
+
+  const bestDsl = optimizerResult?.best_result?.dsl as Record<string, unknown> | undefined;
+
+  const handleOpenApply = async () => {
+    if (!optimizerResult?.best_result) {
+      toast.error("Run optimizer first");
+      return;
+    }
+    setApplyMode(strategyId ? "overwrite" : "new");
+    setNewStrategyName(strategyName || "");
+    setApplyError(null);
+    await ensureStrategies();
+    setShowApplyDialog(true);
+  };
+
+  const validateName = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("Enter a strategy name");
+    const list = await ensureStrategies();
+    if (list.some((s) => s.name.toLowerCase() === trimmed.toLowerCase())) {
+      throw new Error("A strategy with that name already exists");
+    }
+    return trimmed;
+  };
+
+  const handleApplyBest = async () => {
+    if (!optimizerResult?.best_result || !bestDsl) return;
+    setApplying(true);
+    setApplyError(null);
+
+    try {
+      let chosenName = newStrategyName || strategyName || "";
+      const mode = applyMode;
+
+      if (mode === "new" || (!strategyId && mode === "overwrite")) {
+        chosenName = await validateName(chosenName);
+      }
+
+      const backtestResult = await api.backtestDSLJSON(bestDsl);
+      api.setLastBacktestResult(backtestResult);
+
+      let savedMeta: { id?: number; name: string } | undefined = undefined;
+
+      if (mode === "overwrite") {
+        if (strategyId) {
+          const updated = await api.updateStrategy(strategyId, {
+            name: chosenName || strategyName || undefined,
+            dsl: JSON.stringify(bestDsl, null, 2),
+            dslJson: bestDsl,
+            lastResult: backtestResult,
+          });
+          savedMeta = { id: updated.id, name: updated.name };
+        } else {
+          const created = await api.createStrategy({
+            name: chosenName,
+            dsl: JSON.stringify(bestDsl, null, 2),
+            dslJson: bestDsl,
+            lastResult: backtestResult,
+          });
+          savedMeta = { id: created.id, name: created.name };
+        }
+      } else {
+        const created = await api.createStrategy({
+          name: chosenName,
+          dsl: JSON.stringify(bestDsl, null, 2),
+          dslJson: bestDsl,
+          lastResult: backtestResult,
+        });
+        savedMeta = { id: created.id, name: created.name };
+      }
+
+      onBestApplied?.(backtestResult, savedMeta);
+      toast.success("Best parameters applied to backtest");
+      setShowApplyDialog(false);
+    } catch (err) {
+      setApplyError(err instanceof Error ? err.message : "Failed to apply best result");
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const setAllToAuto = () => {
+    setParamChoices((prev) => {
+      const next: Record<string, ParameterChoice> = {};
+      Object.entries(prev).forEach(([key, val]) => {
+        next[key] = { ...val, mode: "auto" };
+      });
+      return next;
+    });
+  };
+
+  const totalRuns = useMemo(() => {
+    const active = Object.entries(paramChoices).filter(([_, c]) => c.mode !== "nochange");
+    if (active.length === 0) return 0;
+
+    let total = 1;
+    for (const [, choice] of active) {
+      let count = 0;
+      if (choice.mode === "auto") {
+        count = 3; // auto generates a small neighborhood
+      } else if (choice.mode === "manual") {
+        count = choice.values?.length || 0;
+      } else if (choice.mode === "range") {
+        count = choice.steps || 0;
+      }
+      if (count === 0) return 0;
+      total *= count;
+    }
+    return total;
   }, [paramChoices]);
 
   if (!dslJson) {
@@ -329,6 +505,14 @@ const ParameterOptimizer = ({ dslJson }: ParameterOptimizerProps) => {
             <p className="text-sm text-muted-foreground">
               <span className="font-mono text-primary">{activeParams}</span> parameters selected
             </p>
+            <p className="text-sm text-muted-foreground">
+              {totalRunsState || totalRuns ? `${totalRunsState || totalRuns} runs` : "Add values to run"}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 mb-3">
+            <Button variant="outline" size="sm" className="w-full" onClick={setAllToAuto}>
+              Set all to Auto
+            </Button>
           </div>
           <Button
             className="w-full"
@@ -344,6 +528,21 @@ const ParameterOptimizer = ({ dslJson }: ParameterOptimizerProps) => {
               "Run Optimizer"
             )}
           </Button>
+
+          <div className="mt-4">
+            <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+              <span>Progress</span>
+              <span className="font-mono">
+                {completedRuns}/{totalRunsState || totalRuns} ({progress.toFixed(0)}%)
+              </span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-secondary overflow-hidden border border-border">
+              <div
+                className="h-full bg-primary transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -357,11 +556,29 @@ const ParameterOptimizer = ({ dslJson }: ParameterOptimizerProps) => {
       {/* Results */}
       {optimizerResult && (
         <div className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm space-y-6">
+          {runErrors && runErrors.length > 0 && (
+            <div className="p-3 rounded-lg border border-amber-300/50 bg-amber-100/10 text-amber-600">
+              <p className="text-sm font-semibold mb-1">Some runs failed</p>
+              <ul className="list-disc ml-4 space-y-1 text-xs">
+                {runErrors.slice(0, 3).map((e, i) => (
+                  <li key={i} className="font-mono">
+                    {JSON.stringify(e.params)} → {e.error}
+                  </li>
+                ))}
+                {runErrors.length > 3 && <li className="font-mono">...and {runErrors.length - 3} more</li>}
+              </ul>
+            </div>
+          )}
           {/* Best Result */}
           <div className="p-4 rounded-lg bg-success/10 border border-success/30">
             <div className="flex items-center gap-2 mb-4">
               <Trophy className="h-5 w-5 text-success" />
               <h4 className="font-semibold text-success">Best Result</h4>
+              <div className="ml-auto flex items-center gap-2">
+                <Button size="sm" variant="secondary" onClick={handleOpenApply}>
+                  Apply Best
+                </Button>
+              </div>
             </div>
 
             <div className="grid grid-cols-3 gap-4 mb-4">
@@ -444,6 +661,56 @@ const ParameterOptimizer = ({ dslJson }: ParameterOptimizerProps) => {
           )}
         </div>
       )}
+
+      <Dialog open={showApplyDialog} onOpenChange={setShowApplyDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Apply Best Result</DialogTitle>
+            <DialogDescription>
+              Apply the optimized DSL to a backtest and save it as a strategy.
+            </DialogDescription>
+          </DialogHeader>
+
+          <RadioGroup value={applyMode} onValueChange={(v) => setApplyMode(v as "overwrite" | "new")} className="space-y-2">
+            <label className="flex items-center gap-2">
+              <RadioGroupItem value="overwrite" />
+              <span>Overwrite existing strategy {strategyName ? `(${strategyName})` : "(unsaved)"}</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <RadioGroupItem value="new" />
+              <span>Create new strategy</span>
+            </label>
+          </RadioGroup>
+
+          {(applyMode === "new" || (!strategyId && applyMode === "overwrite")) && (
+            <div className="mt-2 space-y-1">
+              <Label className="text-sm">Strategy Name</Label>
+              <Input
+                value={newStrategyName}
+                onChange={(e) => setNewStrategyName(e.target.value)}
+                placeholder="My Optimized Strategy"
+              />
+            </div>
+          )}
+
+          {applyError && <p className="text-xs text-destructive">{applyError}</p>}
+
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setShowApplyDialog(false)} disabled={applying}>
+              Cancel
+            </Button>
+            <Button onClick={handleApplyBest} disabled={applying}>
+              {applying ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Applying...
+                </>
+              ) : (
+                "Apply"
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </motion.div>
   );
 };

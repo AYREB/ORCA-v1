@@ -18,5 +18,8 @@ urlpatterns = [
     path("backtestDSLText/", views.backtestDSLText),
     path("backtestDSLJSON/", views.backtestDSLJSON),
     path("dslParameterOptimiser/", views.dslParameterOptimiser),
+    path("dslParameterOptimiser/status/<str:job_id>/", views.dslParameterOptimiserStatus),
+    path("dslGeneticOptimiser/", views.dslGeneticOptimiser),
+    path("dslGeneticOptimiser/status/<str:job_id>/", views.dslGeneticOptimiserStatus),
     path("registry/", views.registry),
 ]

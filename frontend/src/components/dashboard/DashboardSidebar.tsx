@@ -7,7 +7,8 @@ import {
   HelpCircle,
   LogOut,
   ChevronLeft,
-  Sliders
+  Sliders,
+  Dna
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
   { icon: FlaskConical, label: "New Backtest", path: "/dashboard/backtest" },
   { icon: Sliders, label: "Optimizer", path: "/dashboard/optimizer" },
+  { icon: Dna, label: "Genetic", path: "/dashboard/genetic" },
   { icon: LineChart, label: "Strategies", path: "/dashboard/strategies" },
   { icon: History, label: "History", path: "/dashboard/history" },
 ];

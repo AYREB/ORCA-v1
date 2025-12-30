@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Helmet } from "react-helmet-async";
-import { Play, Loader2, ArrowLeft, BarChart3, LineChart, Activity, Shuffle, Sliders, Code, Settings2 } from "lucide-react";
+import { Play, Loader2, ArrowLeft, BarChart3, LineChart, Activity, Shuffle, Code, Settings2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
@@ -11,7 +11,6 @@ import BacktestResults from "@/components/backtest/BacktestResults";
 import ChartView from "@/components/backtest/ChartView";
 import GarchAnalysis from "@/components/backtest/GarchAnalysis";
 import MonteCarloAnalysis from "@/components/backtest/MonteCarloAnalysis";
-import ParameterOptimizer from "@/components/backtest/ParameterOptimizer";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api, BacktestResult } from "@/lib/api";
@@ -301,10 +300,6 @@ const Backtest = () => {
                         <Shuffle className="h-4 w-4" />
                         Monte Carlo
                       </TabsTrigger>
-                      <TabsTrigger value="optimizer" className="gap-2 data-[state=active]:bg-primary/20">
-                        <Sliders className="h-4 w-4" />
-                        Optimizer
-                      </TabsTrigger>
                       <TabsTrigger value="strategy" className="gap-2 data-[state=active]:bg-primary/20">
                         <Settings2 className="h-4 w-4" />
                         Strategy
@@ -325,10 +320,6 @@ const Backtest = () => {
 
                     <TabsContent value="montecarlo">
                       <MonteCarloAnalysis trades={results.trades} />
-                    </TabsContent>
-
-                    <TabsContent value="optimizer">
-                      <ParameterOptimizer dslJson={results.json_dsl} />
                     </TabsContent>
 
                     <TabsContent value="strategy">

@@ -15,20 +15,18 @@ const Optimizer = () => {
   const [strategies, setStrategies] = useState<SavedStrategy[]>([]);
   const { user } = useAuth();
 
-  useEffect(() => {
-    const loadStrategies = async () => {
-      try {
-        const data = await api.fetchStrategies();
-        setStrategies(data);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unable to load strategies";
-        toast.error(message);
-      }
-    };
+  const refreshStrategies = async () => {
+    const data = await api.fetchStrategies();
+    setStrategies(data);
+    return data;
+  };
 
-    if (user) {
-      loadStrategies();
-    }
+  useEffect(() => {
+    if (!user) return;
+    refreshStrategies().catch((error) => {
+      const message = error instanceof Error ? error.message : "Unable to load strategies";
+      toast.error(message);
+    });
   }, [user]);
 
   const handleSelectStrategy = (strategy: SavedStrategy) => {
@@ -38,8 +36,7 @@ const Optimizer = () => {
   const handleDeleteStrategy = async (id: number) => {
     try {
       await api.deleteStrategy(id);
-      const data = await api.fetchStrategies();
-      setStrategies(data);
+      const data = await refreshStrategies();
       if (selectedStrategy?.id === id) {
         setSelectedStrategy(null);
       }
@@ -48,6 +45,17 @@ const Optimizer = () => {
       const message = error instanceof Error ? error.message : "Unable to delete strategy";
       toast.error(message);
     }
+  };
+
+  const handleBestApplied = async (_result: any, strategy?: { id?: number; name: string }) => {
+    const data = await refreshStrategies();
+    if (strategy?.id) {
+      const updated = data.find((s) => s.id === strategy.id);
+      if (updated) {
+        setSelectedStrategy(updated);
+      }
+    }
+    toast.success("Best result applied");
   };
 
   return (
@@ -113,7 +121,12 @@ const Optimizer = () => {
                         Created {new Date(selectedStrategy.createdAt).toLocaleDateString()}
                       </p>
                     </div>
-                    <ParameterOptimizer dslJson={selectedStrategy.dslJson || null} />
+                    <ParameterOptimizer
+                      dslJson={selectedStrategy.dslJson || null}
+                      strategyId={selectedStrategy.id}
+                      strategyName={selectedStrategy.name}
+                      onBestApplied={handleBestApplied}
+                    />
                   </motion.div>
                 ) : (
                   <motion.div

@@ -8,6 +8,7 @@ import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import Backtest from "./pages/Backtest";
 import Optimizer from "./pages/Optimizer";
+import Genetic from "./pages/Genetic";
 import NotFound from "./pages/NotFound";
 import Strategies from "./pages/Strategies";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
@@ -46,6 +47,14 @@ const App = () => (
                 element={
                   <ProtectedRoute>
                     <Optimizer />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/dashboard/genetic"
+                element={
+                  <ProtectedRoute>
+                    <Genetic />
                   </ProtectedRoute>
                 }
               />
