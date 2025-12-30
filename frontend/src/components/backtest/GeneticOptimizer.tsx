@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Dna, Loader2, Trophy, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
   SavedStrategy,
 } from "@/lib/api";
 import { Checkbox } from "@/components/ui/checkbox";
+import React from "react";
 
 interface GeneticOptimizerProps {
   dslJson: Record<string, unknown> | null;
@@ -90,6 +91,9 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
   const [applyError, setApplyError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [strategiesCache, setStrategiesCache] = useState<SavedStrategy[]>([]);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (dslJson) {
@@ -208,6 +212,207 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
   );
 
   const estimatedRuns = useMemo(() => gaSettings.population * gaSettings.generations, [gaSettings]);
+
+  const generationsData = useMemo(() => {
+    const gens = gaSettings.generations || 1;
+    const pop = gaSettings.population || 1;
+    const runs = result?.all_backtests || [];
+    const bestPct = runs.reduce((m, r) => Math.max(m, r.results.pct_change ?? -Infinity), -Infinity);
+    const chunks: Array<
+      Array<{
+        pct: number | null;
+        idx: number;
+        gen: number;
+      }>
+    > = [];
+
+    const filled = completedRuns;
+    let consumed = 0;
+
+    for (let g = 0; g < gens; g++) {
+      const start = g * pop;
+      const slice = runs.slice(start, start + pop);
+      const genNodes: Array<{ pct: number | null; idx: number; gen: number }> = [];
+
+      slice.forEach((r, i) => {
+        genNodes.push({ pct: r.results.pct_change ?? 0, idx: i, gen: g });
+      });
+
+      // If we are still running and don't have enough runs to fill this generation, add placeholders
+      const targetCount = pop;
+      while (genNodes.length < targetCount && consumed < filled) {
+        genNodes.push({ pct: null, idx: genNodes.length, gen: g });
+        consumed += 1;
+      }
+      chunks.push(genNodes);
+    }
+
+    return { chunks, bestPct: bestPct === -Infinity ? 0 : bestPct || 0, gens, pop };
+  }, [gaSettings.generations, gaSettings.population, result, completedRuns]);
+
+
+  const generationProgress = useMemo(() => {
+    const gens = gaSettings.generations || 1;
+    const pop = gaSettings.population || 1;
+    const total = Math.max(1, gens * pop);
+    if (completedRuns >= total) {
+      return Array.from({ length: gens }).map(() => 1);
+    }
+    const currentGen = Math.min(gens - 1, Math.floor(completedRuns / Math.max(pop, 1)));
+    let genFrac = (completedRuns % Math.max(pop, 1)) / Math.max(pop, 1);
+    if (genFrac === 0 && completedRuns > 0) genFrac = 1; // keep bar full at generation boundaries
+
+    return Array.from({ length: gens }).map((_, idx) => {
+      if (idx < currentGen) return 1;
+      if (idx === currentGen) return genFrac;
+      return 0;
+    });
+  }, [gaSettings.generations, gaSettings.population, completedRuns]);
+
+  const EvolutionGraph: React.FC = () => {
+    const { chunks, bestPct, gens, pop } = generationsData;
+    if (!gens || !pop) return null;
+
+    const width = Math.max(320, 180 * gens);
+    const nodeSpacing = 60;
+    const columnWidth = gens > 1 ? width / (gens - 1) : width;
+    const svgHeight = Math.max(240, pop * nodeSpacing + 80);
+
+    const nodes: Array<{ x: number; y: number; pct: number; gen: number; key: string }> = [];
+    chunks.forEach((col, genIdx) => {
+      col.forEach((n, idx) => {
+        nodes.push({
+          x: genIdx * columnWidth,
+          y: idx * nodeSpacing + 30,
+          pct: n.pct,
+          gen: genIdx,
+          key: `${genIdx}-${idx}`,
+        });
+      });
+    });
+
+    const connectors: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+    for (let g = 0; g < gens - 1; g++) {
+      const colA = nodes.filter((n) => n.gen === g);
+      const colB = nodes.filter((n) => n.gen === g + 1);
+      colA.forEach((na, idx) => {
+        if (colB.length === 0) return;
+        const target = colB[(idx + g) % colB.length];
+        connectors.push({ x1: na.x, y1: na.y, x2: target.x, y2: target.y });
+      });
+    }
+
+    const pctToColor = (pct: number) => {
+      if (!bestPct) return "hsl(var(--muted-foreground))";
+      const norm = Math.max(0, Math.min(1, pct / bestPct));
+      const hue = 150 * norm;
+      return `hsl(${hue}, 70%, 50%)`;
+    };
+
+    const perGenStats = chunks.map((col) => {
+      const pcts = col.map((c) => c.pct).filter((p) => Number.isFinite(p));
+      const sorted = [...pcts].sort((a, b) => a - b);
+      const best = sorted.length ? sorted[sorted.length - 1] : 0;
+      const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+      return { best, median };
+    });
+
+    const handleMouseDown = (e: React.MouseEvent) => {
+      setDragging(true);
+      dragStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+    };
+
+    const handleMouseUp = () => {
+      setDragging(false);
+      dragStart.current = null;
+    };
+
+    const handleMouseMove = (e: React.MouseEvent) => {
+      if (!dragging || !dragStart.current) return;
+      setPan({ x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y });
+    };
+
+    return (
+      <div className="w-full overflow-auto border border-border rounded-xl bg-card/40 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Dna className="h-4 w-4" />
+            <span>Evolution graph</span>
+          </div>
+          <div className="text-xs text-muted-foreground font-mono">
+            {gens} generations · pop {pop}
+          </div>
+        </div>
+        <div
+          className="overflow-hidden border border-border rounded-lg bg-card/60"
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+        >
+          <svg
+            width={width + 120}
+            height={svgHeight}
+            className="block cursor-grab active:cursor-grabbing"
+            style={{ transform: `translate(${pan.x}px, ${pan.y}px)` }}
+            viewBox={`${-60} 0 ${width + 120} ${svgHeight}`}
+          >
+            {connectors.map((c, idx) => (
+              <line
+                key={idx}
+                x1={c.x1 + 16}
+                y1={c.y1 + 8}
+                x2={c.x2 - 16}
+              y2={c.y2 + 8}
+              stroke="hsl(var(--border))"
+              strokeWidth={2}
+                strokeDasharray="6 3"
+                opacity={0.6}
+              />
+            ))}
+            {nodes.map((n) => (
+              <g key={n.key} transform={`translate(${n.x}, ${n.y})`}>
+                <circle cx={0} cy={0} r={14} fill={pctToColor(n.pct)} opacity={0.9} />
+                <rect
+                  x={-32}
+                  y={18}
+                  width={64}
+                  height={18}
+                  rx={8}
+                  fill="hsl(var(--background))"
+                  stroke="hsl(var(--border))"
+                />
+                <text
+                  x={0}
+                  y={32}
+                  textAnchor="middle"
+                  fontSize="10"
+                  fill="hsl(var(--muted-foreground))"
+                  className="font-mono"
+                >
+                  {n.pct?.toFixed ? n.pct.toFixed(1) : n.pct}
+                </text>
+              </g>
+            ))}
+            {perGenStats.map((stats, idx) => (
+              <g key={`stat-${idx}`} transform={`translate(${idx * columnWidth}, ${svgHeight - 30})`}>
+                <rect x={-38} y={-18} width={76} height={30} rx={8} fill="hsl(var(--background))" stroke="hsl(var(--border))" />
+                <text x={0} y={-4} textAnchor="middle" fontSize="10" fill="hsl(var(--muted-foreground))" className="font-mono">
+                  G{idx + 1}
+                </text>
+                <text x={0} y={12} textAnchor="middle" fontSize="10" fill="hsl(var(--muted-foreground))" className="font-mono">
+                  ↑{stats.best?.toFixed ? stats.best.toFixed(1) : stats.best} | ~{stats.median?.toFixed ? stats.median.toFixed(1) : stats.median}
+                </text>
+              </g>
+            ))}
+          </svg>
+        </div>
+        <div className="mt-2 text-xs text-muted-foreground">
+          Nodes are individuals; color strength tracks relative return. Dashed links approximate lineage across generations. Per-generation chips show best and median returns.
+        </div>
+      </div>
+    );
+  };
 
   const submit = async () => {
     if (!dslJson) {
@@ -443,6 +648,27 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
           <div className="h-2 w-full rounded-full bg-secondary overflow-hidden border border-border">
             <div className="h-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
           </div>
+          <div className="pt-3 space-y-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Generation Flow</span>
+              <span className="font-mono">
+                pop {gaSettings.population} × gen {gaSettings.generations}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {generationProgress.map((g, idx) => (
+                <div key={idx} className="flex-1 flex items-center gap-1">
+                  <div className="h-2 w-full rounded-full bg-secondary overflow-hidden border border-border">
+                    <div
+                      className="h-full bg-primary transition-all duration-300"
+                      style={{ width: `${(g || 0) * 100}%` }}
+                    />
+                  </div>
+                  {idx < generationProgress.length - 1 && <div className="w-2 h-2 rounded-full bg-border" />}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
         <Button className="w-full mt-4" onClick={submit} disabled={loading || activeParams === 0}>
@@ -465,6 +691,7 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
 
       {result && (
         <div className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm space-y-6">
+          <EvolutionGraph />
           {runErrors && runErrors.length > 0 && (
             <div className="p-3 rounded-lg border border-amber-300/50 bg-amber-100/10 text-amber-600">
               <p className="text-sm font-semibold mb-1">Some runs failed</p>
