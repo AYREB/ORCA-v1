@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Helmet } from "react-helmet-async";
 import { motion } from "framer-motion";
-import { Bookmark, Pencil, Trash2, BarChart3, Eye, Loader2, Play } from "lucide-react";
+import {
+  Bookmark,
+  Pencil,
+  Trash2,
+  BarChart3,
+  Eye,
+  Loader2,
+  Play,
+  Activity,
+  Shuffle,
+} from "lucide-react";
 import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
 import { api, SavedStrategy } from "@/lib/api";
 import { toast } from "sonner";
@@ -19,6 +29,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import BacktestResults from "@/components/backtest/BacktestResults";
 import ChartView from "@/components/backtest/ChartView";
+import GarchAnalysis from "@/components/backtest/GarchAnalysis";
+import MonteCarloAnalysis from "@/components/backtest/MonteCarloAnalysis";
 import BacktestForm from "@/components/backtest/BacktestForm";
 import { api as djangoApi } from "@/lib/api";
 
@@ -167,6 +179,7 @@ const Strategies = () => {
   };
 
   const hasStrategies = useMemo(() => strategies.length > 0, [strategies]);
+  const selectedTrades = selectedStrategy?.lastResult?.trades ?? [];
 
   return (
     <>
@@ -228,7 +241,22 @@ const Strategies = () => {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.4, delay: index * 0.05 }}
                   >
-                    <Card className="border-border bg-card/60 backdrop-blur">
+                    <Card
+                      className="border-border bg-card/60 backdrop-blur cursor-pointer transition-shadow hover:shadow-lg"
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
+                        // Ignore clicks that originated from buttons inside the card
+                        if ((e.target as HTMLElement).closest("button")) return;
+                        handleOpenResults(strategy);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleOpenResults(strategy);
+                        }
+                      }}
+                    >
                       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
                         <div className="space-y-1">
                           <CardTitle className="text-lg">{strategy.name}</CardTitle>
@@ -237,14 +265,24 @@ const Strategies = () => {
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(strategy)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenEdit(strategy);
+                            }}
+                          >
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
                             className="text-destructive hover:text-destructive"
-                            onClick={() => handleDelete(strategy.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDelete(strategy.id);
+                            }}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -279,14 +317,24 @@ const Strategies = () => {
                           )}
                         </div>
                         <div className="flex gap-2">
-                          <Button className="flex-1" variant="secondary" onClick={() => handleOpenResults(strategy)}>
+                          <Button
+                            className="flex-1"
+                            variant="secondary"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenResults(strategy);
+                            }}
+                          >
                             <Eye className="h-4 w-4 mr-2" />
                             View Results
                           </Button>
                           <Button
                             className="flex-1"
                             variant="hero"
-                            onClick={() => runStrategy(strategy)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              runStrategy(strategy);
+                            }}
                             disabled={isRunningId === strategy.id}
                           >
                             {isRunningId === strategy.id ? (
@@ -330,14 +378,40 @@ const Strategies = () => {
           {selectedStrategy?.lastResult ? (
             <Tabs defaultValue="numerical" className="w-full">
               <TabsList className="mb-4 bg-card/50 border border-border">
-                <TabsTrigger value="numerical">Numerical</TabsTrigger>
-                <TabsTrigger value="chart">Chart</TabsTrigger>
+                <TabsTrigger value="numerical">
+                  <BarChart3 className="h-4 w-4 mr-2" />
+                  Numerical
+                </TabsTrigger>
+                <TabsTrigger value="chart">
+                  <Eye className="h-4 w-4 mr-2" />
+                  Chart
+                </TabsTrigger>
+                <TabsTrigger value="garch">
+                  <Activity className="h-4 w-4 mr-2" />
+                  GARCH
+                </TabsTrigger>
+                <TabsTrigger value="montecarlo">
+                  <Shuffle className="h-4 w-4 mr-2" />
+                  Monte Carlo
+                </TabsTrigger>
               </TabsList>
               <TabsContent value="numerical">
                 <BacktestResults results={selectedStrategy.lastResult} />
               </TabsContent>
               <TabsContent value="chart">
                 <ChartView results={selectedStrategy.lastResult} />
+              </TabsContent>
+              <TabsContent value="garch">
+                <GarchAnalysis />
+              </TabsContent>
+              <TabsContent value="montecarlo">
+                {selectedTrades.length >= 2 ? (
+                  <MonteCarloAnalysis trades={selectedTrades} />
+                ) : (
+                  <div className="p-6 rounded-xl border border-border bg-card/60 text-sm text-muted-foreground">
+                    Run this strategy to generate at least two completed trades before running Monte Carlo analysis.
+                  </div>
+                )}
               </TabsContent>
             </Tabs>
           ) : (

@@ -95,6 +95,20 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
 
+  const setGroupEnabled = (group: "arguments" | "conditions", enabled: boolean) => {
+    setParamChoices((prev) => {
+      const next: Record<string, ParameterChoice> = {};
+      Object.entries(prev).forEach(([key, val]) => {
+        const upper = key.toUpperCase();
+        const isArg = upper.includes("ARGUMENT");
+        const isCond = upper.includes("CONDITION");
+        const match = group === "arguments" ? isArg : isCond;
+        next[key] = match ? ({ ...val, enabled } as any) : val;
+      });
+      return next;
+    });
+  };
+
   useEffect(() => {
     if (dslJson) {
       const params = extractOptimizableParameters(dslJson);
@@ -111,7 +125,13 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
   };
 
   const handleRangeChange = (param: string, field: "start" | "end" | "steps", value: number) =>
-    setParamChoices((prev) => ({ ...prev, [param]: { ...prev[param], [field]: value, mode: prev[param].enabled ? "range" : "nochange" } as any }));
+    setParamChoices((prev) => {
+      const enabled = (prev[param] as any)?.enabled !== false;
+      return {
+        ...prev,
+        [param]: { ...prev[param], [field]: value, mode: enabled ? "range" : "nochange", enabled } as any,
+      };
+    });
 
   const ensureStrategies = async () => {
     if (strategiesCache.length > 0) return strategiesCache;
@@ -579,6 +599,20 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
           </div>
           <Button variant="outline" size="sm" onClick={setAllEnabled}>
             Enable all
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button variant="secondary" size="sm" onClick={() => setGroupEnabled("arguments", true)}>
+            Enable arguments
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setGroupEnabled("arguments", false)}>
+            Disable arguments
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => setGroupEnabled("conditions", true)}>
+            Enable conditions
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setGroupEnabled("conditions", false)}>
+            Disable conditions
           </Button>
         </div>
 

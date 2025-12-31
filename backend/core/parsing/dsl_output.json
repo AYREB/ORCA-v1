@@ -18,26 +18,26 @@
                 "left": {
                     "func": "RSI",
                     "arg": {
-                        "period": 14,
+                        "period": 19,
                         "timeframe": "4h",
                         "offset": 0
                     }
                 },
                 "operator": "<",
                 "right": {
-                    "value": 35
+                    "value": 40
                 }
             },
             "ARGUMENTS": {
-                "stopLossPercent": 102,
-                "takeProfitPercent": 102,
                 "initialOpenPositionInvestType": "percentCashBalance",
                 "initialOpenPositionInvestAmount": 0.5,
+                "maxRecurringCount": 0,
+                "stopLossPercent": 100,
+                "takeProfitPercent": 100,
                 "recurring": false,
                 "recurringPeriod": 5,
                 "recurringInvestType": "percentCashBalance",
-                "recurringInvestAmount": 0.1,
-                "maxRecurringCount": 0
+                "recurringInvestAmount": 0.1
             }
         },
         "CLOSE": {
@@ -45,7 +45,7 @@
                 "left": {
                     "func": "RSI",
                     "arg": {
-                        "period": 19,
+                        "period": 9,
                         "timeframe": "1h",
                         "offset": 5
                     }

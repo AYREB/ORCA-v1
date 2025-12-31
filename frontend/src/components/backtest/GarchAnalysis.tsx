@@ -1,8 +1,13 @@
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Activity, TrendingUp, AlertTriangle, BarChart3 } from "lucide-react";
+import { Activity, TrendingUp, AlertTriangle, BarChart3, SlidersHorizontal, Play, Loader2 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area } from "recharts";
+import { Slider } from "@/components/ui/slider";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
-const volatilityData = [
+const baseVolatilityData = [
   { date: "Jan", actual: 0.018, predicted: 0.017, conditional: 0.016 },
   { date: "Feb", actual: 0.024, predicted: 0.022, conditional: 0.021 },
   { date: "Mar", actual: 0.032, predicted: 0.028, conditional: 0.027 },
@@ -17,14 +22,44 @@ const volatilityData = [
   { date: "Dec", actual: 0.012, predicted: 0.013, conditional: 0.012 },
 ];
 
-const garchMetrics = [
-  { icon: Activity, label: "Omega (ω)", value: "0.000021", description: "Long-run variance" },
-  { icon: TrendingUp, label: "Alpha (α)", value: "0.0842", description: "ARCH coefficient" },
-  { icon: BarChart3, label: "Beta (β)", value: "0.9012", description: "GARCH coefficient" },
-  { icon: AlertTriangle, label: "Persistence", value: "0.9854", description: "α + β" },
-];
-
 const GarchAnalysis = () => {
+  const [omega, setOmega] = useState(0.000021);
+  const [alpha, setAlpha] = useState(0.0842);
+  const [beta, setBeta] = useState(0.9012);
+  const [isRunning, setIsRunning] = useState(false);
+
+  const computeVolatilityData = (om: number, al: number, be: number) => {
+    return baseVolatilityData.map((point, idx) => {
+      const shockFactor = 0.8 + (idx % 4) * 0.05;
+      const predicted = Math.max(0.005, point.actual * (1 + (al - 0.08) * 2 + (be - 0.9) * 1.5) * shockFactor);
+      const conditional = Math.max(0.005, om * 1500 + predicted * (al + be));
+      return { ...point, predicted, conditional };
+    });
+  };
+
+  const [volatilityData, setVolatilityData] = useState(() =>
+    computeVolatilityData(omega, alpha, beta)
+  );
+
+  const handleRun = () => {
+    setIsRunning(true);
+    setTimeout(() => {
+      setVolatilityData(computeVolatilityData(omega, alpha, beta));
+      setIsRunning(false);
+      toast.success("GARCH simulation updated");
+    }, 80);
+  };
+
+  const garchMetrics = useMemo(
+    () => [
+      { icon: Activity, label: "Omega (ω)", value: omega, description: "Long-run variance" },
+      { icon: TrendingUp, label: "Alpha (α)", value: alpha, description: "ARCH coefficient" },
+      { icon: BarChart3, label: "Beta (β)", value: beta, description: "GARCH coefficient" },
+      { icon: AlertTriangle, label: "Persistence", value: alpha + beta, description: "α + β" },
+    ],
+    [omega, alpha, beta]
+  );
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -43,6 +78,75 @@ const GarchAnalysis = () => {
         </div>
       </div>
 
+      {/* Parameter Controls */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.05 }}
+        className="p-4 rounded-xl border border-border bg-card/50 backdrop-blur-sm space-y-4"
+      >
+        <div className="flex items-center gap-2">
+          <SlidersHorizontal className="h-4 w-4 text-primary" />
+          <h4 className="text-md font-semibold">Model Parameters</h4>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <Label className="text-sm text-foreground">Omega (ω)</Label>
+              <span className="font-mono text-foreground">{omega.toFixed(6)}</span>
+            </div>
+            <Slider
+              min={0}
+              max={0.0001}
+              step={0.000001}
+              value={[omega]}
+              onValueChange={([v]) => setOmega(Number(v))}
+            />
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <Label className="text-sm text-foreground">Alpha (α)</Label>
+              <span className="font-mono text-foreground">{alpha.toFixed(4)}</span>
+            </div>
+            <Slider
+              min={0}
+              max={0.3}
+              step={0.0001}
+              value={[alpha]}
+              onValueChange={([v]) => setAlpha(Number(v))}
+            />
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <Label className="text-sm text-foreground">Beta (β)</Label>
+              <span className="font-mono text-foreground">{beta.toFixed(4)}</span>
+            </div>
+            <Slider
+              min={0}
+              max={1}
+              step={0.0001}
+              value={[beta]}
+              onValueChange={([v]) => setBeta(Number(v))}
+            />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <Button variant="hero" className="min-w-[160px]" onClick={handleRun} disabled={isRunning}>
+            {isRunning ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Running...
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4 mr-2" />
+                Run Simulation
+              </>
+            )}
+          </Button>
+        </div>
+      </motion.div>
+
       {/* GARCH Parameters */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {garchMetrics.map((metric, index) => (
@@ -57,7 +161,9 @@ const GarchAnalysis = () => {
               <metric.icon className="h-4 w-4 text-primary" />
               <span className="text-xs text-muted-foreground">{metric.label}</span>
             </div>
-            <p className="text-xl font-bold font-mono text-foreground">{metric.value}</p>
+            <p className="text-xl font-bold font-mono text-foreground">
+              {metric.label === "Omega (ω)" ? metric.value.toExponential(6) : metric.value.toFixed(4)}
+            </p>
             <p className="text-xs text-muted-foreground mt-1">{metric.description}</p>
           </motion.div>
         ))}
