@@ -23,9 +23,9 @@
                         "offset": 0
                     }
                 },
-                "operator": ">",
+                "operator": "<",
                 "right": {
-                    "value": 35
+                    "value": 30
                 }
             },
             "ARGUMENTS": {
@@ -33,7 +33,7 @@
                 "takeProfitPercent": 100,
                 "initialOpenPositionInvestType": "percentCashBalance",
                 "initialOpenPositionInvestAmount": 0.2,
-                "recurring": false,
+                "recurring": true,
                 "recurringPeriod": 5,
                 "recurringInvestType": "percentCashBalance",
                 "recurringInvestAmount": 0.1,
@@ -43,14 +43,14 @@
         "CLOSE": {
             "CONDITIONS": {
                 "left": {
-                    "func": "SMA",
+                    "func": "RSI",
                     "arg": {
                         "period": 14,
                         "timeframe": "1h",
                         "offset": 0
                     }
                 },
-                "operator": "<",
+                "operator": ">",
                 "right": {
                     "value": 75
                 }
