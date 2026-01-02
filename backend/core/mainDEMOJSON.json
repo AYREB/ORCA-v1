@@ -9,8 +9,8 @@
                 "1h"
             ],
             "dateframe": {
-                "start": "2024-01-01",
-                "end": "2025-01-01"
+                "start": "2024-02-02",
+                "end": "2024-12-28"
             }
         },
         "OPEN": {
@@ -18,41 +18,41 @@
                 "left": {
                     "func": "RSI",
                     "arg": {
-                        "period": 19,
-                        "timeframe": "4h",
+                        "period": 14,
+                        "timeframe": "1h",
                         "offset": 0
                     }
                 },
-                "operator": "<",
+                "operator": ">",
                 "right": {
-                    "value": 40
+                    "value": 35
                 }
             },
             "ARGUMENTS": {
-                "initialOpenPositionInvestType": "percentCashBalance",
-                "initialOpenPositionInvestAmount": 0.5,
-                "maxRecurringCount": 0,
                 "stopLossPercent": 100,
                 "takeProfitPercent": 100,
+                "initialOpenPositionInvestType": "percentCashBalance",
+                "initialOpenPositionInvestAmount": 0.2,
                 "recurring": false,
                 "recurringPeriod": 5,
                 "recurringInvestType": "percentCashBalance",
-                "recurringInvestAmount": 0.1
+                "recurringInvestAmount": 0.1,
+                "maxRecurringCount": 0
             }
         },
         "CLOSE": {
             "CONDITIONS": {
                 "left": {
-                    "func": "RSI",
+                    "func": "SMA",
                     "arg": {
-                        "period": 9,
+                        "period": 14,
                         "timeframe": "1h",
-                        "offset": 5
+                        "offset": 0
                     }
                 },
-                "operator": ">",
+                "operator": "<",
                 "right": {
-                    "value": 80
+                    "value": 75
                 }
             },
             "ARGUMENTS": {

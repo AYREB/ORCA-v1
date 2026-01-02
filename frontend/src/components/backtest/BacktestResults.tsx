@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
 import { 
   TrendingUp, 
@@ -35,6 +35,11 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
   const availableTickers = useMemo(() => {
     return [...new Set(results.trades.map(t => t.ticker))];
   }, [results.trades]);
+
+  // Reset ticker filter when results change
+  useEffect(() => {
+    setSelectedTicker("all");
+  }, [results]);
 
   // Filter trades by selected ticker
   const filteredTrades = useMemo(() => {

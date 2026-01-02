@@ -68,19 +68,28 @@ const Strategies = () => {
       let dslJson: Record<string, any> | null = strategy.dslJson || null;
 
       if (dslJson && Object.keys(dslJson).length > 0) {
-        result = await djangoApi.backtestDSLJSON(dslJson);
+        result = await djangoApi.backtestDSLJSON(dslJson, { strategyId: strategy.id, strategyName: strategy.name });
       } else {
         // Try to parse raw DSL as JSON first, otherwise treat as text
         try {
           const parsed = JSON.parse(strategy.dsl || "{}");
           if (parsed && typeof parsed === "object") {
             dslJson = parsed as Record<string, any>;
-            result = await djangoApi.backtestDSLJSON(dslJson);
+            result = await djangoApi.backtestDSLJSON(dslJson, {
+              strategyId: strategy.id,
+              strategyName: strategy.name,
+            });
           } else {
-            result = await djangoApi.backtestDSLText(strategy.dsl || "");
+            result = await djangoApi.backtestDSLText(strategy.dsl || "", {
+              strategyId: strategy.id,
+              strategyName: strategy.name,
+            });
           }
         } catch {
-          result = await djangoApi.backtestDSLText(strategy.dsl || "");
+          result = await djangoApi.backtestDSLText(strategy.dsl || "", {
+            strategyId: strategy.id,
+            strategyName: strategy.name,
+          });
         }
       }
 

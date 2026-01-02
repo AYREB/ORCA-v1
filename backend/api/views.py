@@ -1,10 +1,12 @@
 # backend/api/views.py
 import json
 from pathlib import Path
+from typing import Any, Dict, List
 
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.db.models import Avg, Sum
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -15,7 +17,7 @@ import uuid
 
 from core.analysis.parameter_optimiser import optimizer, build_param_grid, genetic_optimizer, build_param_values
 from core.main import dslJSONBacktest, dslTextToJsonBacktest
-from .models import Strategy
+from .models import BacktestRun, Strategy
 
 User = get_user_model()
 optimizer_jobs = {}
@@ -59,6 +61,104 @@ def get_user_from_request(request):
         return token.user
     except Token.DoesNotExist:
         return None
+
+
+def calculate_backtest_metrics(result: Dict[str, Any]):
+    trades = result.get("trades") if isinstance(result, dict) else []
+    if not isinstance(trades, list):
+        trades = []
+
+    open_positions: Dict[str, Dict[str, float]] = {}
+    equity_curve: List[Dict[str, Any]] = []
+    winning_trades = 0
+    losing_trades = 0
+
+    for trade in trades:
+        try:
+            equity = float(trade.get("balance", 0) or 0) + float(trade.get("open_positions_value", 0) or 0)
+            ts = trade.get("timestamp")
+            if ts:
+                equity_curve.append({"timestamp": ts, "equity": equity})
+        except (TypeError, ValueError):
+            pass
+
+        ttype = trade.get("type")
+        ticker = trade.get("ticker")
+        if ttype in ("BUY", "RECURRING_BUY") and ticker:
+            try:
+                price = float(trade.get("price") or 0)
+                shares = float(trade.get("shares") or 0)
+            except (TypeError, ValueError):
+                continue
+            pos = open_positions.get(ticker, {"shares": 0.0, "cost": 0.0})
+            pos["shares"] += shares
+            pos["cost"] += shares * price
+            open_positions[ticker] = pos
+        elif ttype == "SELL" and ticker:
+            try:
+                price = float(trade.get("price") or 0)
+                shares = float(trade.get("shares") or 0)
+            except (TypeError, ValueError):
+                continue
+            pos = open_positions.get(ticker, {"shares": 0.0, "cost": 0.0})
+            avg_cost = (pos["cost"] / pos["shares"]) if pos["shares"] else price
+            profit = (price - avg_cost) * shares
+            if profit >= 0:
+                winning_trades += 1
+            else:
+                losing_trades += 1
+            open_positions[ticker] = {"shares": 0.0, "cost": 0.0}
+
+    closed_trades = winning_trades + losing_trades
+    win_rate = (winning_trades / closed_trades * 100) if closed_trades else 0.0
+
+    if not equity_curve:
+        final_value = result.get("total_portfolio") or result.get("cash") or 0
+        equity_curve = [{"timestamp": timezone.now().isoformat(), "equity": final_value}]
+
+    return {
+        "equity_curve": equity_curve,
+        "winning_trades": winning_trades,
+        "losing_trades": losing_trades,
+        "trades_count": len(trades),
+        "win_rate": win_rate,
+    }
+
+
+def record_backtest_run(user, result: Dict[str, Any], strategy: Strategy | None = None, strategy_name: str = ""):
+    if not user:
+        return None
+
+    metrics = calculate_backtest_metrics(result or {})
+    name = strategy_name or (strategy.name if strategy else "")
+
+    return BacktestRun.objects.create(
+        user=user,
+        strategy=strategy,
+        strategy_name=name,
+        pct_change=float(result.get("pct_change") or 0),
+        final_balance=float(result.get("total_portfolio") or 0),
+        cash=float(result.get("cash") or 0),
+        invested=float(result.get("invested") or 0),
+        trades_count=metrics["trades_count"],
+        winning_trades=metrics["winning_trades"],
+        losing_trades=metrics["losing_trades"],
+        win_rate=metrics["win_rate"],
+        equity_curve=metrics["equity_curve"],
+    )
+
+
+def serialize_backtest_run(run: BacktestRun):
+    return {
+        "id": run.id,
+        "strategy_id": run.strategy_id,
+        "strategy_name": run.strategy_name or (run.strategy.name if run.strategy else "Ad-hoc Backtest"),
+        "pct_change": run.pct_change,
+        "win_rate": run.win_rate,
+        "trades": run.trades_count,
+        "final_balance": run.final_balance,
+        "created_at": run.created_at.isoformat(),
+    }
 
 
 @csrf_exempt
@@ -217,10 +317,22 @@ def strategy_detail(request, strategy_id: int):
 def backtestDSLText(request):
     if request.method == "POST":
         try:
-            body = json.loads(request.body)
+            user = get_user_from_request(request)
+            body = parse_body(request)
             dsl = body.get("dsl_text", "")
+            strategy = None
+            strategy_label = body.get("strategy_name") or body.get("label")
+            strategy_id = body.get("strategy_id")
+            if strategy_id and user:
+                strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
             result = dslTextToJsonBacktest(dsl)
+            record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label or "")
+            if strategy:
+                strategy.last_result = result
+                strategy.dsl_text = dsl or strategy.dsl_text
+                strategy.last_run_at = timezone.now()
+                strategy.save(update_fields=["last_result", "dsl_text", "last_run_at", "updated_at"])
             return JsonResponse(result, safe=False)
 
         except Exception as e:
@@ -236,10 +348,22 @@ def backtestDSLText(request):
 def backtestDSLJSON(request):
     if request.method == "POST":
         try:
-            body = json.loads(request.body)
+            user = get_user_from_request(request)
+            body = parse_body(request)
             dsl = body.get("dsl_json", "")
+            strategy = None
+            strategy_label = body.get("strategy_name") or body.get("label")
+            strategy_id = body.get("strategy_id")
+            if strategy_id and user:
+                strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
             result = dslJSONBacktest(dsl)
+            record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label or "")
+            if strategy:
+                strategy.last_result = result
+                strategy.dsl_json = dsl or strategy.dsl_json
+                strategy.last_run_at = timezone.now()
+                strategy.save(update_fields=["last_result", "dsl_json", "last_run_at", "updated_at"])
             return JsonResponse(result, safe=False)
 
         except Exception as e:
@@ -449,3 +573,33 @@ def registry(request):
             "arguments": arguments,
         }
     )
+
+
+@csrf_exempt
+def dashboard_summary(request):
+    user = get_user_from_request(request)
+    if not user:
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+
+    strategies_qs = Strategy.objects.filter(user=user)
+    backtests_qs = BacktestRun.objects.filter(user=user).order_by("-created_at")
+
+    aggregates = backtests_qs.aggregate(
+        avg_return=Avg("pct_change"),
+        total_wins=Sum("winning_trades"),
+        total_losses=Sum("losing_trades"),
+    )
+    total_wins = aggregates.get("total_wins") or 0
+    total_losses = aggregates.get("total_losses") or 0
+    closed_trades = total_wins + total_losses
+
+    response = {
+        "strategy_count": strategies_qs.count(),
+        "backtest_run_count": backtests_qs.count(),
+        "total_return_pct": aggregates.get("avg_return") or 0,
+        "win_rate": (total_wins / closed_trades * 100) if closed_trades else 0,
+        "equity_curve": backtests_qs.first().equity_curve if backtests_qs.exists() else [],
+        "recent_backtests": [serialize_backtest_run(run) for run in backtests_qs[:5]],
+    }
+
+    return JsonResponse(response)

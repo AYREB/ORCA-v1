@@ -72,6 +72,13 @@ const ChartView = ({ results }: ChartViewProps) => {
     }
   }, [availableTimeframes, selectedTimeframe]);
 
+  // Reset ticker when results change
+  useEffect(() => {
+    if (!selectedTicker || !tickers.includes(selectedTicker)) {
+      setSelectedTicker(tickers[0] || "");
+    }
+  }, [tickers, selectedTicker]);
+
   const selectedData = useMemo(() => {
     if (!selectedTicker || !results.data[selectedTicker]) return [];
     const tf = selectedTimeframe || availableTimeframes[0];

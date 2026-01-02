@@ -40,6 +40,26 @@ export interface BacktestResult {
   };
 }
 
+export interface DashboardBacktest {
+  id: number;
+  strategy_id?: number | null;
+  strategy_name: string;
+  pct_change: number;
+  win_rate: number;
+  trades: number;
+  final_balance: number;
+  created_at: string;
+}
+
+export interface DashboardSummary {
+  strategyCount: number;
+  backtestRunCount: number;
+  totalReturnPct: number;
+  winRate: number;
+  equityCurve: Array<{ timestamp: string; equity: number }>;
+  recentBacktests: DashboardBacktest[];
+}
+
 export interface ParameterChoice {
   mode: 'nochange' | 'auto' | 'manual' | 'range';
   indicator?: string;
@@ -222,18 +242,32 @@ class DjangoAPI {
   }
 
   // Backtest with DSL text (raw DSL string)
-  async backtestDSLText(dslText: string): Promise<BacktestResult> {
+  async backtestDSLText(
+    dslText: string,
+    options?: { strategyId?: number; strategyName?: string }
+  ): Promise<BacktestResult> {
     return this.request<BacktestResult>('/backtestDSLText/', {
       method: 'POST',
-      body: JSON.stringify({ dsl_text: dslText }),
+      body: JSON.stringify({
+        dsl_text: dslText,
+        strategy_id: options?.strategyId,
+        strategy_name: options?.strategyName,
+      }),
     });
   }
 
   // Backtest with DSL JSON (parsed DSL object)
-  async backtestDSLJSON(dslJson: Record<string, unknown>): Promise<BacktestResult> {
+  async backtestDSLJSON(
+    dslJson: Record<string, unknown>,
+    options?: { strategyId?: number; strategyName?: string }
+  ): Promise<BacktestResult> {
     return this.request<BacktestResult>('/backtestDSLJSON/', {
       method: 'POST',
-      body: JSON.stringify({ dsl_json: dslJson }),
+      body: JSON.stringify({
+        dsl_json: dslJson,
+        strategy_id: options?.strategyId,
+        strategy_name: options?.strategyName,
+      }),
     });
   }
 
@@ -373,6 +407,27 @@ class DjangoAPI {
   async getStrategy(id: number): Promise<SavedStrategy> {
     const data = await this.request<{ strategy: any }>(`/strategies/${id}/`);
     return this.normalizeStrategy(data.strategy);
+  }
+
+  async getDashboardSummary(): Promise<DashboardSummary> {
+    const data = await this.request<any>('/dashboard/summary/');
+    return {
+      strategyCount: data.strategy_count ?? 0,
+      backtestRunCount: data.backtest_run_count ?? 0,
+      totalReturnPct: data.total_return_pct ?? 0,
+      winRate: data.win_rate ?? 0,
+      equityCurve: data.equity_curve ?? [],
+      recentBacktests: (data.recent_backtests ?? []).map((run: any) => ({
+        id: run.id,
+        strategy_id: run.strategy_id ?? null,
+        strategy_name: run.strategy_name ?? "Backtest",
+        pct_change: run.pct_change ?? 0,
+        win_rate: run.win_rate ?? 0,
+        trades: run.trades ?? 0,
+        final_balance: run.final_balance ?? 0,
+        created_at: run.created_at,
+      })),
+    };
   }
 
   // Store last backtest result for parameter optimizer

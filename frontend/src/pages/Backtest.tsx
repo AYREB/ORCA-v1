@@ -25,6 +25,7 @@ const Backtest = () => {
   const [dslText, setDslText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<BacktestResult | null>(null);
+  const [resultsKey, setResultsKey] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("editor");
   const [entryMode, setEntryMode] = useState<EntryMode>("form");
   const [strategyName, setStrategyName] = useState("");
@@ -32,6 +33,7 @@ const Backtest = () => {
   const [savedStrategyId, setSavedStrategyId] = useState<number | null>(null);
   const [prefillDslJson, setPrefillDslJson] = useState<Record<string, any> | null>(null);
   const [editedDslJson, setEditedDslJson] = useState<Record<string, any> | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
   const { user } = useAuth();
 
   // Load last backtest on mount
@@ -53,6 +55,7 @@ const Backtest = () => {
     try {
       const result = await api.backtestDSLText(dslText);
       setResults(result);
+      setResultsKey((k) => k + 1);
       api.setLastBacktestResult(result);
       setViewMode("results");
       setStrategyEditorText(dslText);
@@ -68,6 +71,7 @@ const Backtest = () => {
   // Handler for Easy Mode - receives results directly from BacktestForm
   const handleEasyModeResults = (result: BacktestResult) => {
     setResults(result);
+    setResultsKey((k) => k + 1);
     api.setLastBacktestResult(result);
     setViewMode("results");
     setPrefillDslJson(result.json_dsl as Record<string, any>);
@@ -127,24 +131,50 @@ const Backtest = () => {
       toast.error("Please enter a strategy name");
       return;
     }
+    setIsUpdating(true);
+    const dslTextPayload = (strategyEditorText || dslText).trim();
     const currentDslJson = (editedDslJson || prefillDslJson || results.json_dsl) as Record<string, any> | null;
-    const dslPayload =
-      (strategyEditorText || dslText).trim() ||
-      (currentDslJson ? JSON.stringify(currentDslJson, null, 2) : "");
+    const dslPayload = dslTextPayload || (currentDslJson ? JSON.stringify(currentDslJson, null, 2) : "");
+
     try {
+      // Re-run backtest to refresh results + charts
+      let refreshedResult: BacktestResult;
+      if (currentDslJson && Object.keys(currentDslJson).length > 0) {
+        refreshedResult = await api.backtestDSLJSON(currentDslJson, {
+          strategyId: savedStrategyId,
+          strategyName: strategyName.trim(),
+        });
+      } else if (dslPayload) {
+        refreshedResult = await api.backtestDSLText(dslPayload, {
+          strategyId: savedStrategyId,
+          strategyName: strategyName.trim(),
+        });
+      } else {
+        throw new Error("No strategy DSL to run. Please enter DSL or use the builder.");
+      }
+
+      setResults(refreshedResult);
+      setResultsKey((k) => k + 1);
+      api.setLastBacktestResult(refreshedResult);
+      const refreshedDslJson = (refreshedResult.json_dsl || currentDslJson) as Record<string, any> | null;
+      setPrefillDslJson(refreshedDslJson);
+      setEditedDslJson(refreshedDslJson);
+
       const updated = await api.updateStrategy(savedStrategyId, {
         name: strategyName.trim(),
         dsl: dslPayload,
-        dslJson: currentDslJson || undefined,
-        lastResult: results,
+        dslJson: refreshedDslJson || undefined,
+        lastResult: refreshedResult,
       });
       setStrategyEditorText(updated.dsl);
       setStrategyName(updated.name);
+      setViewMode("results");
       toast.success("Strategy updated");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to update strategy";
       toast.error(message);
     }
+    setIsUpdating(false);
   };
 
   const handleEditInBuilder = () => {
@@ -282,7 +312,7 @@ const Backtest = () => {
                   exit={{ opacity: 0, x: 20 }}
                   transition={{ duration: 0.3 }}
                 >
-                  <Tabs defaultValue="numerical" className="w-full">
+                  <Tabs defaultValue="numerical" className="w-full" key={resultsKey}>
                     <TabsList className="mb-6 bg-card/50 border border-border p-1">
                       <TabsTrigger value="numerical" className="gap-2 data-[state=active]:bg-primary/20">
                         <BarChart3 className="h-4 w-4" />
@@ -344,7 +374,16 @@ const Backtest = () => {
                               disabled={!savedStrategyId}
                               onClick={handleUpdateStrategy}
                             >
-                              {savedStrategyId ? "Update Strategy" : "Update (save first)"}
+                              {isUpdating ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  Updating...
+                                </>
+                              ) : savedStrategyId ? (
+                                "Update & Rerun"
+                              ) : (
+                                "Update (save first)"
+                              )}
                             </Button>
                           </div>
                         </div>
