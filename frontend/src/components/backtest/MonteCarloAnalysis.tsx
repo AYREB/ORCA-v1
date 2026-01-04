@@ -221,14 +221,19 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
   const [numSimulations, setNumSimulations] = useState(10000);
   const [numTradesForward, setNumTradesForward] = useState(100);
   const [cooldownBuffer, setCooldownBuffer] = useState(3);
+  const [excludedReturns, setExcludedReturns] = useState<Set<number>>(new Set());
+
 
   // Results state
   const [results, setResults] = useState<SimulationResults | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   // Extract returns from trades
-  const returns = useMemo(() => extractReturns(trades), [trades]);
-
+  const returns = useMemo(() => extractReturns(trades), [trades]);const filteredReturns = useMemo(
+    () => returns.filter((_, i) => !excludedReturns.has(i)),
+    [returns, excludedReturns]
+  );
+  
   // Calculate input trade stats
   const tradeStats = useMemo(() => {
     const wins = returns.filter(r => r > 0);
@@ -244,7 +249,7 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
 
   // Run simulation
   const runSimulation = useCallback(() => {
-    if (returns.length < 2) {
+    if (filteredReturns.length < 2) {
       toast.error("Need at least 2 completed trades to run simulation");
       return;
     }
@@ -255,11 +260,11 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
     setTimeout(() => {
       try {
         const result = runMonteCarloSimulation(
-          returns,
+          filteredReturns,
           numSimulations,
           numTradesForward,
           cooldownBuffer
-        );
+        );        
         setResults(result);
         toast.success("Monte Carlo simulation complete");
       } catch (err) {
@@ -426,6 +431,44 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
               <span className="text-muted-foreground">Avg Loss:</span>
               <span className="ml-2 font-mono text-destructive">{tradeStats.avgLoss.toFixed(2)}%</span>
             </div>
+          </div>
+          <div className="p-4 rounded-xl border border-border bg-card/50">
+            <h4 className="text-sm font-semibold mb-3">
+              Trade Returns (click to exclude)
+            </h4>
+
+            <div className="max-h-[200px] overflow-y-auto space-y-1 text-sm font-mono">
+              {returns.map((r, i) => {
+                const excluded = excludedReturns.has(i);
+
+                return (
+                  <div
+                    key={i}
+                    onClick={() => {
+                      setExcludedReturns(prev => {
+                        const next = new Set(prev);
+                        excluded ? next.delete(i) : next.add(i);
+                        return next;
+                      });
+                    }}
+                    className={`flex justify-between px-2 py-1 rounded cursor-pointer
+                      ${excluded
+                        ? "opacity-40 line-through bg-muted"
+                        : r >= 0
+                          ? "text-success hover:bg-success/10"
+                          : "text-destructive hover:bg-destructive/10"
+                      }`}
+                  >
+                    <span>Trade #{i + 1}</span>
+                    <span>{r >= 0 ? "+" : ""}{r.toFixed(2)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <p className="mt-2 text-xs text-muted-foreground">
+              Excluded: {excludedReturns.size} / {returns.length}
+            </p>
           </div>
 
           <Button

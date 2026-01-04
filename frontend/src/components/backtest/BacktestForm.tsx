@@ -204,26 +204,51 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
             ARGUMENTS: {
               LONG: {
                 OPEN: {
-                  initialOpenPositionInvestType: { default: "percentCashBalance", options: ["percentCashBalance", "fixedAmount"] },
-                  initialOpenPositionInvestAmount: { default: 0.1 },
-                  recurring: { default: false },
-                  stopLossPercent: { default: 6 },
-                  takeProfitPercent: { default: 10 },
-                  recurringPeriod: { default: 5 },
-                  recurringInvestType: { default: "percentCashBalance", options: ["percentCashBalance", "fixedAmount"] },
-                  recurringInvestAmount: { default: 0.1 },
-                  maxRecurringCount: { default: 0 },
+                  label: "Open Position",
+                  fields: {
+                    initialOpenPositionInvestType: {},
+                    initialOpenPositionInvestAmount: {},
+                    recurring: {},
+                    recurringPeriod: {},
+                    recurringInvestType: {},
+                    recurringInvestAmount: {},
+                    maxRecurringCount: {}
+                  }
                 },
-                CLOSE: {},
+  
+                EXECUTION: {
+                  label: "Execution & Risk",
+                  fields: {
+                    stopLossPercent: {},
+                    takeProfitPercent: {},
+                    spread: {}
+                  }
+                },
+  
+                CLOSE: {}
               },
-              SHORT: { OPEN: {}, CLOSE: {} },
-            },
-          },
+  
+              SHORT: {
+                OPEN: {},
+                EXECUTION: {
+                  label: "Execution & Risk",
+                  fields: {
+                    stopLossPercent: {},
+                    takeProfitPercent: {},
+                    spread: {}
+                  }
+                },
+                CLOSE: {}
+              }
+            }
+          }
         });
       }
     };
+  
     fetchRegistry();
   }, []);
+  
 
   const addTicker = () => setTickers([...tickers, ""]);
   const removeTicker = (index: number) => setTickers(tickers.filter((_, i) => i !== index));
@@ -568,7 +593,7 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
             </div>
           </div>
         </div>
-
+                
         {/* Strategy Blocks */}
         <div className="space-y-4">
           <div className="flex items-center justify-between">
