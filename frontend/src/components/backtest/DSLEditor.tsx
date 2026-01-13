@@ -31,42 +31,97 @@ interface DSLEditorProps {
 const DSL_EXAMPLES = [
   {
     name: "RSI Mean Reversion",
-    dsl: `STRATEGY rsi_mean_reversion
-  
-ENTRY:
-  RSI(14) < 30
-  AND CLOSE > SMA(200)
-  
-EXIT:
-  RSI(14) > 70
-  OR STOPLOSS(-2%)
-  OR TAKEPROFIT(4%)`,
-  },
-  {
-    name: "MACD Crossover",
-    dsl: `STRATEGY macd_crossover
+    dsl: `:TICKER(AAPL,TSLA,MSFT)
 
-ENTRY:
-  MACD(12, 26, 9).signal_cross_up
-  AND ADX(14) > 25
-
-EXIT:
-  MACD(12, 26, 9).signal_cross_down
-  OR STOPLOSS(-1.5%)`,
-  },
-  {
-    name: "Bollinger Breakout",
-    dsl: `STRATEGY bollinger_breakout
-
-ENTRY:
-  CLOSE > BB(20, 2).upper
-  AND VOLUME > SMA(VOLUME, 20) * 1.5
-
-EXIT:
-  CLOSE < BB(20, 2).middle
-  OR STOPLOSS(-2%)`,
-  },
-];
+    :EXECUTION_TIMEFRAME(1h,4h)
+    
+    :DATA_TIMEFRAMES(1h)
+    
+    :DATEFRAME(2024-01-01, 2025-11-01)
+    
+    :LONG(
+       OPEN{
+           CONDITIONS{
+               RSI() < 30 AND SMA() < 20 AND PRICE() > 30
+           }
+           |ARGUMENTS{
+               initialOpenPositionInvestType = percentCashBalance
+               |initialOpenPositionInvestAmount = 0.1
+               |recurring=true
+               |stopLossPercent =6
+               |takeProfitPercent = 10
+           }
+       }
+       |CLOSE{
+            CONDITIONS{
+                RSI(offset=1) > 75
+            }
+       }
+    )`,
+      },
+      {
+        name: "SMA Crossover",
+        dsl: `:TICKER(AAPL,TSLA)
+    
+    :EXECUTION_TIMEFRAME(1h)
+    
+    :DATA_TIMEFRAMES(1h)
+    
+    :DATEFRAME(2024-01-01, 2025-01-01)
+    
+    :LONG(
+        OPEN{
+            CONDITIONS{
+                SMA(20) > SMA(50)
+            }
+            |ARGUMENTS{
+                initialOpenPositionInvestType = percentCashBalance
+                |initialOpenPositionInvestAmount = 0.1
+                |recurring = false
+                |stopLossPercent = 2
+                |takeProfitPercent = 5
+                |spread = 0.001
+            }
+        }
+        |CLOSE{
+            CONDITIONS{
+                SMA(20) < SMA(50)
+            }
+        }
+    )`,
+      },
+      {
+        name: "Price Below SMA",
+        dsl: `:TICKER(AAPL,MSFT)
+    
+    :EXECUTION_TIMEFRAME(4h)
+    
+    :DATA_TIMEFRAMES(1h,4h)
+    
+    :DATEFRAME(2024-01-01, 2025-01-01)
+    
+    :LONG(
+        OPEN{
+            CONDITIONS{
+                PRICE(close) < SMA(14) * 1.05
+            }
+            |ARGUMENTS{
+                initialOpenPositionInvestType = percentCashBalance
+                |initialOpenPositionInvestAmount = 0.2
+                |recurring = false
+                |stopLossPercent = 5
+                |takeProfitPercent = 10
+                |spread = 0.001
+            }
+        }
+        |CLOSE{
+            CONDITIONS{
+                PRICE(close) > SMA(14)
+            }
+        }
+    )`,
+      },
+    ];
 
 const DSLEditor = ({ value, onChange, onRun, onSave }: DSLEditorProps) => {
   const [strategyName, setStrategyName] = useState("");
@@ -155,15 +210,33 @@ const DSLEditor = ({ value, onChange, onRun, onSave }: DSLEditorProps) => {
         <Textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={`STRATEGY my_strategy
+          placeholder={`:TICKER(AAPL,TSLA,MSFT)
 
-ENTRY:
-  RSI(14) < 30
-  AND CLOSE > SMA(200)
-
-EXIT:
-  RSI(14) > 70
-  OR STOPLOSS(-2%)`}
+    :EXECUTION_TIMEFRAME(1h,4h)
+    
+    :DATA_TIMEFRAMES(1h)
+    
+    :DATEFRAME(2024-01-01, 2025-11-01)
+    
+    :LONG(
+       OPEN{
+           CONDITIONS{
+               RSI() < 30 AND SMA() < 20 AND PRICE() > 30
+           }
+           |ARGUMENTS{
+               initialOpenPositionInvestType = percentCashBalance
+               |initialOpenPositionInvestAmount = 0.1
+               |recurring=true
+               |stopLossPercent =6
+               |takeProfitPercent = 10
+           }
+       }
+       |CLOSE{
+            CONDITIONS{
+                RSI(offset=1) > 75
+            }
+       }
+    )`}
           className="min-h-[250px] font-mono text-sm bg-secondary/50 border-border resize-none"
         />
         <div className="absolute top-2 right-2 flex gap-1">

@@ -211,6 +211,11 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
               EMA: { args: ["period", "timeframe", "offset"], defaults: { period: 14, timeframe: "1h", offset: 0 } },
               RSI: { args: ["period", "timeframe", "offset"], defaults: { period: 14, timeframe: "1h", offset: 0 } },
               MACD: { args: ["fast", "slow", "signal", "timeframe", "offset"], defaults: { fast: 12, slow: 26, signal: 9, timeframe: "1h", offset: 0 } },
+              BBANDS: { args: ["period", "stddev", "timeframe", "offset"], defaults: { period: 20, stddev: 2, timeframe: "1h", offset: 0 } },
+              ATR: { args: ["period", "timeframe", "offset"], defaults: { period: 14, timeframe: "1h", offset: 0 } },
+              STOCH: { args: ["k_period", "d_period", "timeframe", "offset"], defaults: { k_period: 14, d_period: 3, timeframe: "1h", offset: 0 } },
+              CCI: { args: ["period", "timeframe", "offset"], defaults: { period: 20, timeframe: "1h", offset: 0 } },
+              OBV: { args: ["timeframe", "offset"], defaults: { timeframe: "1h", offset: 0 } },
             },
           },
           arguments: {
