@@ -9,10 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -24,11 +26,17 @@ interface BacktestFormProps {
   showActions?: boolean;
 }
 
+interface ConditionSideOperation {
+  operator: "+" | "-" | "*" | "/";
+  operand: number;
+}
+
 interface ConditionSide {
   type: "value" | "indicator";
   value: number;
   func: string;
   args: Record<string, any>;
+  operation?: ConditionSideOperation;
 }
 
 interface SingleCondition {
@@ -53,9 +61,9 @@ const generateId = () => Math.random().toString(36).substring(2, 9);
 
 const createDefaultCondition = (): SingleCondition => ({
   id: generateId(),
-  left: { type: "indicator", value: 0, func: "RSI", args: { period: 14, timeframe: "1h", offset: 0 } },
+  left: { type: "indicator", value: 0, func: "RSI", args: { period: 14, timeframe: "1h", offset: 0 }, operation: undefined },
   operator: "<",
-  right: { type: "value", value: 30, func: "", args: {} },
+  right: { type: "value", value: 30, func: "", args: {}, operation: undefined },
   nextLogicalOperator: "AND",
 });
 
@@ -77,6 +85,11 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
     SHORT: {},
   });
   const { user } = useAuth();
+  // Trade settings state (separate from strategy blocks)
+  const [takeProfitPercent, setTakeProfitPercent] = useState(10);
+  const [stopLossPercent, setStopLossPercent] = useState(6);
+  const [spread, setSpread] = useState(0.001);
+  const [tradeSettingsOpen, setTradeSettingsOpen] = useState(false);
   
   // Multi-condition state
   const [conditionGroups, setConditionGroups] = useState<Record<string, ConditionGroup>>({
@@ -192,7 +205,7 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
           commands: { COMMANDS: { LONG: {}, SHORT: {} } },
           indicators: {
             INDICATORS: {
-              PRICE: { args: ["OHLC", "offset"], defaults: { OHLC: "close", offset: 0 } },
+              PRICE: { args: ["field", "offset"], defaults: { field: "close", offset: 0 } },
               VOLUME: { args: ["offset"], defaults: { offset: 0 } },
               SMA: { args: ["period", "timeframe", "offset"], defaults: { period: 14, timeframe: "1h", offset: 0 } },
               EMA: { args: ["period", "timeframe", "offset"], defaults: { period: 14, timeframe: "1h", offset: 0 } },
@@ -204,51 +217,26 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
             ARGUMENTS: {
               LONG: {
                 OPEN: {
-                  label: "Open Position",
-                  fields: {
-                    initialOpenPositionInvestType: {},
-                    initialOpenPositionInvestAmount: {},
-                    recurring: {},
-                    recurringPeriod: {},
-                    recurringInvestType: {},
-                    recurringInvestAmount: {},
-                    maxRecurringCount: {}
-                  }
+                  initialOpenPositionInvestType: { default: "percentCashBalance", options: ["percentCashBalance", "fixedAmount"] },
+                  initialOpenPositionInvestAmount: { default: 0.1 },
+                  recurring: { default: false },
+                  stopLossPercent: { default: 6 },
+                  takeProfitPercent: { default: 10 },
+                  recurringPeriod: { default: 5 },
+                  recurringInvestType: { default: "percentCashBalance", options: ["percentCashBalance", "fixedAmount"] },
+                  recurringInvestAmount: { default: 0.1 },
+                  maxRecurringCount: { default: 0 },
                 },
-  
-                EXECUTION: {
-                  label: "Execution & Risk",
-                  fields: {
-                    stopLossPercent: {},
-                    takeProfitPercent: {},
-                    spread: {}
-                  }
-                },
-  
-                CLOSE: {}
+                CLOSE: {},
               },
-  
-              SHORT: {
-                OPEN: {},
-                EXECUTION: {
-                  label: "Execution & Risk",
-                  fields: {
-                    stopLossPercent: {},
-                    takeProfitPercent: {},
-                    spread: {}
-                  }
-                },
-                CLOSE: {}
-              }
-            }
-          }
+              SHORT: { OPEN: {}, CLOSE: {} },
+            },
+          },
         });
       }
     };
-  
     fetchRegistry();
   }, []);
-  
 
   const addTicker = () => setTickers([...tickers, ""]);
   const removeTicker = (index: number) => setTickers(tickers.filter((_, i) => i !== index));
@@ -293,11 +281,24 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
 
   // Build JSON DSL from form state
   const buildJsonDsl = () => {
-    const buildSide = (side: ConditionSide) => {
+    const buildSide = (side: ConditionSide): any => {
+      let base: any;
       if (side.type === "indicator") {
-        return { func: side.func, arg: side.args };
+        base = { func: side.func, arg: side.args };
+      } else {
+        base = { value: side.value };
       }
-      return { value: side.value };
+      
+      // Wrap with operation if present
+      if (side.operation && side.operation.operand !== undefined) {
+        return {
+          op: side.operation.operator,
+          left: base,
+          right: { value: side.operation.operand }
+        };
+      }
+      
+      return base;
     };
 
     const buildConditions = (group: ConditionGroup): any => {
@@ -371,9 +372,18 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
     };
 
     Object.entries(blocks[side]).forEach(([blockName, blockData]) => {
+      const args = { ...blockData.ARGUMENTS };
+      
+      // Inject trade settings into OPEN block's ARGUMENTS
+      if (blockName === "OPEN") {
+        args.takeProfitPercent = takeProfitPercent;
+        args.stopLossPercent = stopLossPercent;
+        args.spread = spread;
+      }
+      
       dsl[side][blockName] = {
         CONDITIONS: buildConditions(conditionGroups[blockName] || { conditions: [] }),
-        ARGUMENTS: blockData.ARGUMENTS,
+        ARGUMENTS: args,
       };
     });
 
@@ -386,7 +396,6 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
 
     try {
       const payloadDsl = buildJsonDsl();
-      onDslChange?.(payloadDsl, JSON.stringify(payloadDsl, null, 2));
       console.log("DSL JSON:", JSON.stringify(payloadDsl, null, 2));
       
       const results = await api.backtestDSLJSON(payloadDsl);
@@ -418,9 +427,9 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
         dsl: JSON.stringify(dsl, null, 2),
         dslJson: dsl,
       });
-      toast.success(`Strategy "${strategyName}" saved!`);
-      setShowSaveDialog(false);
-      setStrategyName("");
+    toast.success(`Strategy "${strategyName}" saved!`);
+    setShowSaveDialog(false);
+    setStrategyName("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to save strategy";
       toast.error(message);
@@ -469,6 +478,16 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
             <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
               <TrendingUp className="h-3.5 w-3.5" />
               Tickers
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs">Stock symbols to backtest (e.g., AAPL, MSFT, GOOGL)</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </Label>
             <div className="flex flex-wrap gap-2">
               {tickers.map((t, i) => (
@@ -498,6 +517,16 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
               <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
                 <Clock className="h-3.5 w-3.5" />
                 Data Timeframes
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="text-xs">Candlestick intervals used for indicator calculations</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </Label>
               <div className="flex flex-wrap gap-2">
                 {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
@@ -527,7 +556,19 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
             </div>
 
             <div className="space-y-2">
-              <Label className="text-xs uppercase tracking-wider text-muted-foreground">Execution Timeframe</Label>
+              <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                Execution Timeframe
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="text-xs">The timeframe used to evaluate entry/exit signals</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </Label>
               <Select value={executionTF} onValueChange={setExecutionTF}>
                 <SelectTrigger className="bg-secondary/50 border-border/50 h-9">
                   <SelectValue placeholder="Select" />
@@ -547,6 +588,16 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
               <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
                 <Calendar className="h-3.5 w-3.5" />
                 Start Date
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="text-xs">Beginning of the historical data period to test</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </Label>
               <Input
                 type="date"
@@ -559,6 +610,16 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
               <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
                 <Calendar className="h-3.5 w-3.5" />
                 End Date
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="text-xs">End of the historical data period to test</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </Label>
               <Input
                 type="date"
@@ -571,7 +632,19 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
 
           {/* Side */}
           <div className="space-y-2">
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Position Side</Label>
+            <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+              Position Side
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs">LONG profits when price rises, SHORT profits when price falls</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </Label>
             <div className="flex gap-2">
               {Object.keys(registry.commands.COMMANDS).map((s) => (
                 <button
@@ -593,7 +666,130 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
             </div>
           </div>
         </div>
+
+        {/* Trade Settings Section - Collapsible */}
+        <Collapsible open={tradeSettingsOpen} onOpenChange={setTradeSettingsOpen}>
+          <div className="rounded-xl border border-border bg-card/30 overflow-hidden">
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex items-center justify-between w-full p-4 hover:bg-secondary/20 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Target className="h-4 w-4 text-primary" />
+                  <span className="font-medium text-sm">Trade Settings</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs">
+                        <p className="text-sm">
+                          Configure take-profit, stop-loss, and spread settings for all positions.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  {!tradeSettingsOpen && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      TP: {takeProfitPercent}% | SL: {stopLossPercent}% | Spread: {spread}
+                    </span>
+                  )}
+                </div>
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${tradeSettingsOpen ? "rotate-180" : ""}`} />
+              </button>
+            </CollapsibleTrigger>
+            
+            <CollapsibleContent>
+              <div className="px-4 pb-4 space-y-4 border-t border-border/50">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                      <ArrowUpCircle className="h-3.5 w-3.5 text-success" />
+                      Take Profit (%)
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="text-xs">Price increase % to automatically close for profit</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      value={takeProfitPercent}
+                      onChange={(e) => setTakeProfitPercent(parseFloat(e.target.value) || 0)}
+                      className="bg-secondary/50 border-border/50 h-9"
+                      placeholder="10"
+                    />
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                      <ArrowDownCircle className="h-3.5 w-3.5 text-destructive" />
+                      Stop Loss (%)
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="text-xs">Price decrease % to automatically close to limit loss</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      value={stopLossPercent}
+                      onChange={(e) => setStopLossPercent(parseFloat(e.target.value) || 0)}
+                      className="bg-secondary/50 border-border/50 h-9"
+                      placeholder="6"
+                    />
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                      <Activity className="h-3.5 w-3.5 text-warning" />
+                      Spread
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="text-xs">Bid-ask spread cost applied to each trade</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </Label>
+                    <Input
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      value={spread}
+                      onChange={(e) => setSpread(parseFloat(e.target.value) || 0)}
+                      className="bg-secondary/50 border-border/50 h-9"
+                      placeholder="0.001"
+                    />
+                  </div>
+                </div>
                 
+                <p className="text-xs text-muted-foreground">
+                  Risk/Reward Ratio: <span className="font-mono font-medium text-foreground">{stopLossPercent > 0 ? (takeProfitPercent / stopLossPercent).toFixed(2) : "∞"}</span>
+                </p>
+              </div>
+            </CollapsibleContent>
+          </div>
+        </Collapsible>
+
         {/* Strategy Blocks */}
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -685,45 +881,43 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
           )}
         </div>
 
-        {showActions && (
-          <div className="flex gap-3">
-            <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
-              <DialogTrigger asChild>
-                <Button type="button" variant="outline" className="flex-1 h-12">
-                  <Save className="h-5 w-5 mr-2" />
-                  Save Strategy
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Save Strategy</DialogTitle>
-                  <DialogDescription>
-                    Give your strategy a name to save it for later use.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 pt-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="strategyName">Strategy Name</Label>
-                    <Input
-                      id="strategyName"
-                      value={strategyName}
-                      onChange={(e) => setStrategyName(e.target.value)}
-                      placeholder="My RSI Strategy"
-                      className="bg-secondary border-border"
-                    />
-                  </div>
-                  <Button onClick={handleSaveStrategy} className="w-full">
-                    Save
-                  </Button>
+        <div className="flex gap-3">
+          <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+            <DialogTrigger asChild>
+              <Button type="button" variant="outline" className="flex-1 h-12">
+                <Save className="h-5 w-5 mr-2" />
+                Save Strategy
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Save Strategy</DialogTitle>
+                <DialogDescription>
+                  Give your strategy a name to save it for later use.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 pt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="strategyName">Strategy Name</Label>
+                  <Input
+                    id="strategyName"
+                    value={strategyName}
+                    onChange={(e) => setStrategyName(e.target.value)}
+                    placeholder="My RSI Strategy"
+                    className="bg-secondary border-border"
+                  />
                 </div>
-              </DialogContent>
-            </Dialog>
-            <Button type="submit" variant="hero" className="flex-1 h-12" disabled={loading}>
-              <Play className="h-5 w-5" />
-              {loading ? "Running Backtest..." : "Run Backtest"}
-            </Button>
-          </div>
-        )}
+                <Button onClick={handleSaveStrategy} className="w-full">
+                  Save
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+          <Button type="submit" variant="hero" className="flex-1 h-12" disabled={loading}>
+            <Play className="h-5 w-5" />
+            {loading ? "Running Backtest..." : "Run Backtest"}
+          </Button>
+        </div>
       </form>
     </motion.div>
   );
@@ -755,16 +949,25 @@ const generateLogicPreview = (conditions: SingleCondition[]): string => {
   
   const groups = computeVisualGroups(conditions);
   
+  const formatSideLabel = (side: ConditionSide): string => {
+    let base: string;
+    if (side.type === "indicator") {
+      const mainArg = side.args.period || side.args.field || "";
+      base = `${side.func}${mainArg ? `(${mainArg})` : ""}`;
+    } else {
+      base = String(side.value);
+    }
+    
+    if (side.operation && side.operation.operand !== undefined) {
+      base = `${base} ${side.operation.operator} ${side.operation.operand}`;
+    }
+    
+    return base;
+  };
+  
   const groupStrings = groups.map((group) => {
     const conditionStrings = group.map((cond) => {
-      const getLabel = (side: ConditionSide) => {
-        if (side.type === "indicator") {
-          const mainArg = side.args.period || side.args.OHLC || "";
-          return `${side.func}${mainArg ? `(${mainArg})` : ""}`;
-        }
-        return String(side.value);
-      };
-      return `${getLabel(cond.left)} ${cond.operator} ${getLabel(cond.right)}`;
+      return `${formatSideLabel(cond.left)} ${cond.operator} ${formatSideLabel(cond.right)}`;
     });
     
     const joined = conditionStrings.join(" AND ");
@@ -1024,143 +1227,209 @@ function ConditionSideEditor({
   onChange: (side: ConditionSide) => void;
   registry: Registry;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [hasOperation, setHasOperation] = useState(!!side.operation);
 
   const getSummary = () => {
-    if (side.type === "value") return String(side.value);
-    const mainArg = side.args.period || side.args.OHLC || "";
-    return `${side.func}${mainArg ? `(${mainArg})` : ""}`;
+    let base: string;
+    if (side.type === "value") {
+      base = String(side.value);
+    } else {
+      const mainArg = side.args.period || side.args.field || "";
+      base = `${side.func}${mainArg ? `(${mainArg})` : ""}`;
+    }
+    
+    if (side.operation && side.operation.operand !== undefined) {
+      base = `${base} ${side.operation.operator} ${side.operation.operand}`;
+    }
+    
+    return base;
+  };
+
+  const handleToggleOperation = (enabled: boolean) => {
+    setHasOperation(enabled);
+    if (enabled) {
+      onChange({ ...side, operation: { operator: "*", operand: 1 } });
+    } else {
+      onChange({ ...side, operation: undefined });
+    }
+  };
+
+  const handleOperationChange = (field: "operator" | "operand", value: any) => {
+    const currentOp = side.operation || { operator: "*" as const, operand: 1 };
+    onChange({
+      ...side,
+      operation: { ...currentOp, [field]: value }
+    });
   };
 
   return (
-    <div className="relative flex-1 min-w-0">
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all text-sm ${
-          side.type === "indicator"
-            ? "bg-primary/5 border-primary/20 text-primary"
-            : "bg-secondary/50 border-border/50"
-        }`}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all text-sm flex-1 min-w-0 ${
+            side.type === "indicator"
+              ? "bg-primary/5 border-primary/20 text-primary"
+              : "bg-secondary/50 border-border/50"
+          }`}
+        >
+          <span className="font-medium truncate">{getSummary()}</span>
+          <ChevronDown className={`h-3.5 w-3.5 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent 
+        className="w-72 p-3 space-y-3 max-h-96 overflow-y-auto" 
+        align="start"
+        side="bottom"
+        sideOffset={4}
       >
-        <span className="font-medium truncate">{getSummary()}</span>
-        <ChevronDown className={`h-3.5 w-3.5 flex-shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
-      </button>
+        <Select
+          value={side.type}
+          onValueChange={(val: "value" | "indicator") => {
+            if (val === "indicator") {
+              onChange({ type: "indicator", value: 0, func: "RSI", args: { period: 14, timeframe: "1h", offset: 0 }, operation: side.operation });
+            } else {
+              onChange({ type: "value", value: 30, func: "", args: {}, operation: side.operation });
+            }
+          }}
+        >
+          <SelectTrigger className="h-8 bg-secondary/50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="value">Value</SelectItem>
+            <SelectItem value="indicator">Indicator</SelectItem>
+          </SelectContent>
+        </Select>
 
-      <AnimatePresence>
-        {expanded && (
-          <motion.div
-            initial={{ opacity: 0, y: -5 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -5 }}
-            className="absolute z-20 top-full left-0 right-0 mt-1 p-3 rounded-lg bg-card border border-border shadow-xl space-y-3"
-          >
+        {side.type === "value" && (
+          <Input
+            type="number"
+            value={side.value}
+            onChange={(e) => onChange({ ...side, value: parseFloat(e.target.value) || 0 })}
+            className="h-8 bg-secondary/50"
+          />
+        )}
+
+        {side.type === "indicator" && (
+          <>
             <Select
-              value={side.type}
-              onValueChange={(val: "value" | "indicator") => {
-                if (val === "indicator") {
-                  onChange({ type: "indicator", value: 0, func: "RSI", args: { period: 14, timeframe: "1h", offset: 0 } });
-                } else {
-                  onChange({ type: "value", value: 30, func: "", args: {} });
-                }
+              value={side.func}
+              onValueChange={(func) => {
+                const defaults = registry.indicators.INDICATORS[func]?.defaults || {};
+                onChange({ ...side, func, args: { ...defaults } });
               }}
             >
               <SelectTrigger className="h-8 bg-secondary/50">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="value">Value</SelectItem>
-                <SelectItem value="indicator">Indicator</SelectItem>
+                {Object.keys(registry.indicators.INDICATORS).map((ind) => (
+                  <SelectItem key={ind} value={ind}>{ind}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
 
-            {side.type === "value" && (
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(side.args).map(([param, val]) => (
+                <div key={param} className="space-y-1">
+                  <span className="text-[10px] uppercase text-muted-foreground">{param}</span>
+                  {param === "field" ? (
+                    <Select
+                      value={String(val)}
+                      onValueChange={(v) => onChange({ ...side, args: { ...side.args, [param]: v } })}
+                    >
+                      <SelectTrigger className="h-7 text-xs bg-secondary/50">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["open", "high", "low", "close"].map((o) => (
+                          <SelectItem key={o} value={o}>{o}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : param === "timeframe" ? (
+                    <Select
+                      value={String(val)}
+                      onValueChange={(v) => onChange({ ...side, args: { ...side.args, [param]: v } })}
+                    >
+                      <SelectTrigger className="h-7 text-xs bg-secondary/50">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
+                          <SelectItem key={tf} value={tf}>{tf}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      type="number"
+                      value={val as number}
+                      onChange={(e) => onChange({ ...side, args: { ...side.args, [param]: parseFloat(e.target.value) || 0 } })}
+                      className="h-7 text-xs bg-secondary/50"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Mathematical Operation Section */}
+        <div className="pt-2 border-t border-border/50 space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={hasOperation}
+              onCheckedChange={(checked) => handleToggleOperation(!!checked)}
+            />
+            <span className="text-xs text-muted-foreground">Apply operation</span>
+          </label>
+          
+          {hasOperation && (
+            <div className="flex items-center gap-2">
+              <Select
+                value={side.operation?.operator || "*"}
+                onValueChange={(v) => handleOperationChange("operator", v)}
+              >
+                <SelectTrigger className="w-16 h-8 bg-secondary/50 font-mono">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["*", "/", "+", "-"].map((op) => (
+                    <SelectItem key={op} value={op} className="font-mono">{op}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Input
                 type="number"
-                value={side.value}
-                onChange={(e) => onChange({ ...side, value: parseFloat(e.target.value) || 0 })}
-                className="h-8 bg-secondary/50"
-                autoFocus
+                step="0.01"
+                value={side.operation?.operand ?? 1}
+                onChange={(e) => handleOperationChange("operand", parseFloat(e.target.value) || 0)}
+                className="flex-1 h-8 bg-secondary/50"
+                placeholder="1.05"
               />
-            )}
+            </div>
+          )}
+          
+          {hasOperation && (
+            <p className="text-[10px] text-muted-foreground">
+              Preview: {getSummary()}
+            </p>
+          )}
+        </div>
 
-            {side.type === "indicator" && (
-              <>
-                <Select
-                  value={side.func}
-                  onValueChange={(func) => {
-                    const defaults = registry.indicators.INDICATORS[func]?.defaults || {};
-                    onChange({ ...side, func, args: { ...defaults } });
-                  }}
-                >
-                  <SelectTrigger className="h-8 bg-secondary/50">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.keys(registry.indicators.INDICATORS).map((ind) => (
-                      <SelectItem key={ind} value={ind}>{ind}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                <div className="grid grid-cols-2 gap-2">
-                  {Object.entries(side.args).map(([param, val]) => (
-                    <div key={param} className="space-y-1">
-                      <span className="text-[10px] uppercase text-muted-foreground">{param}</span>
-                      {param === "OHLC" ? (
-                        <Select
-                          value={String(val)}
-                          onValueChange={(v) => onChange({ ...side, args: { ...side.args, [param]: v } })}
-                        >
-                          <SelectTrigger className="h-7 text-xs bg-secondary/50">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {["open", "high", "low", "close"].map((o) => (
-                              <SelectItem key={o} value={o}>{o}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : param === "timeframe" ? (
-                        <Select
-                          value={String(val)}
-                          onValueChange={(v) => onChange({ ...side, args: { ...side.args, [param]: v } })}
-                        >
-                          <SelectTrigger className="h-7 text-xs bg-secondary/50">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
-                              <SelectItem key={tf} value={tf}>{tf}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Input
-                          type="number"
-                          value={val as number}
-                          onChange={(e) => onChange({ ...side, args: { ...side.args, [param]: parseFloat(e.target.value) || 0 } })}
-                          className="h-7 text-xs bg-secondary/50"
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-
-            <Button 
-              type="button" 
-              size="sm" 
-              onClick={() => setExpanded(false)}
-              className="w-full h-7 text-xs"
-            >
-              Done
-            </Button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+        <Button 
+          type="button" 
+          size="sm" 
+          onClick={() => setOpen(false)}
+          className="w-full h-7 text-xs"
+        >
+          Done
+        </Button>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1178,41 +1447,21 @@ function ArgumentSelector({
 }) {
   const [addedArgs, setAddedArgs] = useState<string[]>(Object.keys(currentArgs));
 
-  const getChildren = (parent: string) =>
-    Object.keys(availableArgs).filter((a) => availableArgs[a]?.parent === parent);
-
   const addArg = (arg: string) => {
-    const children = getChildren(arg);
-    const newArgs = [...addedArgs];
-
     if (!addedArgs.includes(arg)) {
-      newArgs.push(arg);
+      setAddedArgs([...addedArgs, arg]);
       onChange(arg, availableArgs[arg]?.default ?? null);
     }
-
-    children.forEach((child) => {
-      if (!newArgs.includes(child)) {
-        newArgs.push(child);
-        onChange(child, availableArgs[child]?.default ?? null);
-      }
-    });
-
-    setAddedArgs(newArgs);
   };
 
   const removeArg = (arg: string) => {
-    const children = getChildren(arg);
-    const toRemove = new Set([arg, ...children]);
-    const filtered = addedArgs.filter((a) => !toRemove.has(a));
-    setAddedArgs(filtered);
-
-    if (children.length > 0) {
-      children.forEach((child) => onChange(child, undefined));
-    }
+    setAddedArgs(addedArgs.filter((a) => a !== arg));
     onChange(arg, undefined);
   };
 
-  const topLevelArgs = Object.keys(availableArgs).filter((a) => !availableArgs[a]?.parent);
+  // Filter out TP, SL, and spread from OPEN block since they're managed in Trade Settings
+  const hiddenArgs = ["takeProfitPercent", "stopLossPercent", "spread"];
+  const topLevelArgs = Object.keys(availableArgs).filter((a) => !availableArgs[a]?.parent && !hiddenArgs.includes(a));
 
   return (
     <div className="space-y-2">
