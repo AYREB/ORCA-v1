@@ -588,50 +588,79 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
           </div>
 
           {/* Date Range */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                <Calendar className="h-3.5 w-3.5" />
-                Start Date
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p className="text-xs">Beginning of the historical data period to test</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </Label>
-              <Input
-                type="date"
-                value={dateStart}
-                onChange={(e) => setDateStart(e.target.value)}
-                className="bg-secondary/50 border-border/50 h-9"
-              />
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+              <Calendar className="h-3.5 w-3.5" />
+              Date Range
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs">Select a preset or choose custom dates for backtesting</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </Label>
+            
+            {/* Date Presets */}
+            <div className="flex flex-wrap gap-2">
+              {[
+                { label: "Last 1M", months: 1 },
+                { label: "Last 3M", months: 3 },
+                { label: "Last 6M", months: 6 },
+                { label: "Last 1Y", months: 12 },
+                { label: "Last 2Y", months: 24 },
+                { label: "Last 5Y", months: 60 },
+              ].map((preset) => {
+                const presetEnd = new Date();
+                const presetStart = new Date();
+                presetStart.setMonth(presetStart.getMonth() - preset.months);
+                const presetStartStr = presetStart.toISOString().split('T')[0];
+                const presetEndStr = presetEnd.toISOString().split('T')[0];
+                const isActive = dateStart === presetStartStr && dateEnd === presetEndStr;
+                
+                return (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      setDateStart(presetStartStr);
+                      setDateEnd(presetEndStr);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      isActive
+                        ? "bg-primary/10 border-primary/40 text-primary"
+                        : "bg-secondary/30 border-border/50 text-muted-foreground hover:border-border hover:text-foreground"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
             </div>
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                <Calendar className="h-3.5 w-3.5" />
-                End Date
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p className="text-xs">End of the historical data period to test</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </Label>
-              <Input
-                type="date"
-                value={dateEnd}
-                onChange={(e) => setDateEnd(e.target.value)}
-                className="bg-secondary/50 border-border/50 h-9"
-              />
+            
+            {/* Custom Date Inputs */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">Start Date</Label>
+                <Input
+                  type="date"
+                  value={dateStart}
+                  onChange={(e) => setDateStart(e.target.value)}
+                  className="bg-secondary/50 border-border/50 h-9"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">End Date</Label>
+                <Input
+                  type="date"
+                  value={dateEnd}
+                  onChange={(e) => setDateEnd(e.target.value)}
+                  className="bg-secondary/50 border-border/50 h-9"
+                />
+              </div>
             </div>
           </div>
 
