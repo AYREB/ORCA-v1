@@ -75,7 +75,6 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
   
   // Form state
   const [tickers, setTickers] = useState<string[]>(["AAPL"]);
-  const [dataTimeframes, setDataTimeframes] = useState<string[]>(["1h"]);
   const [executionTF, setExecutionTF] = useState("1h");
   const [dateStart, setDateStart] = useState("2024-01-01");
   const [dateEnd, setDateEnd] = useState("2025-01-01");
@@ -105,7 +104,7 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
     const dsl = buildJsonDsl();
     onDslChange(dsl, JSON.stringify(dsl, null, 2));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tickers, dataTimeframes, executionTF, dateStart, dateEnd, blocks, conditionGroups, side]);
+  }, [tickers,  executionTF, dateStart, dateEnd, blocks, conditionGroups, side]);
 
   // Hydrate form from an existing DSL JSON
   useEffect(() => {
@@ -124,7 +123,6 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
     const context = sideData.context || {};
     setTickers(context.tickers || ["AAPL"]);
     setExecutionTF(context.execution_timeframe || "");
-    setDataTimeframes(context.data_timeframes || ["1h"]);
     setDateStart(context.dateframe?.start || "2024-01-01");
     setDateEnd(context.dateframe?.end || "2025-01-01");
 
@@ -370,7 +368,6 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
         context: {
           tickers: tickers.filter(Boolean),
           execution_timeframe: executionTF,
-          data_timeframes: dataTimeframes,
           dateframe: { start: dateStart, end: dateEnd },
         },
       },
@@ -516,75 +513,31 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
             </div>
           </div>
 
-          {/* Timeframes Row */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                <Clock className="h-3.5 w-3.5" />
-                Data Timeframes
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p className="text-xs">Candlestick intervals used for indicator calculations</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </Label>
-              <div className="flex flex-wrap gap-2">
+          <div className="space-y-2">
+            <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+              <Clock className="h-3.5 w-3.5" />
+              Execution Timeframe
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs">The timeframe used to evaluate entry/exit signals</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </Label>
+            <Select value={executionTF} onValueChange={setExecutionTF}>
+              <SelectTrigger className="bg-secondary/50 border-border/50 h-9 w-full max-w-[200px]">
+                <SelectValue placeholder="Select" />
+              </SelectTrigger>
+              <SelectContent>
                 {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
-                  <label 
-                    key={tf} 
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border cursor-pointer transition-all text-xs font-medium ${
-                      dataTimeframes.includes(tf) 
-                        ? "bg-primary/10 border-primary/40 text-primary" 
-                        : "bg-secondary/30 border-border/50 text-muted-foreground hover:border-border"
-                    }`}
-                  >
-                    <Checkbox
-                      checked={dataTimeframes.includes(tf)}
-                      onCheckedChange={(checked) => {
-                        if (checked) setDataTimeframes([...dataTimeframes, tf]);
-                        else {
-                          setDataTimeframes(dataTimeframes.filter((t) => t !== tf));
-                          if (executionTF === tf) setExecutionTF("");
-                        }
-                      }}
-                      className="hidden"
-                    />
-                    {tf}
-                  </label>
+                  <SelectItem key={tf} value={tf}>{tf}</SelectItem>
                 ))}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                Execution Timeframe
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p className="text-xs">The timeframe used to evaluate entry/exit signals</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </Label>
-              <Select value={executionTF} onValueChange={setExecutionTF}>
-                <SelectTrigger className="bg-secondary/50 border-border/50 h-9">
-                  <SelectValue placeholder="Select" />
-                </SelectTrigger>
-                <SelectContent>
-                  {dataTimeframes.map((tf) => (
-                    <SelectItem key={tf} value={tf}>{tf}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Date Range */}

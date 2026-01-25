@@ -7,7 +7,7 @@ import sys
 from .data_pulling import datapull
 from .parsing import parser, validateParsedDSL
 from .fetcher_calculators import indicatorEvaluator
-from .parsing.extractingTickers import extract_tickers, extract_data_timeframes, extract_execution_timeframe, extract_dateframe
+from .parsing.extractingTickers import extract_tickers, extract_execution_timeframe, extract_dateframe, collect_timeframes_from_dsl
 from .backtesting.backtesterCore import backtester
 from .console_ui.PrintTradeSummary import print_trade_summary
 
@@ -105,7 +105,7 @@ def dslJSONBacktest(dsl_json):
     print("dsl_GO")
     print(dsl_json)
 
-    with open("/Users/brunoayre/Documents/ORCA-v1/backend/core/mainDEMOJSON.json", "w") as f:
+    with open("/Users/alexmunden/Desktop/Coding/Orca/ORCA-v1/backend/core/mainDEMOJSON.json", "w") as f:
         json.dump(dsl_json,f,indent=4)
     
     trade_data = main(dsl_json)
@@ -136,9 +136,13 @@ def main(parsed_dsl):
     # ---------------- Pull data ----------------
     TICKERS = extract_tickers(parsed_dsl)
     EXECUTION_TF = extract_execution_timeframe(parsed_dsl)
-    DATA_TFS = extract_data_timeframes(parsed_dsl)
-    DATEFRAME = extract_dateframe(parsed_dsl)
 
+    DATA_TFS = collect_timeframes_from_dsl(
+        parsed_dsl,
+        EXECUTION_TF
+    )
+    DATEFRAME = extract_dateframe(parsed_dsl)
+    print(DATA_TFS)
     if DATEFRAME:
         start_date = DATEFRAME["start"]
         end_date = DATEFRAME["end"]
@@ -146,7 +150,6 @@ def main(parsed_dsl):
         start_date = "2024-01-01"
         end_date = "2025-01-01"
 
-    #print(DATA_TFS)
 
     data_dict = {}
 

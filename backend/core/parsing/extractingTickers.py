@@ -31,6 +31,28 @@ def extract_data_timeframes(parsed_dsl):
            timeframes.add(tf)
    return list(timeframes)
 
+def collect_timeframes_from_dsl(dsl: dict, execution_tf: str) -> set:
+    timeframes = set([execution_tf])
+
+    def walk(node):
+        if isinstance(node, dict):
+            # If this is a function node with args
+            if "arg" in node and isinstance(node["arg"], dict):
+                tf = node["arg"].get("timeframe")
+                if tf:
+                    timeframes.add(tf)
+
+            # Recurse
+            for v in node.values():
+                walk(v)
+
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(dsl)
+    return timeframes
+
 
 
 def extract_execution_timeframe(parsed_dsl):
