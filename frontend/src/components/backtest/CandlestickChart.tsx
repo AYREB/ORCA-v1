@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from "react";
+import { useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import {
   createChart,
   ColorType,
@@ -8,8 +8,14 @@ import {
   AreaSeries,
   createSeriesMarkers,
 } from "lightweight-charts";
-import type { IChartApi, CandlestickData, Time, SeriesMarker, ISeriesApi } from "lightweight-charts";
-import { motion } from "framer-motion";
+import type { 
+  IChartApi, 
+  CandlestickData, 
+  Time, 
+  SeriesMarker, 
+  ISeriesApi,
+  ISeriesMarkersPluginApi 
+} from "lightweight-charts";
 import { OHLCData, TradeEntry } from "@/lib/api";
 import { Maximize2, Minimize2 } from "lucide-react";
 
@@ -26,6 +32,15 @@ interface CandlestickChartProps {
   indicators?: string[];
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
+  isReplaying?: boolean;
+  isPaused?: boolean;
+  replaySpeed?: number;
+  // Callback to sync display state (throttled by chart to 10fps)
+  onReplayTick?: (index: number, total: number) => void;
+  // Called when replay naturally ends
+  onReplayEnd?: () => void;
+  // Allow external seek (from slider scrub)
+  seekToIndex?: number;
 }
 
 const INDICATOR_COLORS: Record<string, string> = {
@@ -42,23 +57,69 @@ const INDICATOR_COLORS: Record<string, string> = {
   BB_lower: "#22c55e",
 };
 
-// Normalize datetime to unix seconds to keep full resolution per bar
-const toChartTime = (datetime: string): number => Math.floor(new Date(datetime).getTime() / 1000);
+// Convert datetime string to UTC timestamp (seconds since epoch) for Lightweight Charts
+// Handles multiple formats including timezone-aware strings like "2025-12-01 14:30:00+00:00"
+const toUtcTimestamp = (datetime: string | undefined | null): number => {
+  // Guard against undefined/null/empty
+  if (!datetime || typeof datetime !== "string") {
+    return NaN;
+  }
+
+  // IMPORTANT: normalize whitespace/newlines from CSV parsing (e.g. trailing "\r")
+  const s = datetime.trim();
+  if (s === "") return NaN;
+
+  let d: Date;
+  try {
+    // Check if datetime already has timezone info (+00:00, -05:00, Z, etc.)
+    // Support both "+00:00" and "+0000" offsets.
+    const hasTimezone = /([+-]\d{2}:\d{2}|[+-]\d{4}|Z)$/.test(s);
+    
+    if (s.includes("T")) {
+      // ISO format: "2024-01-15T13:00:00" or "2024-01-15T13:00:00Z" or "2024-01-15T13:00:00+00:00"
+      d = new Date(s);
+    } else if (s.includes(" ")) {
+      // Space format: "2024-01-15 13:00:00" or "2024-01-15 13:00:00+00:00"
+      if (hasTimezone) {
+        // Already has timezone, just replace space with T
+        d = new Date(s.replace(" ", "T"));
+      } else {
+        // No timezone, treat as UTC by adding Z
+        d = new Date(s.replace(" ", "T") + "Z");
+      }
+    } else {
+      // Date only: "2024-01-15" → midnight UTC
+      d = new Date(s + "T00:00:00Z");
+    }
+  } catch {
+    return NaN;
+  }
+
+  const timestamp = d.getTime();
+  if (isNaN(timestamp)) {
+    return NaN;
+  }
+
+  return Math.floor(timestamp / 1000);
+};
 
 // Generate fake SMA data
 const generateFakeSMA = (data: OHLCData[], period: number): { time: Time; value: number }[] => {
   const result: { time: Time; value: number }[] = [];
   for (let i = period - 1; i < data.length; i++) {
+    const time = toUtcTimestamp(data[i].Datetime);
+    if (isNaN(time)) continue; // Skip invalid timestamps
+    
     let sum = 0;
     for (let j = 0; j < period; j++) {
       sum += data[i - j].Close;
     }
     result.push({
-      time: toChartTime(data[i].Datetime) as Time,
+      time: time as Time,
       value: sum / period,
     });
   }
-  return result.sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
+  return result.sort((a, b) => (a.time as number) - (b.time as number));
 };
 
 // Generate fake EMA data
@@ -70,14 +131,33 @@ const generateFakeEMA = (data: OHLCData[], period: number): { time: Time; value:
   for (let i = 0; i < data.length; i++) {
     ema = (data[i].Close - ema) * multiplier + ema;
     if (i >= period - 1) {
+      const time = toUtcTimestamp(data[i].Datetime);
+      if (isNaN(time)) continue; // Skip invalid timestamps
+      
       result.push({
-        time: toChartTime(data[i].Datetime) as Time,
+        time: time as Time,
         value: ema,
       });
     }
   }
-  return result.sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
+  return result.sort((a, b) => (a.time as number) - (b.time as number));
 };
+
+// TP/SL Visual structure for persistent series
+interface TpslVisual {
+  tpArea: ISeriesApi<"Area"> | null;
+  slArea: ISeriesApi<"Area"> | null;
+  entryLine: ISeriesApi<"Line">;
+  box: {
+    entryPrice: number;
+    tpPrice: number | null;
+    slPrice: number | null;
+    entryTime: string;
+    exitTime: string | null;
+    entryTimeMs: number;
+    exitTimeMs: number | null;
+  };
+}
 
 const CandlestickChart = ({
   data,
@@ -92,97 +172,117 @@ const CandlestickChart = ({
   indicators = [],
   isFullscreen = false,
   onToggleFullscreen,
+  isReplaying = false,
+  isPaused = true,
+  replaySpeed = 5,
+  onReplayTick,
+  onReplayEnd,
+  seekToIndex,
 }: CandlestickChartProps) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  
+  // Persistent series references for incremental updates
+  const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const indicatorSeriesRefs = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
+  
+  // PERSISTENT MARKERS PLUGIN - created ONCE, updated via setMarkers()
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  
+  // PERSISTENT TP/SL SERIES - created ONCE per box, updated via setData()
+  const tpslVisualsRef = useRef<TpslVisual[]>([]);
+  
+  // Track last rendered index for incremental updates
+  const lastRenderedIndexRef = useRef<number>(-1);
+  
+  // Frame-skip mechanism for smooth replay at high speeds
+  const pendingUpdateRef = useRef<number | null>(null);
+  const targetIndexRef = useRef<number>(0);
+  
+  // INTERNAL REPLAY STATE - managed via refs to avoid React re-renders
+  const internalIndexRef = useRef<number>(0);
+  const lastSyncTimeRef = useRef<number>(0);
 
-  // Prepare candlestick data
+  // Prepare candlestick data (full dataset) - uses numeric timestamps to preserve intraday
   const chartData = useMemo(() => {
     const normalized = data
       .map((item) => ({
-        time: toChartTime(item.Datetime) as Time,
+        time: toUtcTimestamp(item.Datetime) as Time,
         open: item.Open,
         high: item.High,
         low: item.Low,
         close: item.Close,
+        datetime: item.Datetime, // Keep original datetime for replay filtering
       }))
-      .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
+      .filter((item) => !isNaN(item.time as number)) // Remove invalid entries
+      .sort((a, b) => (a.time as number) - (b.time as number));
 
-    return normalized;
+    // Only remove truly identical timestamps (same exact second)
+    return normalized.filter((item, i, arr) => 
+      i === 0 || (item.time as number) !== (arr[i - 1].time as number)
+    );
   }, [data]);
 
-  // Prepare trade markers
-  const tradeMarkers = useMemo((): SeriesMarker<Time>[] => {
-    if (!showMarkers) return [];
+  // Component mount/unmount tracking removed - stable identity now guaranteed by parent key prop
 
-    const grouped = new Map<
-      string,
-      {
-        time: Time;
-        position: SeriesMarker<Time>["position"];
-        color: string;
-        shape: SeriesMarker<Time>["shape"];
-        count: number;
-        label: string;
-      }
-    >();
+  // IMPORTANT: Parent components may pass new array/object identities on re-render.
+  // If we depend on raw arrays in the chart-creation effect, the chart can be torn down and
+  // recreated during replay, which looks like "flicker back to 1 candle".
+  // These stable keys let us recreate the chart only when the underlying dataset actually changes.
+  const dataKey = useMemo(() => {
+    const first = data[0]?.Datetime ?? "";
+    const last = data[data.length - 1]?.Datetime ?? "";
+    return `${data.length}|${first}|${last}`;
+  }, [data]);
 
-    trades
-      .filter((t) => t.ticker === ticker)
-      .forEach((t) => {
-        const isBuy = t.type === "BUY" || t.type === "RECURRING_BUY";
-        const key = `${t.timestamp}-${isBuy ? "buy" : "sell"}`;
-        const time = toChartTime(t.timestamp) as Time;
+  const indicatorsKey = useMemo(() => indicators.join("|"), [indicators]);
 
-        let baseLabel: string;
-        if (t.type === "RECURRING_BUY") {
-          baseLabel = "REC";
-        } else if (isBuy) {
-          baseLabel = "BUY";
-        } else {
-          baseLabel = "SELL";
-        }
+  const tradesKey = useMemo(() => {
+    const first = trades[0]?.timestamp ?? "";
+    const last = trades[trades.length - 1]?.timestamp ?? "";
+    return `${trades.length}|${first}|${last}`;
+  }, [trades]);
 
-        const existing = grouped.get(key);
-        if (existing) {
-          existing.count += 1;
-        } else {
-          grouped.set(key, {
-            time,
-            position: isBuy ? "belowBar" : "aboveBar",
-            color: isBuy ? "#22c55e" : "#ef4444",
-            shape: isBuy ? "arrowUp" : "arrowDown",
-            count: 1,
-            label: baseLabel,
-          });
-        }
-      });
+  // Build key for when we truly need to rebuild the underlying chart instance.
+  // Critically, this EXCLUDES transient UI state so replay ticks don't tear down the chart.
+  const buildKey = useMemo(() => {
+    return [
+      dataKey,
+      tradesKey,
+      indicatorsKey,
+      `t=${ticker}`,
+      `m=${showMarkers ? 1 : 0}`,
+      `tp=${showTPSL ? 1 : 0}`,
+      `c=${useCustomTPSL ? 1 : 0}`,
+      `ctp=${customTPPercent}`,
+      `csl=${customSLPercent}`,
+    ].join("::");
+  }, [
+    dataKey,
+    tradesKey,
+    indicatorsKey,
+    ticker,
+    showMarkers,
+    showTPSL,
+    useCustomTPSL,
+    customTPPercent,
+    customSLPercent,
+  ]);
 
-    return Array.from(grouped.values())
-      .map((marker) => ({
-        time: marker.time,
-        position: marker.position,
-        color: marker.color,
-        shape: marker.shape,
-        text: marker.count > 1 ? `${marker.label} x${marker.count}` : marker.label,
-        size: 1,
-      }) as SeriesMarker<Time>)
-      .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
-  }, [trades, ticker, showMarkers]);
-
-  // Prepare indicator data (real or fake)
+  // Prepare indicator data (real or fake) - full dataset with numeric timestamps
   const indicatorData = useMemo(() => {
     const result: Record<string, { time: Time; value: number }[]> = {};
     
     indicators.forEach((indicator) => {
       // Check if real data exists
-        const realData = data
-          .filter((item) => item[indicator] !== undefined && item[indicator] !== null)
-          .map((item) => ({
-            time: toChartTime(item.Datetime) as Time,
-            value: Number(item[indicator]),
-          }))
-          .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
+      const realData = data
+        .filter((item) => item[indicator] !== undefined && item[indicator] !== null)
+        .map((item) => ({
+          time: toUtcTimestamp(item.Datetime) as Time,
+          value: Number(item[indicator]),
+        }))
+        .filter((item) => !isNaN(item.time as number)) // Filter invalid timestamps
+        .sort((a, b) => (a.time as number) - (b.time as number));
 
       if (realData.length > 0) {
         result[indicator] = realData;
@@ -202,8 +302,45 @@ const CandlestickChart = ({
     return result;
   }, [data, indicators]);
 
-  // Get TP/SL boxes from trades (TradingView style)
-  const tpslBoxes = useMemo(() => {
+  // Prepare all trade markers (full dataset - filtered during replay) with numeric timestamps
+  const allTradeMarkers = useMemo((): (SeriesMarker<Time> & { originalTimestamp: string })[] => {
+    if (!showMarkers) return [];
+
+    const filteredTrades = trades.filter((t) => t.ticker === ticker);
+
+    return filteredTrades
+      .map((t) => {
+        const isBuy = t.type === "BUY" || t.type === "RECURRING_BUY";
+        const time = toUtcTimestamp(t.timestamp);
+        
+        // Skip invalid timestamps
+        if (isNaN(time)) return null;
+        
+        let label: string;
+        if (t.type === "RECURRING_BUY") {
+          label = `REC ${t.shares.toFixed(1)}`;
+        } else if (isBuy) {
+          label = `BUY ${t.shares.toFixed(1)}`;
+        } else {
+          label = `SELL ${t.shares.toFixed(1)}${t.close_reason ? ` (${t.close_reason})` : ""}`;
+        }
+
+        return {
+          time: time as Time,
+          position: isBuy ? "belowBar" : "aboveBar",
+          color: isBuy ? "#22c55e" : "#ef4444",
+          shape: isBuy ? "arrowUp" : "arrowDown",
+          text: label,
+          size: 1,
+          originalTimestamp: t.timestamp,
+        } as SeriesMarker<Time> & { originalTimestamp: string };
+      })
+      .filter((m): m is NonNullable<typeof m> => m !== null) // Remove nulls
+      .sort((a, b) => (a.time as number) - (b.time as number));
+  }, [trades, ticker, showMarkers]);
+
+  // Prepare all TP/SL box data (full dataset - filtered during replay)
+  const allTpslBoxes = useMemo(() => {
     if (!showTPSL) return [];
     
     const boxes: {
@@ -212,6 +349,8 @@ const CandlestickChart = ({
       slPrice: number | null;
       entryTime: string;
       exitTime: string | null;
+      entryTimeMs: number;
+      exitTimeMs: number | null;
     }[] = [];
     
     const tickerTrades = trades.filter((t) => t.ticker === ticker);
@@ -219,10 +358,17 @@ const CandlestickChart = ({
     const sellTrades = tickerTrades.filter((t) => t.type === "SELL");
     
     buyTrades.forEach((buyTrade) => {
-      // Find the corresponding sell trade (next sell after this buy)
-      const correspondingSell = sellTrades.find(
-        (s) => new Date(s.timestamp) > new Date(buyTrade.timestamp)
-      );
+      // Robust timestamp parsing (handles "YYYY-MM-DD HH:mm:ss+00:00" from CSV and avoids NaN)
+      const entryTimeSec = toUtcTimestamp(buyTrade.timestamp);
+      if (isNaN(entryTimeSec)) return; // Skip if we can't place the box in time
+
+      const entryTimeMs = entryTimeSec * 1000;
+
+      // Find the corresponding sell trade (next sell after this buy) using numeric timestamps
+      const correspondingSell = sellTrades
+        .map((s) => ({ s, ms: toUtcTimestamp(s.timestamp) * 1000 }))
+        .filter((x) => !isNaN(x.ms) && x.ms > entryTimeMs)
+        .sort((a, b) => a.ms - b.ms)[0]?.s;
       
       const entryPrice = buyTrade.price;
       
@@ -249,14 +395,97 @@ const CandlestickChart = ({
         slPrice,
         entryTime: buyTrade.timestamp,
         exitTime: correspondingSell?.timestamp || null,
+        entryTimeMs,
+        exitTimeMs: correspondingSell ? toUtcTimestamp(correspondingSell.timestamp) * 1000 : null,
       });
     });
     
     return boxes;
   }, [trades, ticker, showTPSL, useCustomTPSL, customTPPercent, customSLPercent]);
 
+  // ===== REFS TO HOLD DATA FOR REPLAY EFFECT =====
+  // These refs allow the replay effect to access the latest data without triggering re-runs
+  const chartDataRef = useRef(chartData);
+  const indicatorDataRef = useRef(indicatorData);
+  const allTradeMarkersRef = useRef(allTradeMarkers);
+  const allTpslBoxesRef = useRef(allTpslBoxes);
+  const showTPSLRef = useRef(showTPSL);
+  const isReplayingRef = useRef(isReplaying);
+
+  // Sync refs when values change (these don't trigger the replay effect)
+  useEffect(() => { chartDataRef.current = chartData; }, [chartData]);
+  useEffect(() => { indicatorDataRef.current = indicatorData; }, [indicatorData]);
+  useEffect(() => { allTradeMarkersRef.current = allTradeMarkers; }, [allTradeMarkers]);
+  useEffect(() => { allTpslBoxesRef.current = allTpslBoxes; }, [allTpslBoxes]);
+  useEffect(() => { showTPSLRef.current = showTPSL; }, [showTPSL]);
+  useEffect(() => { isReplayingRef.current = isReplaying; }, [isReplaying]);
+
+  // Helper function to compute TP/SL data for a single box using numeric timestamps
+  const computeTpslData = (
+    box: TpslVisual['box'],
+    visibleData: typeof chartData,
+    currentTimeMs: number | null
+  ) => {
+    // In replay mode, only show boxes where entry time has been reached
+    if (currentTimeMs !== null && box.entryTimeMs > currentTimeMs) {
+      return { tpData: [], slData: [], entryData: [] };
+    }
+
+    const entryTimeSec = Math.floor(box.entryTimeMs / 1000);
+    
+    // Determine exit time based on replay state
+    let effectiveExitTimeSec: number | null = null;
+    if (box.exitTime) {
+      if (currentTimeMs !== null && box.exitTimeMs && box.exitTimeMs > currentTimeMs) {
+        // Trade hasn't closed yet in replay - use current replay position
+        effectiveExitTimeSec = null;
+      } else {
+        effectiveExitTimeSec = Math.floor(box.exitTimeMs! / 1000);
+      }
+    }
+    
+    // Filter visible chart data to only the trade duration using NUMERIC comparison
+    const tradeData = visibleData.filter((d) => {
+      const timeSec = d.time as number;
+      const isAfterEntry = timeSec >= entryTimeSec;
+      const isBeforeExit = effectiveExitTimeSec ? timeSec <= effectiveExitTimeSec : true;
+      return isAfterEntry && isBeforeExit;
+    });
+    
+    if (tradeData.length === 0) {
+      return { tpData: [], slData: [], entryData: [] };
+    }
+
+    const tpData = box.tpPrice 
+      ? tradeData.map((d) => ({ time: d.time, value: box.tpPrice! }))
+      : [];
+    
+    const slData = box.slPrice 
+      ? tradeData.map((d) => ({ time: d.time, value: box.slPrice! }))
+      : [];
+    
+    const entryData = tradeData.map((d) => ({ time: d.time, value: box.entryPrice }));
+
+    return { tpData, slData, entryData };
+  };
+
+  // ===== EFFECT 1: Chart Creation - runs ONLY when structure changes =====
+  // This effect handles chart creation/destruction. It creates PERSISTENT series.
   useEffect(() => {
     if (!chartContainerRef.current || chartData.length === 0) return;
+
+    // Chart rebuild - should only happen when buildKey changes (data/settings), not during replay ticks
+
+    // Clean up previous chart
+    if (chartRef.current) {
+      chartRef.current.remove();
+      chartRef.current = null;
+      candlestickSeriesRef.current = null;
+      indicatorSeriesRefs.current.clear();
+      markersPluginRef.current = null;
+      tpslVisualsRef.current = [];
+      lastRenderedIndexRef.current = -1;
+    }
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
@@ -282,6 +511,7 @@ const CandlestickChart = ({
 
     chartRef.current = chart;
 
+    // Create candlestick series and store reference
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
       upColor: "#22c55e",
       downColor: "#ef4444",
@@ -290,98 +520,10 @@ const CandlestickChart = ({
       wickDownColor: "#ef4444",
       wickUpColor: "#22c55e",
     });
+    candlestickSeriesRef.current = candlestickSeries;
 
-    candlestickSeries.setData(chartData as CandlestickData<Time>[]);
-
-    // Add trade markers
-    if (tradeMarkers.length > 0) {
-      createSeriesMarkers(candlestickSeries, tradeMarkers);
-    }
-
-    // Add TP/SL boxes (TradingView style) - only during trade duration
-    tpslBoxes.forEach((box) => {
-      const entryTime = toChartTime(box.entryTime) as Time;
-      const exitTime = box.exitTime ? toChartTime(box.exitTime) as Time : null;
-      
-      // Filter chart data to only the trade duration
-      const tradeData = chartData.filter((d) => {
-        const time = d.time as string;
-        const isAfterEntry = time >= (entryTime as string);
-        const isBeforeExit = exitTime ? time <= (exitTime as string) : true;
-        return isAfterEntry && isBeforeExit;
-      });
-      
-      if (tradeData.length === 0) return;
-      
-      // TP filled box (green zone from entry to TP)
-      if (box.tpPrice) {
-        // Create filled area from entry price to TP price
-        const tpAreaSeries = chart.addSeries(AreaSeries, {
-          topColor: "rgba(34, 197, 94, 0.3)",
-          bottomColor: "rgba(34, 197, 94, 0.3)",
-          lineColor: "rgba(34, 197, 94, 0)",
-          lineWidth: 1,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        
-        // Draw the TP zone line at TP price level
-        const tpZoneData = tradeData.map((d) => ({ 
-          time: d.time, 
-          value: box.tpPrice! 
-        }));
-        tpAreaSeries.setData(tpZoneData);
-        
-        // Add baseline at entry price to create the filled box effect
-        tpAreaSeries.applyOptions({
-          baseValue: { type: "price", price: box.entryPrice },
-        } as any);
-      }
-      
-      // SL filled box (red zone from SL UP to entry - properly clipped)
-      if (box.slPrice) {
-        const slAreaSeries = chart.addSeries(AreaSeries, {
-          topColor: "rgba(239, 68, 68, 0.35)",
-          bottomColor: "rgba(239, 68, 68, 0.35)",
-          lineColor: "rgba(239, 68, 68, 0)",
-          lineWidth: 1,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        
-        // Data at SL price (bottom of box) - fill goes UPWARD to baseValue
-        const slZoneData = tradeData.map((d) => ({ 
-          time: d.time, 
-          value: box.slPrice! 
-        }));
-        slAreaSeries.setData(slZoneData);
-        
-        // Baseline at ENTRY price - since data is below, fill goes UP to entry
-        slAreaSeries.applyOptions({
-          baseValue: { type: "price", price: box.entryPrice },
-        } as any);
-      }
-      
-      // Entry line (only during trade)
-      const entryLineSeries = chart.addSeries(LineSeries, {
-        color: "rgba(255, 255, 255, 0.6)",
-        lineWidth: 1,
-        lineStyle: 2, // Dashed
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      
-      const entryLineData = tradeData.map((d) => ({ 
-        time: d.time, 
-        value: box.entryPrice 
-      }));
-      entryLineSeries.setData(entryLineData);
-    });
-
-    // Add indicator lines
+    // Create indicator series and store references
+    indicatorSeriesRefs.current.clear();
     Object.entries(indicatorData).forEach(([indicator, indData]) => {
       if (indData.length > 0) {
         const color = INDICATOR_COLORS[indicator] || "#888888";
@@ -392,37 +534,421 @@ const CandlestickChart = ({
           lastValueVisible: false,
           crosshairMarkerVisible: false,
         });
-        lineSeries.setData(indData);
+        indicatorSeriesRefs.current.set(indicator, lineSeries);
       }
     });
 
-    chart.timeScale().fitContent();
+    // CREATE PERSISTENT MARKERS PLUGIN (ONCE)
+    // Initialize with empty markers - will be populated based on mode
+    markersPluginRef.current = createSeriesMarkers(candlestickSeries, []);
 
-    const handleResize = () => {
-      if (chartContainerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({ 
-          width: chartContainerRef.current.clientWidth,
-          height: isFullscreen ? window.innerHeight - 120 : height,
+    // CREATE PERSISTENT TP/SL SERIES (ONCE per box)
+    tpslVisualsRef.current = [];
+    if (showTPSL) {
+      allTpslBoxes.forEach((box) => {
+        // Create TP area series (if TP exists)
+        let tpArea: ISeriesApi<"Area"> | null = null;
+        if (box.tpPrice) {
+          tpArea = chart.addSeries(AreaSeries, {
+            topColor: "rgba(34, 197, 94, 0.3)",
+            bottomColor: "rgba(34, 197, 94, 0.3)",
+            lineColor: "rgba(34, 197, 94, 0)",
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          tpArea.applyOptions({
+            baseValue: { type: "price", price: box.entryPrice },
+          } as any);
+        }
+
+        // Create SL area series (if SL exists)
+        let slArea: ISeriesApi<"Area"> | null = null;
+        if (box.slPrice) {
+          slArea = chart.addSeries(AreaSeries, {
+            topColor: "rgba(239, 68, 68, 0.35)",
+            bottomColor: "rgba(239, 68, 68, 0.35)",
+            lineColor: "rgba(239, 68, 68, 0)",
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          slArea.applyOptions({
+            baseValue: { type: "price", price: box.entryPrice },
+          } as any);
+        }
+
+        // Create entry line series
+        const entryLine = chart.addSeries(LineSeries, {
+          color: "rgba(255, 255, 255, 0.6)",
+          lineWidth: 1,
+          lineStyle: 2, // Dashed
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
         });
+
+        tpslVisualsRef.current.push({
+          tpArea,
+          slArea,
+          entryLine,
+          box,
+        });
+      });
+    }
+
+    // Check if we're starting in replay mode
+    if (isReplayingRef.current) {
+      // START EMPTY - show just the first candle
+      const firstCandle = chartData[0];
+      if (firstCandle) {
+        const { datetime, ...rest } = firstCandle;
+        candlestickSeries.setData([rest as CandlestickData<Time>]);
+        
+        // Clear indicators to first point (numeric comparison)
+        const firstTime = firstCandle.time as number;
+        Object.entries(indicatorData).forEach(([indicator, indData]) => {
+          const series = indicatorSeriesRefs.current.get(indicator);
+          if (series) {
+            const filtered = indData.filter((d) => (d.time as number) <= firstTime);
+            series.setData(filtered);
+          }
+        });
+
+        // Empty markers
+        markersPluginRef.current?.setMarkers([]);
+
+        // Empty TP/SL series
+        tpslVisualsRef.current.forEach((visual) => {
+          visual.tpArea?.setData([]);
+          visual.slArea?.setData([]);
+          visual.entryLine.setData([]);
+        });
+
+        lastRenderedIndexRef.current = 0;
+        chart.timeScale().scrollToPosition(-5, false);
       }
+    } else {
+      // NORMAL MODE - set full data
+      const dataToShow = chartData.map(({ datetime, ...rest }) => rest) as CandlestickData<Time>[];
+      candlestickSeries.setData(dataToShow);
+
+      // Set indicator data
+      Object.entries(indicatorData).forEach(([indicator, indData]) => {
+        const series = indicatorSeriesRefs.current.get(indicator);
+        if (series) {
+          series.setData(indData);
+        }
+      });
+
+      // Set all markers
+      if (allTradeMarkers.length > 0) {
+        const markersWithoutTimestamp = allTradeMarkers.map(({ originalTimestamp, ...rest }) => rest as SeriesMarker<Time>);
+        markersPluginRef.current?.setMarkers(markersWithoutTimestamp);
+      }
+
+      // Set TP/SL data for all boxes
+      tpslVisualsRef.current.forEach((visual) => {
+        const { tpData, slData, entryData } = computeTpslData(visual.box, chartData, null);
+        visual.tpArea?.setData(tpData);
+        visual.slArea?.setData(slData);
+        visual.entryLine.setData(entryData);
+      });
+
+      lastRenderedIndexRef.current = chartData.length - 1;
+      chart.timeScale().fitContent();
+    }
+
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.remove();
+        chartRef.current = null;
+      }
+      candlestickSeriesRef.current = null;
+      indicatorSeriesRefs.current.clear();
+      markersPluginRef.current = null;
+      tpslVisualsRef.current = [];
+      lastRenderedIndexRef.current = -1;
     };
+    // NOTE: isReplaying is NOT a dependency - replay transition effect handles mode switching
+  }, [buildKey]);
+
+  // ===== EFFECT 1B: Resize handling (no rebuild) =====
+  useEffect(() => {
+    const handleResize = () => {
+      if (!chartContainerRef.current || !chartRef.current) return;
+      chartRef.current.applyOptions({
+        width: chartContainerRef.current.clientWidth,
+        height: isFullscreen ? window.innerHeight - 120 : height,
+      });
+    };
+
+    // Apply immediately for fullscreen toggles / height changes
+    handleResize();
 
     window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [height, isFullscreen]);
+
+  // ===== EFFECT 2: Replay Transition - runs BEFORE paint when replay mode changes =====
+  // useLayoutEffect runs synchronously before browser paint - this prevents the flash
+  useLayoutEffect(() => {
+    if (!chartRef.current || !candlestickSeriesRef.current) return;
+    
+    const chart = chartRef.current;
+    const candlestickSeries = candlestickSeriesRef.current;
+    const currentChartData = chartDataRef.current;
+    
+    if (isReplaying) {
+      // ENTERING REPLAY: Clear everything immediately (before paint)
+      // Reset last rendered index for new replay session
+      lastRenderedIndexRef.current = 0;
+      
+      // Show just the first candle (auto-start behavior)
+      if (currentChartData.length > 0) {
+        const firstCandle = currentChartData[0];
+        const { datetime, ...rest } = firstCandle;
+        candlestickSeries.setData([rest as CandlestickData<Time>]);
+        
+        // Clear indicators to first point (numeric comparison)
+        const currentIndicatorData = indicatorDataRef.current;
+        const firstTime = firstCandle.time as number;
+        indicatorSeriesRefs.current.forEach((series, indicator) => {
+          const indData = currentIndicatorData[indicator];
+          if (indData && indData.length > 0) {
+            const filtered = indData.filter((d) => (d.time as number) <= firstTime);
+            series.setData(filtered);
+          } else {
+            series.setData([]);
+          }
+        });
+        
+        // Clear markers using persistent plugin
+        markersPluginRef.current?.setMarkers([]);
+        
+        // Clear TP/SL using persistent series (just setData to empty)
+        tpslVisualsRef.current.forEach((visual) => {
+          visual.tpArea?.setData([]);
+          visual.slArea?.setData([]);
+          visual.entryLine.setData([]);
+        });
+        
+        // Position chart to show the first candle
+        chart.timeScale().scrollToPosition(-5, false);
+      }
+    } else {
+      // EXITING REPLAY: Restore full data immediately (before paint)
+      const dataToShow = currentChartData.map(({ datetime, ...rest }) => rest) as CandlestickData<Time>[];
+      candlestickSeries.setData(dataToShow);
+      
+      // Restore indicators
+      const currentIndicatorData = indicatorDataRef.current;
+      indicatorSeriesRefs.current.forEach((series, indicator) => {
+        const indData = currentIndicatorData[indicator];
+        if (indData) {
+          series.setData(indData);
+        }
+      });
+      
+      // Restore markers using persistent plugin
+      const currentMarkers = allTradeMarkersRef.current;
+      const markersWithoutTimestamp = currentMarkers.map(({ originalTimestamp, ...rest }) => rest as SeriesMarker<Time>);
+      markersPluginRef.current?.setMarkers(markersWithoutTimestamp);
+      
+      // Restore TP/SL using persistent series
+      tpslVisualsRef.current.forEach((visual) => {
+        const { tpData, slData, entryData } = computeTpslData(visual.box, currentChartData, null);
+        visual.tpArea?.setData(tpData);
+        visual.slArea?.setData(slData);
+        visual.entryLine.setData(entryData);
+      });
+      
+      lastRenderedIndexRef.current = currentChartData.length - 1;
+      chart.timeScale().fitContent();
+    }
+    
+    // Cleanup: Cancel any pending animation frame when mode changes
     return () => {
-      window.removeEventListener("resize", handleResize);
-      chart.remove();
+      if (pendingUpdateRef.current !== null) {
+        cancelAnimationFrame(pendingUpdateRef.current);
+        pendingUpdateRef.current = null;
+      }
     };
-  }, [chartData, height, tradeMarkers, indicatorData, tpslBoxes, isFullscreen]);
+  }, [isReplaying]);
+
+  // ===== REFS for tracking what's already rendered (prevents redundant setData calls) =====
+  const lastMarkerCountRef = useRef(0);
+  const lastIndicatorCountsRef = useRef<Map<string, number>>(new Map());
+
+  // ===== HELPER: Update chart to a specific index (no React state) =====
+  const updateChartToIndex = (targetIndex: number) => {
+    if (!chartRef.current || !candlestickSeriesRef.current) return;
+    
+    const currentChartData = chartDataRef.current;
+    if (currentChartData.length === 0) return;
+    
+    const clampedIndex = Math.min(targetIndex, currentChartData.length - 1);
+    const prevIndex = lastRenderedIndexRef.current;
+    
+    // Skip if nothing changed
+    if (clampedIndex === prevIndex) return;
+
+    const candlestickSeries = candlestickSeriesRef.current;
+
+    // INCREMENTAL UPDATE OPTIMIZATION for candlesticks
+    if (clampedIndex === prevIndex + 1) {
+      // Sequential tick - use fast update() method (no flicker)
+      const nextCandle = currentChartData[clampedIndex];
+      const { datetime, ...rest } = nextCandle;
+      candlestickSeries.update(rest as CandlestickData<Time>);
+    } else {
+      // Jump (scrub or reset or catch-up) - use setData()
+      const visibleData = currentChartData.slice(0, clampedIndex + 1);
+      const dataToShow = visibleData.map(({ datetime, ...rest }) => rest) as CandlestickData<Time>[];
+      candlestickSeries.setData(dataToShow);
+    }
+    
+    lastRenderedIndexRef.current = clampedIndex;
+
+    // Get current replay timestamp for filtering markers/TP-SL
+    const lastCandle = currentChartData[clampedIndex];
+    const lastVisibleTime = lastCandle.time as number;
+    const currentTimeMs = toUtcTimestamp((lastCandle as any).datetime) * 1000;
+
+    // INCREMENTAL UPDATE for indicators - only setData if count changed
+    const currentIndicatorData = indicatorDataRef.current;
+    indicatorSeriesRefs.current.forEach((series, indicator) => {
+      const indData = currentIndicatorData[indicator];
+      if (!indData) return;
+      
+      const filteredIndData = indData.filter((d) => (d.time as number) <= lastVisibleTime);
+      const prevCount = lastIndicatorCountsRef.current.get(indicator) || 0;
+      
+      // Only update if we have new data points
+      if (filteredIndData.length !== prevCount) {
+        series.setData(filteredIndData);
+        lastIndicatorCountsRef.current.set(indicator, filteredIndData.length);
+      }
+    });
+
+    // INCREMENTAL UPDATE for markers - only setData if count changed
+    const currentMarkers = allTradeMarkersRef.current;
+    const visibleMarkers = currentMarkers
+      .filter((m) => {
+        const markerTimeMs = toUtcTimestamp(m.originalTimestamp) * 1000;
+        return !isNaN(markerTimeMs) && markerTimeMs <= currentTimeMs;
+      })
+      .map(({ originalTimestamp, ...rest }) => rest as SeriesMarker<Time>);
+    
+    if (visibleMarkers.length !== lastMarkerCountRef.current) {
+      markersPluginRef.current?.setMarkers(visibleMarkers);
+      lastMarkerCountRef.current = visibleMarkers.length;
+    }
+
+    // INCREMENTAL UPDATE for TP/SL - only update boxes that are now visible
+    if (showTPSLRef.current && !isNaN(currentTimeMs)) {
+      const visibleData = currentChartData.slice(0, clampedIndex + 1);
+      tpslVisualsRef.current.forEach((visual) => {
+        // Only compute if the trade entry is within visible range
+        if (visual.box.entryTimeMs <= currentTimeMs) {
+          const { tpData, slData, entryData } = computeTpslData(visual.box, visibleData, currentTimeMs);
+          visual.tpArea?.setData(tpData);
+          visual.slArea?.setData(slData);
+          visual.entryLine.setData(entryData);
+        }
+      });
+    }
+  };
+
+  // ===== EFFECT 3A: Internal Replay Timer - runs entirely via refs (no React re-renders) =====
+  useEffect(() => {
+    if (!isReplaying || isPaused) return;
+    
+    const currentChartData = chartDataRef.current;
+    if (currentChartData.length === 0) return;
+
+    // Guard: if dataset is too small, replay would end immediately
+    if (currentChartData.length <= 1) return;
+    
+    let rafId: number;
+    let lastTickTime = performance.now();
+    const tickIntervalMs = 1000 / replaySpeed;
+    
+    const tick = (now: number) => {
+      const elapsed = now - lastTickTime;
+      
+      if (elapsed >= tickIntervalMs) {
+        lastTickTime = now - (elapsed % tickIntervalMs);
+        
+        // Advance internal index
+        const newIndex = internalIndexRef.current + 1;
+        if (newIndex >= currentChartData.length) {
+          onReplayEnd?.();
+          return;
+        }
+        internalIndexRef.current = newIndex;
+        
+        // Update chart directly (no React)
+        updateChartToIndex(newIndex);
+        
+        // Throttle React sync to 10fps for UI display (every 100ms)
+        if (now - lastSyncTimeRef.current > 100) {
+          lastSyncTimeRef.current = now;
+          onReplayTick?.(newIndex, currentChartData.length);
+        }
+      }
+      
+      rafId = requestAnimationFrame(tick);
+    };
+    
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [isReplaying, isPaused, replaySpeed, onReplayTick, onReplayEnd]);
+
+  // ===== EFFECT 3B: External Seek Handler - responds to slider scrub =====
+  // Track last processed seekIndex to prevent re-applying the same seek
+  const lastSeekIndexRef = useRef<number | undefined>(undefined);
+  
+  useEffect(() => {
+    if (seekToIndex === undefined) return;
+    // Only apply if this is a NEW seek command (different from last processed)
+    if (seekToIndex === lastSeekIndexRef.current) return;
+    
+    lastSeekIndexRef.current = seekToIndex;
+    internalIndexRef.current = seekToIndex;
+    updateChartToIndex(seekToIndex);
+    
+    // Sync display immediately on seek (when paused)
+    if (isPaused) {
+      onReplayTick?.(seekToIndex, chartDataRef.current.length);
+    }
+  }, [seekToIndex, isPaused, onReplayTick]);
+  
+  // Reset lastSeekIndex when exiting replay
+  useEffect(() => {
+    if (!isReplaying) {
+      lastSeekIndexRef.current = undefined;
+    }
+  }, [isReplaying]);
+
+  // Reset incremental tracking refs when entering/exiting replay
+  useEffect(() => {
+    if (isReplaying) {
+      lastMarkerCountRef.current = 0;
+      lastIndicatorCountsRef.current.clear();
+      internalIndexRef.current = 0;
+      lastSyncTimeRef.current = 0;
+    }
+  }, [isReplaying]);
 
   const buyCount = trades.filter((t) => t.ticker === ticker && (t.type === "BUY" || t.type === "RECURRING_BUY")).length;
   const sellCount = trades.filter((t) => t.ticker === ticker && t.type === "SELL").length;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-      className={`rounded-xl border border-border overflow-hidden ${isFullscreen ? '' : 'bg-[#0a0a0a]'}`}
+    <div
+      className={`rounded-xl border border-border overflow-hidden animate-chart-enter ${isFullscreen ? '' : 'bg-[#0a0a0a]'}`}
       style={{ backgroundColor: '#0a0a0a' }}
     >
       <div className="flex items-center justify-between p-4 border-b border-border/50 bg-[#0f0f0f]">
@@ -468,7 +994,7 @@ const CandlestickChart = ({
         </div>
       </div>
       <div ref={chartContainerRef} className="w-full" />
-    </motion.div>
+    </div>
   );
 };
 

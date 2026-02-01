@@ -1,11 +1,25 @@
 import { useState, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
-import { Sliders, Loader2, Trophy, ChevronDown, ChevronUp } from "lucide-react";
+import { 
+  Sliders, Loader2, Trophy, ChevronDown, ChevronUp,
+  ArrowUpDown, Play, Calculator, Check, Info, Zap
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
+import { 
+  Table, TableBody, TableCell, TableHead, 
+  TableHeader, TableRow 
+} from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -16,28 +30,28 @@ interface ParameterOptimizerProps {
   strategyId?: number | null;
   strategyName?: string | null;
   onBestApplied?: (result: BacktestResult, strategy?: { id?: number; name: string }) => void;
+  onApplyParameters?: (dslJson: Record<string, unknown>) => void;
+  onRunBacktest?: (dslJson: Record<string, unknown>) => void;
 }
 
-// Extract optimizable parameters from DSL
+interface ExtractedParameter {
+  value: number;
+  indicator: string | null;
+  displayName: string;
+  paramType: string;
+}
+
+// Extract optimizable parameters from DSL with enhanced display info
 function extractOptimizableParameters(
   node: unknown,
   path = "",
   parentIndicator: string | null = null
-): Record<string, { value: number; indicator: string | null }> {
-  const params: Record<string, { value: number; indicator: string | null }> = {};
-
-  // Capture numeric leaf nodes (skip booleans masquerading as numbers)
-  if (typeof node === "number" && Number.isFinite(node)) {
-    if (path) {
-      params[path] = { value: node, indicator: parentIndicator };
-    }
-    return params;
-  }
+): Record<string, ExtractedParameter> {
+  const params: Record<string, ExtractedParameter> = {};
 
   if (Array.isArray(node)) {
     node.forEach((item, i) => {
-      const itemPath = path ? `${path}[${i}]` : `[${i}]`;
-      Object.assign(params, extractOptimizableParameters(item, itemPath, parentIndicator));
+      Object.assign(params, extractOptimizableParameters(item, `${path}[${i}]`, parentIndicator));
     });
   } else if (typeof node === "object" && node !== null) {
     let currentIndicator = parentIndicator;
@@ -49,6 +63,16 @@ function extractOptimizableParameters(
 
     Object.entries(nodeObj).forEach(([key, value]) => {
       const newPath = path ? `${path}.${key}` : key;
+
+      if (typeof value === "number" && /period|percent|threshold|offset|value|amount/i.test(key)) {
+        params[newPath] = { 
+          value, 
+          indicator: currentIndicator,
+          displayName: getDisplayName(newPath, currentIndicator, key),
+          paramType: key.toLowerCase()
+        };
+      }
+
       Object.assign(params, extractOptimizableParameters(value, newPath, currentIndicator));
     });
   }
@@ -56,39 +80,60 @@ function extractOptimizableParameters(
   return params;
 }
 
-function getDisplayName(paramPath: string, indicator: string | null): string {
-  const parts = paramPath.split(".");
-  const paramName = parts[parts.length - 1];
-
-  if (paramPath.includes(".arg.") && indicator) {
-    return `${indicator} - ${paramName}`;
+function getDisplayName(paramPath: string, indicator: string | null, paramType: string): string {
+  const cleanParamType = paramType.charAt(0).toUpperCase() + paramType.slice(1);
+  
+  if (indicator) {
+    return `${indicator} ${cleanParamType}`;
   }
-
-  return paramName;
+  
+  // Derive from path
+  const parts = paramPath.split(".");
+  const side = parts[0]; // LONG or SHORT
+  const action = parts[1]?.replace(/\[\d+\]/, ""); // OPEN or CLOSE
+  
+  return `${side} ${action} - ${cleanParamType}`;
 }
 
-const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: ParameterOptimizerProps) => {
+function getCleanParamName(rawKey: string): string {
+  // Extract meaningful name from full path like "LONG.OPEN[0].arg.period"
+  const parts = rawKey.split(".");
+  const paramName = parts[parts.length - 1];
+  
+  // Try to find indicator in the path
+  const funcMatch = rawKey.match(/func":"?([A-Z]+)"?/);
+  if (funcMatch) {
+    return `${funcMatch[1]} ${paramName}`;
+  }
+  
+  // Extract from arg structure
+  if (rawKey.includes(".arg.")) {
+    const indicatorPart = parts.find(p => p.includes("["));
+    if (indicatorPart) {
+      return `${indicatorPart.replace(/\[\d+\]/, "")} ${paramName}`;
+    }
+  }
+  
+  return paramName.charAt(0).toUpperCase() + paramName.slice(1);
+}
+
+const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: ParameterOptimizerProps) => {
   const [paramChoices, setParamChoices] = useState<Record<string, ParameterChoice>>({});
+  const [extractedParams, setExtractedParams] = useState<Record<string, ExtractedParameter>>({});
   const [initialBalance, setInitialBalance] = useState(10000);
   const [optimizerResult, setOptimizerResult] = useState<OptimizationResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [completedRuns, setCompletedRuns] = useState(0);
-  const [totalRunsState, setTotalRunsState] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [showAllResults, setShowAllResults] = useState(false);
-  const [runErrors, setRunErrors] = useState<OptimizationResult["errors"]>([]);
-  const [showApplyDialog, setShowApplyDialog] = useState(false);
-  const [applyMode, setApplyMode] = useState<"overwrite" | "new">("overwrite");
-  const [newStrategyName, setNewStrategyName] = useState("");
-  const [applyError, setApplyError] = useState<string | null>(null);
-  const [applying, setApplying] = useState(false);
-  const [strategiesCache, setStrategiesCache] = useState<SavedStrategy[]>([]);
+  const [sortField, setSortField] = useState<"pct_change" | "final_balance" | "num_trades">("pct_change");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [visibleCount, setVisibleCount] = useState(20);
 
   // Extract parameters when DSL changes
   useEffect(() => {
     if (dslJson) {
       const params = extractOptimizableParameters(dslJson);
+      setExtractedParams(params);
       const initialChoices: Record<string, ParameterChoice> = {};
       Object.entries(params).forEach(([param, info]) => {
         initialChoices[param] = { mode: "nochange", indicator: info.indicator || undefined };
@@ -97,15 +142,95 @@ const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }
     }
   }, [dslJson]);
 
+  // Group parameters by indicator
+  const groupedParams = useMemo(() => {
+    const groups: Record<string, Array<[string, ExtractedParameter]>> = {};
+    
+    Object.entries(extractedParams).forEach(([path, param]) => {
+      const groupName = param.indicator || "General";
+      if (!groups[groupName]) groups[groupName] = [];
+      groups[groupName].push([path, param]);
+    });
+    
+    return groups;
+  }, [extractedParams]);
+
+  // Calculate estimated combinations
+  const estimatedCombinations = useMemo(() => {
+    let total = 1;
+    let hasActiveParam = false;
+    
+    Object.entries(paramChoices).forEach(([_, choice]) => {
+      if (choice.mode === "range" && choice.start !== undefined && 
+          choice.end !== undefined && choice.steps) {
+        total *= choice.steps;
+        hasActiveParam = true;
+      } else if (choice.mode === "manual" && choice.values && choice.values.length > 0) {
+        total *= choice.values.length;
+        hasActiveParam = true;
+      } else if (choice.mode === "auto") {
+        total *= 5; // Auto typically tests ~5 values
+        hasActiveParam = true;
+      }
+    });
+    
+    return hasActiveParam ? total : 0;
+  }, [paramChoices]);
+
+  const estimatedTime = useMemo(() => {
+    if (estimatedCombinations === 0) return "—";
+    const seconds = estimatedCombinations * 1.5;
+    if (seconds < 60) return `~${Math.ceil(seconds)} seconds`;
+    const minutes = Math.ceil(seconds / 60);
+    return `~${minutes} minute${minutes > 1 ? "s" : ""}`;
+  }, [estimatedCombinations]);
+
+  // Get range preview values
+  const getRangePreview = (choice: ParameterChoice): number[] => {
+    if (choice.mode !== "range" || choice.start === undefined || choice.end === undefined || !choice.steps || choice.steps < 2) {
+      return [];
+    }
+    
+    const step = (choice.end - choice.start) / (choice.steps - 1);
+    return Array.from({ length: Math.min(choice.steps, 10) }, (_, i) => 
+      Math.round((choice.start! + step * i) * 100) / 100
+    );
+  };
+
+  // Sorted results for leaderboard
+  const sortedResults = useMemo(() => {
+    if (!optimizerResult) return [];
+    
+    return [...optimizerResult.all_backtests].sort((a, b) => {
+      const aVal = a.results[sortField] || 0;
+      const bVal = b.results[sortField] || 0;
+      return sortDirection === "desc" ? bVal - aVal : aVal - bVal;
+    });
+  }, [optimizerResult, sortField, sortDirection]);
+
+  const handleSort = (field: typeof sortField) => {
+    if (field === sortField) {
+      setSortDirection(prev => prev === "desc" ? "asc" : "desc");
+    } else {
+      setSortField(field);
+      setSortDirection("desc");
+    }
+  };
+
   const handleModeChange = (param: string, mode: ParameterChoice["mode"]) => {
+    const currentValue = extractedParams[param]?.value || 0;
+    
     setParamChoices((prev) => {
       const current = prev[param] || {};
       const updated = { ...prev };
 
       if (mode === "manual") {
-        updated[param] = { ...current, mode, values: [0] };
+        updated[param] = { ...current, mode, values: [currentValue] };
       } else if (mode === "range") {
-        updated[param] = { ...current, mode, start: 0, end: 1, steps: 4 };
+        // Smart defaults based on current value
+        const defaultStart = Math.max(1, Math.floor(currentValue * 0.5));
+        const defaultEnd = Math.ceil(currentValue * 2);
+        updated[param] = { ...current, mode, start: defaultStart, end: defaultEnd, steps: 5 };
       } else if (mode === "auto") {
         updated[param] = { ...current, mode: "auto" };
       } else if (mode === "nochange") {
@@ -154,6 +279,19 @@ const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }
     });
   };
 
+  const handleApplyParameters = () => {
+    if (optimizerResult?.best_result?.dsl && onApplyParameters) {
+      onApplyParameters(optimizerResult.best_result.dsl);
+      toast.success("Best parameters applied to strategy!");
+    }
+  };
+
+  const handleRunBestBacktest = () => {
+    if (optimizerResult?.best_result?.dsl && onRunBacktest) {
+      onRunBacktest(optimizerResult.best_result.dsl);
+    }
+  };
+
   const submitOptimizer = async () => {
     if (!dslJson) {
       toast.error("No DSL available. Run a backtest first.");
@@ -163,21 +301,12 @@ const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }
     setLoading(true);
     setError(null);
     setOptimizerResult(null);
-    setRunErrors([]);
-    setCompletedRuns(0);
-    setTotalRunsState(0);
-    setProgress(0);
+    setVisibleCount(20);
 
     try {
       const payload: Record<string, ParameterChoice> = {};
       Object.entries(paramChoices).forEach(([param, choice]) => {
         if (choice.mode !== "nochange") {
-          if (choice.mode === "manual" && (!choice.values || choice.values.length === 0)) {
-            throw new Error(`Add at least one value for ${param}`);
-          }
-          if (choice.mode === "range" && (!choice.steps || choice.steps < 2)) {
-            throw new Error(`Range for ${param} needs at least 2 steps`);
-          }
           payload[param] = choice;
         }
       });
@@ -188,167 +317,20 @@ const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }
         return;
       }
 
-      const start = await api.startOptimizeJob(dslJson, payload, initialBalance);
-      setTotalRunsState(start.total_runs || totalRuns);
-
-      const poll = async () => {
-        if (!start.job_id) return;
-        const status: OptimizerJobStatus = await api.getOptimizeJobStatus(start.job_id);
-        setCompletedRuns(status.completed_runs);
-        setTotalRunsState(status.total_runs);
-        setProgress(status.progress);
-
-        if (status.status === "completed" && status.result) {
-          setOptimizerResult(status.result);
-          setRunErrors(status.result.errors || []);
-          setLoading(false);
-          toast.success("Optimization complete!");
-          return;
-        }
-        if (status.status === "error") {
-          setError(status.error || "Optimizer failed");
-          setLoading(false);
-          return;
-        }
-        window.setTimeout(poll, 1000);
-      };
-
-      poll();
+      const result = await api.optimizeParameters(dslJson, payload, initialBalance);
+      setOptimizerResult(result);
+      toast.success("Optimization complete!");
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Optimizer request failed";
       setError(errorMessage);
       toast.error(errorMessage);
-      setProgress(0);
     } finally {
       setLoading(false);
-      setTimeout(() => setProgress(0), 500);
     }
   };
 
   const activeParams = useMemo(() => {
     return Object.entries(paramChoices).filter(([_, choice]) => choice.mode !== "nochange").length;
-  }, [paramChoices]);
-
-  const ensureStrategies = async () => {
-    if (strategiesCache.length > 0) return strategiesCache;
-    try {
-      const list = await api.fetchStrategies();
-      setStrategiesCache(list);
-      return list;
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unable to load strategies for apply");
-      return [];
-    }
-  };
-
-  const bestDsl = optimizerResult?.best_result?.dsl as Record<string, unknown> | undefined;
-
-  const handleOpenApply = async () => {
-    if (!optimizerResult?.best_result) {
-      toast.error("Run optimizer first");
-      return;
-    }
-    setApplyMode(strategyId ? "overwrite" : "new");
-    setNewStrategyName(strategyName || "");
-    setApplyError(null);
-    await ensureStrategies();
-    setShowApplyDialog(true);
-  };
-
-  const validateName = async (name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) throw new Error("Enter a strategy name");
-    const list = await ensureStrategies();
-    if (list.some((s) => s.name.toLowerCase() === trimmed.toLowerCase())) {
-      throw new Error("A strategy with that name already exists");
-    }
-    return trimmed;
-  };
-
-  const handleApplyBest = async () => {
-    if (!optimizerResult?.best_result || !bestDsl) return;
-    setApplying(true);
-    setApplyError(null);
-
-    try {
-      let chosenName = newStrategyName || strategyName || "";
-      const mode = applyMode;
-
-      if (mode === "new" || (!strategyId && mode === "overwrite")) {
-        chosenName = await validateName(chosenName);
-      }
-
-      const backtestResult = await api.backtestDSLJSON(bestDsl);
-      api.setLastBacktestResult(backtestResult);
-
-      let savedMeta: { id?: number; name: string } | undefined = undefined;
-
-      if (mode === "overwrite") {
-        if (strategyId) {
-          const updated = await api.updateStrategy(strategyId, {
-            name: chosenName || strategyName || undefined,
-            dsl: JSON.stringify(bestDsl, null, 2),
-            dslJson: bestDsl,
-            lastResult: backtestResult,
-          });
-          savedMeta = { id: updated.id, name: updated.name };
-        } else {
-          const created = await api.createStrategy({
-            name: chosenName,
-            dsl: JSON.stringify(bestDsl, null, 2),
-            dslJson: bestDsl,
-            lastResult: backtestResult,
-          });
-          savedMeta = { id: created.id, name: created.name };
-        }
-      } else {
-        const created = await api.createStrategy({
-          name: chosenName,
-          dsl: JSON.stringify(bestDsl, null, 2),
-          dslJson: bestDsl,
-          lastResult: backtestResult,
-        });
-        savedMeta = { id: created.id, name: created.name };
-      }
-
-      onBestApplied?.(backtestResult, savedMeta);
-      toast.success("Best parameters applied to backtest");
-      setShowApplyDialog(false);
-    } catch (err) {
-      setApplyError(err instanceof Error ? err.message : "Failed to apply best result");
-    } finally {
-      setApplying(false);
-    }
-  };
-
-  const setAllToAuto = () => {
-    setParamChoices((prev) => {
-      const next: Record<string, ParameterChoice> = {};
-      Object.entries(prev).forEach(([key, val]) => {
-        next[key] = { ...val, mode: "auto" };
-      });
-      return next;
-    });
-  };
-
-  const totalRuns = useMemo(() => {
-    const active = Object.entries(paramChoices).filter(([_, c]) => c.mode !== "nochange");
-    if (active.length === 0) return 0;
-
-    let total = 1;
-    for (const [, choice] of active) {
-      let count = 0;
-      if (choice.mode === "auto") {
-        count = 3; // auto generates a small neighborhood
-      } else if (choice.mode === "manual") {
-        count = choice.values?.length || 0;
-      } else if (choice.mode === "range") {
-        count = choice.steps || 0;
-      }
-      if (count === 0) return 0;
-      total *= count;
-    }
-    return total;
   }, [paramChoices]);
 
   if (!dslJson) {
@@ -377,172 +359,239 @@ const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }
       transition={{ duration: 0.5 }}
       className="space-y-6"
     >
-      {/* Header */}
+      {/* Configuration Panel */}
       <div className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-3 mb-6">
           <div className="p-2 rounded-lg bg-primary/10 border border-primary/20">
             <Sliders className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h3 className="text-lg font-semibold">Parameter Optimizer</h3>
+            <h3 className="text-lg font-semibold">Parameter Configuration</h3>
             <p className="text-sm text-muted-foreground">
-              Configure parameters to optimize
+              Select parameters to optimize and configure their ranges
             </p>
           </div>
         </div>
 
         {/* Initial Balance */}
-        <div className="mb-6">
-          <Label className="text-sm text-muted-foreground">Initial Balance</Label>
-          <Input
-            type="number"
-            value={initialBalance}
-            onChange={(e) => setInitialBalance(Number(e.target.value))}
-            className="mt-1 w-48 bg-secondary border-border font-mono"
-          />
+        <div className="mb-6 p-4 rounded-lg bg-secondary/20 border border-border">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Initial Balance</Label>
+              <p className="text-xs text-muted-foreground">Starting capital for each backtest</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">$</span>
+              <Input
+                type="number"
+                value={initialBalance}
+                onChange={(e) => setInitialBalance(Number(e.target.value))}
+                className="w-32 bg-secondary border-border font-mono text-right"
+              />
+            </div>
+          </div>
         </div>
 
-        {/* Parameters List */}
-        <ScrollArea className="h-[400px] pr-4">
-          <div className="space-y-4">
-            {Object.entries(paramChoices).map(([param, choice]) => (
-              <div
-                key={param}
-                className="p-4 rounded-lg bg-secondary/30 border border-border"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <Label className="font-medium font-mono text-sm">
-                    {getDisplayName(param, choice.indicator || null)}
-                  </Label>
-                  <Select
-                    value={choice.mode}
-                    onValueChange={(value) => handleModeChange(param, value as ParameterChoice["mode"])}
-                  >
-                    <SelectTrigger className="w-32 h-8 bg-secondary border-border">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="nochange">No Change</SelectItem>
-                      <SelectItem value="auto">Auto</SelectItem>
-                      <SelectItem value="manual">Manual</SelectItem>
-                      <SelectItem value="range">Range</SelectItem>
-                    </SelectContent>
-                  </Select>
+        {/* Grouped Parameters */}
+        <ScrollArea className="h-[350px] pr-4">
+          <div className="space-y-6">
+            {Object.entries(groupedParams).map(([groupName, params]) => (
+              <div key={groupName} className="space-y-3">
+                {/* Group Header */}
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-xs font-semibold px-3 py-1">
+                    <Zap className="h-3 w-3 mr-1" />
+                    {groupName}
+                  </Badge>
+                  <div className="flex-1 h-px bg-border" />
                 </div>
 
-                {choice.mode === "manual" && (
-                  <div className="space-y-2">
-                    {choice.values?.map((val, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          value={val}
-                          onChange={(e) => handleValueChange(param, i, Number(e.target.value))}
-                          className="w-24 h-8 bg-secondary border-border font-mono"
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeManualValue(param, i)}
-                          className="h-8 px-2 text-destructive"
-                        >
-                          −
-                        </Button>
-                      </div>
-                    ))}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => addManualValue(param)}
-                      className="h-8"
+                {/* Parameters in group */}
+                {params.map(([path, param]) => {
+                  const choice = paramChoices[path] || { mode: "nochange" };
+                  
+                  return (
+                    <div
+                      key={path}
+                      className={`p-4 rounded-lg border transition-colors ${
+                        choice.mode !== "nochange" 
+                          ? "bg-primary/5 border-primary/30" 
+                          : "bg-secondary/30 border-border"
+                      }`}
                     >
-                      + Add Value
-                    </Button>
-                  </div>
-                )}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <Label className="font-medium text-sm">
+                            {param.displayName}
+                          </Label>
+                          <Badge variant="secondary" className="text-xs font-mono">
+                            Current: {param.value}
+                          </Badge>
+                        </div>
+                        <Select
+                          value={choice.mode}
+                          onValueChange={(value) => handleModeChange(path, value as ParameterChoice["mode"])}
+                        >
+                          <SelectTrigger className="w-32 h-8 bg-secondary border-border">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="nochange">No Change</SelectItem>
+                            <SelectItem value="auto">Auto</SelectItem>
+                            <SelectItem value="manual">Manual</SelectItem>
+                            <SelectItem value="range">Range</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
 
-                {choice.mode === "range" && (
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Start</Label>
-                      <Input
-                        type="number"
-                        value={choice.start || 0}
-                        onChange={(e) => handleRangeChange(param, "start", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                      />
+                      {choice.mode === "manual" && (
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap gap-2">
+                            {choice.values?.map((val, i) => (
+                              <div key={i} className="flex items-center gap-1">
+                                <Input
+                                  type="number"
+                                  value={val}
+                                  onChange={(e) => handleValueChange(path, i, Number(e.target.value))}
+                                  className="w-20 h-8 bg-secondary border-border font-mono text-center"
+                                />
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => removeManualValue(path, i)}
+                                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                >
+                                  ×
+                                </Button>
+                              </div>
+                            ))}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => addManualValue(path)}
+                              className="h-8 px-3"
+                            >
+                              + Add
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+
+                      {choice.mode === "range" && (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-3 gap-3">
+                            <div>
+                              <Label className="text-xs text-muted-foreground">Start</Label>
+                              <Input
+                                type="number"
+                                value={choice.start || 0}
+                                onChange={(e) => handleRangeChange(path, "start", Number(e.target.value))}
+                                className="h-8 bg-secondary border-border font-mono"
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs text-muted-foreground">End</Label>
+                              <Input
+                                type="number"
+                                value={choice.end || 0}
+                                onChange={(e) => handleRangeChange(path, "end", Number(e.target.value))}
+                                className="h-8 bg-secondary border-border font-mono"
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs text-muted-foreground">Steps</Label>
+                              <Input
+                                type="number"
+                                value={choice.steps || 0}
+                                onChange={(e) => handleRangeChange(path, "steps", Number(e.target.value))}
+                                className="h-8 bg-secondary border-border font-mono"
+                              />
+                            </div>
+                          </div>
+                          
+                          {/* Range Preview Chips */}
+                          {getRangePreview(choice).length > 0 && (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-xs text-muted-foreground">Will test:</span>
+                              {getRangePreview(choice).map((val, i) => (
+                                <Badge key={i} variant="secondary" className="text-xs font-mono px-2 py-0.5">
+                                  {val}
+                                </Badge>
+                              ))}
+                              {choice.steps && choice.steps > 10 && (
+                                <span className="text-xs text-muted-foreground">
+                                  +{choice.steps - 10} more
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {choice.mode === "auto" && (
+                        <p className="text-xs text-muted-foreground">
+                          Will automatically determine optimal range based on current value
+                        </p>
+                      )}
                     </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground">End</Label>
-                      <Input
-                        type="number"
-                        value={choice.end || 0}
-                        onChange={(e) => handleRangeChange(param, "end", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Steps</Label>
-                      <Input
-                        type="number"
-                        value={choice.steps || 0}
-                        onChange={(e) => handleRangeChange(param, "steps", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                      />
-                    </div>
-                  </div>
-                )}
+                  );
+                })}
               </div>
             ))}
           </div>
         </ScrollArea>
 
-        {/* Run Button */}
-        <div className="mt-6 pt-4 border-t border-border">
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-sm text-muted-foreground">
-              <span className="font-mono text-primary">{activeParams}</span> parameters selected
-            </p>
-            <p className="text-sm text-muted-foreground">
-              {totalRunsState || totalRuns ? `${totalRunsState || totalRuns} runs` : "Add values to run"}
-            </p>
-          </div>
+        {/* Estimation Panel */}
+        <div className="mt-6 p-4 rounded-lg bg-secondary/30 border border-border">
           <div className="flex items-center gap-2 mb-3">
-            <Button variant="outline" size="sm" className="w-full" onClick={setAllToAuto}>
-              Set all to Auto
-            </Button>
+            <Calculator className="h-4 w-4 text-primary" />
+            <span className="text-sm font-medium">Optimization Preview</span>
           </div>
+          
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div>
+              <p className="text-2xl font-bold font-mono text-primary">
+                {activeParams}
+              </p>
+              <p className="text-xs text-muted-foreground">Parameters</p>
+            </div>
+            <div>
+              <p className="text-2xl font-bold font-mono">
+                {estimatedCombinations > 0 ? estimatedCombinations.toLocaleString() : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground">Combinations</p>
+            </div>
+            <div>
+              <p className="text-2xl font-bold font-mono">
+                {estimatedTime}
+              </p>
+              <p className="text-xs text-muted-foreground">Est. Time</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Run Button */}
+        <div className="mt-6">
           <Button
-            className="w-full"
+            className="w-full h-12"
+            variant="hero"
             onClick={submitOptimizer}
             disabled={loading || activeParams === 0}
           >
             {loading ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="h-5 w-5 mr-2 animate-spin" />
                 Running Optimizer...
               </>
             ) : (
-              "Run Optimizer"
+              <>
+                <Play className="h-5 w-5 mr-2" />
+                Run Optimizer
+              </>
             )}
           </Button>
-
-          <div className="mt-4">
-            <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-              <span>Progress</span>
-              <span className="font-mono">
-                {completedRuns}/{totalRunsState || totalRuns} ({progress.toFixed(0)}%)
-              </span>
-            </div>
-            <div className="h-2 w-full rounded-full bg-secondary overflow-hidden border border-border">
-              <div
-                className="h-full bg-primary transition-all duration-300"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          </div>
         </div>
       </div>
 
@@ -553,70 +602,122 @@ const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }
         </div>
       )}
 
-      {/* Results */}
+      {/* Results Section */}
       {optimizerResult && (
-        <div className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm space-y-6">
-          {runErrors && runErrors.length > 0 && (
-            <div className="p-3 rounded-lg border border-amber-300/50 bg-amber-100/10 text-amber-600">
-              <p className="text-sm font-semibold mb-1">Some runs failed</p>
-              <ul className="list-disc ml-4 space-y-1 text-xs">
-                {runErrors.slice(0, 3).map((e, i) => (
-                  <li key={i} className="font-mono">
-                    {JSON.stringify(e.params)} → {e.error}
-                  </li>
-                ))}
-                {runErrors.length > 3 && <li className="font-mono">...and {runErrors.length - 3} more</li>}
-              </ul>
-            </div>
-          )}
-          {/* Best Result */}
-          <div className="p-4 rounded-lg bg-success/10 border border-success/30">
-            <div className="flex items-center gap-2 mb-4">
-              <Trophy className="h-5 w-5 text-success" />
-              <h4 className="font-semibold text-success">Best Result</h4>
-              <div className="ml-auto flex items-center gap-2">
-                <Button size="sm" variant="secondary" onClick={handleOpenApply}>
-                  Apply Best
-                </Button>
+        <div className="space-y-6">
+          {/* Winner Card */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="p-6 rounded-xl border-2 border-success/50 bg-gradient-to-br from-success/5 to-success/10"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Trophy className="h-6 w-6 text-success" />
+                <span className="text-lg font-bold text-success">Best Performer</span>
               </div>
+              <Badge variant="outline" className="font-mono">
+                #1 of {optimizerResult.all_backtests.length}
+              </Badge>
             </div>
-
-            <div className="grid grid-cols-3 gap-4 mb-4">
-              <div>
-                <p className="text-xs text-muted-foreground">Return</p>
-                <p className="text-xl font-bold font-mono text-success">
+            
+            {/* Stats Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="text-center p-3 rounded-lg bg-background/50">
+                <p className={`text-2xl font-bold font-mono ${
+                  (optimizerResult.best_result.results.pct_change || 0) >= 0 
+                    ? "text-success" 
+                    : "text-destructive"
+                }`}>
+                  {(optimizerResult.best_result.results.pct_change || 0) >= 0 ? "+" : ""}
                   {optimizerResult.best_result.results.pct_change?.toFixed(2)}%
                 </p>
+                <p className="text-xs text-muted-foreground">Return</p>
               </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Final Balance</p>
-                <p className="text-xl font-bold font-mono">
-                  ${optimizerResult.best_result.results.final_balance?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              <div className="text-center p-3 rounded-lg bg-background/50">
+                <p className="text-2xl font-bold font-mono">
+                  ${optimizerResult.best_result.results.final_balance?.toLocaleString(undefined, { 
+                    minimumFractionDigits: 0, 
+                    maximumFractionDigits: 0 
+                  })}
                 </p>
+                <p className="text-xs text-muted-foreground">Final Balance</p>
               </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Trades</p>
-                <p className="text-xl font-bold font-mono">
+              <div className="text-center p-3 rounded-lg bg-background/50">
+                <p className="text-2xl font-bold font-mono">
                   {optimizerResult.best_result.results.num_trades}
                 </p>
+                <p className="text-xs text-muted-foreground">Trades</p>
+              </div>
+              <div className="text-center p-3 rounded-lg bg-background/50">
+                <p className="text-2xl font-bold font-mono text-primary">
+                  {((optimizerResult.best_result.results.final_balance || 0) / initialBalance * 100 - 100).toFixed(1)}%
+                </p>
+                <p className="text-xs text-muted-foreground">vs Initial</p>
               </div>
             </div>
-
-            <div>
-              <p className="text-xs text-muted-foreground mb-2">Optimized Parameters</p>
-              <pre className="p-3 rounded bg-secondary/50 text-sm font-mono overflow-x-auto">
-                {JSON.stringify(
-                  Object.fromEntries(
-                    Object.entries(optimizerResult.best_result.params).filter(
-                      ([_, val]) => val !== undefined && val !== null
-                    )
-                  ),
-                  null,
-                  2
-                )}
-              </pre>
+            
+            {/* Optimized Parameters */}
+            <div className="mb-6">
+              <p className="text-sm font-medium mb-2">Optimized Parameters</p>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(optimizerResult.best_result.params).map(([key, value]) => (
+                  <Badge key={key} className="font-mono text-sm px-3 py-1.5 bg-primary/20 text-primary border-primary/30">
+                    {getCleanParamName(key)}: {value}
+                  </Badge>
+                ))}
+              </div>
             </div>
-          </div>
+            
+            {/* Action Buttons */}
+            <div className="flex gap-3">
+              <Button 
+                variant="outline" 
+                className="flex-1" 
+                onClick={handleApplyParameters}
+                disabled={!onApplyParameters}
+              >
+                <Check className="h-4 w-4 mr-2" />
+                Apply to Strategy
+              </Button>
+              <Button 
+                variant="hero" 
+                className="flex-1" 
+                onClick={handleRunBestBacktest}
+                disabled={!onRunBacktest}
+              >
+                <Play className="h-4 w-4 mr-2" />
+                Run Full Backtest
+              </Button>
+            </div>
+          </motion.div>
+
+          {/* Top 5 Quick Cards */}
+          {sortedResults.length > 1 && (
+            <div className="grid grid-cols-5 gap-2">
+              {sortedResults.slice(0, 5).map((result, index) => (
+                <motion.div 
+                  key={index}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.05 }}
+                  className={`p-3 rounded-lg border text-center transition-colors ${
+                    index === 0 
+                      ? "border-success/50 bg-success/10" 
+                      : "border-border bg-secondary/20 hover:bg-secondary/30"
+                  }`}
+                >
+                  <p className="text-xs text-muted-foreground mb-1">#{index + 1}</p>
+                  <p className={`text-lg font-bold font-mono ${
+                    (result.results.pct_change || 0) >= 0 ? "text-success" : "text-destructive"
+                  }`}>
+                    {(result.results.pct_change || 0) >= 0 ? "+" : ""}
+                    {result.results.pct_change?.toFixed(1)}%
+                  </p>
+                </motion.div>
+              ))}
+            </div>
+          )}
 
           {/* All Results Toggle */}
           <Button
@@ -627,7 +728,7 @@ const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }
             {showAllResults ? (
               <>
                 <ChevronUp className="h-4 w-4 mr-2" />
-                Hide All Results ({optimizerResult.all_backtests.length})
+                Hide All Results
               </>
             ) : (
               <>
@@ -637,80 +738,127 @@ const ParameterOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }
             )}
           </Button>
 
+          {/* Results Leaderboard Table */}
           {showAllResults && (
-            <ScrollArea className="h-[300px]">
-              <div className="space-y-2">
-                {optimizerResult.all_backtests.map((backtest, index) => (
-                  <div
-                    key={index}
-                    className="p-3 rounded-lg bg-secondary/30 border border-border flex items-center justify-between"
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              className="rounded-xl border border-border overflow-hidden"
+            >
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/30 hover:bg-muted/30">
+                    <TableHead className="w-16">Rank</TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:text-primary transition-colors"
+                      onClick={() => handleSort("pct_change")}
+                    >
+                      <div className="flex items-center gap-1">
+                        Return
+                        <ArrowUpDown className="h-3 w-3" />
+                        {sortField === "pct_change" && (
+                          <span className="text-primary">{sortDirection === "desc" ? "↓" : "↑"}</span>
+                        )}
+                      </div>
+                    </TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:text-primary transition-colors"
+                      onClick={() => handleSort("final_balance")}
+                    >
+                      <div className="flex items-center gap-1">
+                        Final Balance
+                        <ArrowUpDown className="h-3 w-3" />
+                        {sortField === "final_balance" && (
+                          <span className="text-primary">{sortDirection === "desc" ? "↓" : "↑"}</span>
+                        )}
+                      </div>
+                    </TableHead>
+                    <TableHead 
+                      className="cursor-pointer hover:text-primary transition-colors"
+                      onClick={() => handleSort("num_trades")}
+                    >
+                      <div className="flex items-center gap-1">
+                        Trades
+                        <ArrowUpDown className="h-3 w-3" />
+                        {sortField === "num_trades" && (
+                          <span className="text-primary">{sortDirection === "desc" ? "↓" : "↑"}</span>
+                        )}
+                      </div>
+                    </TableHead>
+                    <TableHead className="text-right">Parameters</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sortedResults.slice(0, visibleCount).map((result, index) => (
+                    <TableRow 
+                      key={index}
+                      className={index === 0 && sortField === "pct_change" && sortDirection === "desc" 
+                        ? "bg-success/5" 
+                        : ""
+                      }
+                    >
+                      <TableCell className="font-mono font-bold">
+                        {index === 0 && sortField === "pct_change" && sortDirection === "desc" && (
+                          <Trophy className="h-4 w-4 inline mr-1 text-success" />
+                        )}
+                        #{index + 1}
+                      </TableCell>
+                      <TableCell className={`font-mono font-semibold ${
+                        (result.results.pct_change || 0) >= 0 ? "text-success" : "text-destructive"
+                      }`}>
+                        {(result.results.pct_change || 0) >= 0 ? "+" : ""}
+                        {result.results.pct_change?.toFixed(2)}%
+                      </TableCell>
+                      <TableCell className="font-mono">
+                        ${result.results.final_balance?.toLocaleString(undefined, { 
+                          minimumFractionDigits: 0, 
+                          maximumFractionDigits: 0 
+                        })}
+                      </TableCell>
+                      <TableCell className="font-mono">
+                        {result.results.num_trades}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                                <Info className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="left" className="font-mono text-xs max-w-xs">
+                              <div className="space-y-1">
+                                {Object.entries(result.params).map(([k, v]) => (
+                                  <div key={k} className="flex justify-between gap-4">
+                                    <span className="text-muted-foreground">{getCleanParamName(k)}:</span>
+                                    <span className="font-semibold">{v}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              
+              {/* Load More Button */}
+              {visibleCount < sortedResults.length && (
+                <div className="p-4 text-center border-t border-border">
+                  <Button 
+                    variant="ghost" 
+                    onClick={() => setVisibleCount(prev => prev + 20)}
                   >
-                    <div className="flex items-center gap-4">
-                      <span className="text-muted-foreground font-mono text-sm">#{index + 1}</span>
-                      <span className={`font-mono font-semibold ${backtest.results.pct_change >= 0 ? "text-success" : "text-destructive"}`}>
-                        {backtest.results.pct_change?.toFixed(2)}%
-                      </span>
-                    </div>
-                    <div className="text-sm text-muted-foreground font-mono">
-                      ${backtest.results.final_balance?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
+                    Load More ({sortedResults.length - visibleCount} remaining)
+                  </Button>
+                </div>
+              )}
+            </motion.div>
           )}
         </div>
       )}
-
-      <Dialog open={showApplyDialog} onOpenChange={setShowApplyDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Apply Best Result</DialogTitle>
-            <DialogDescription>
-              Apply the optimized DSL to a backtest and save it as a strategy.
-            </DialogDescription>
-          </DialogHeader>
-
-          <RadioGroup value={applyMode} onValueChange={(v) => setApplyMode(v as "overwrite" | "new")} className="space-y-2">
-            <label className="flex items-center gap-2">
-              <RadioGroupItem value="overwrite" />
-              <span>Overwrite existing strategy {strategyName ? `(${strategyName})` : "(unsaved)"}</span>
-            </label>
-            <label className="flex items-center gap-2">
-              <RadioGroupItem value="new" />
-              <span>Create new strategy</span>
-            </label>
-          </RadioGroup>
-
-          {(applyMode === "new" || (!strategyId && applyMode === "overwrite")) && (
-            <div className="mt-2 space-y-1">
-              <Label className="text-sm">Strategy Name</Label>
-              <Input
-                value={newStrategyName}
-                onChange={(e) => setNewStrategyName(e.target.value)}
-                placeholder="My Optimized Strategy"
-              />
-            </div>
-          )}
-
-          {applyError && <p className="text-xs text-destructive">{applyError}</p>}
-
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="ghost" onClick={() => setShowApplyDialog(false)} disabled={applying}>
-              Cancel
-            </Button>
-            <Button onClick={handleApplyBest} disabled={applying}>
-              {applying ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Applying...
-                </>
-              ) : (
-                "Apply"
-              )}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </motion.div>
   );
 };

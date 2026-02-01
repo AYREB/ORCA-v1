@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Play, Settings2, TrendingUp, Calendar, Clock, Plus, X, 
   ChevronDown, Zap, Target, ArrowUpCircle, ArrowDownCircle,
-  Activity, BarChart3, Save, Info
+  Activity, BarChart3, Save, Info, ChevronRight, FolderOpen, Bookmark,
+  ArrowRight, ArrowLeft, Check, DollarSign
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,9 +16,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { SavedStrategy } from "@/lib/api";
 
 interface BacktestFormProps {
   onRunBacktest: (results: any) => void;
@@ -73,125 +76,42 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [strategyName, setStrategyName] = useState("");
   
-  // Form state
-  const [tickers, setTickers] = useState<string[]>(["AAPL"]);
-  const [executionTF, setExecutionTF] = useState("1h");
-  const [dateStart, setDateStart] = useState("2024-01-01");
-  const [dateEnd, setDateEnd] = useState("2025-01-01");
+  // Step state for two-step flow
+  const [step, setStep] = useState<1 | 2>(1);
+  
+  // Load Strategy dialog state
+  const [showLoadDialog, setShowLoadDialog] = useState(false);
+  const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>([]);
+  
+  // Form state - Step 1: Strategy Definition
   const [side, setSide] = useState("LONG");
   const [blocks, setBlocks] = useState<Record<string, Record<string, { ARGUMENTS: Record<string, any> }>>>({
     LONG: {},
     SHORT: {},
   });
   const { user } = useAuth();
-  // Trade settings state (separate from strategy blocks)
-  const [takeProfitPercent, setTakeProfitPercent] = useState(10);
-  const [stopLossPercent, setStopLossPercent] = useState(6);
-  const [spread, setSpread] = useState(0.001);
-  const [tradeSettingsOpen, setTradeSettingsOpen] = useState(false);
+
   
   // Multi-condition state
   const [conditionGroups, setConditionGroups] = useState<Record<string, ConditionGroup>>({
     OPEN: { conditions: [] },
     CLOSE: { conditions: [] },
   });
+  
+  // Form state - Step 2: Backtest Configuration
+  const [tickers, setTickers] = useState<string[]>(["AAPL"]);
+  const [executionTF, setExecutionTF] = useState("1h");
+  const [dateStart, setDateStart] = useState("2024-01-01");
+  const [dateEnd, setDateEnd] = useState("2025-01-01");
+  const [initialBalance, setInitialBalance] = useState(10000);
+  
+  // Trade settings state
+  const [takeProfitPercent, setTakeProfitPercent] = useState(10);
+  const [stopLossPercent, setStopLossPercent] = useState(6);
+  const [spread, setSpread] = useState(0.001);
+  const [tradeSettingsOpen, setTradeSettingsOpen] = useState(false);
 
-  const lastHydratedKey = useRef<string | null>(null);
-
-  // Keep parent consumers in sync with current DSL while editing
-  useEffect(() => {
-    if (!onDslChange) return;
-    const dsl = buildJsonDsl();
-    onDslChange(dsl, JSON.stringify(dsl, null, 2));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tickers,  executionTF, dateStart, dateEnd, blocks, conditionGroups, side]);
-
-  // Hydrate form from an existing DSL JSON
-  useEffect(() => {
-    if (!initialDslJson || Object.keys(initialDslJson).length === 0) return;
-
-    const hydrateKey = JSON.stringify(initialDslJson);
-    if (hydrateKey === lastHydratedKey.current) return;
-    lastHydratedKey.current = hydrateKey;
-
-    const sideKey = Object.keys(initialDslJson)[0] as "LONG" | "SHORT";
-    const sideData = initialDslJson[sideKey];
-    if (!sideData) return;
-
-    setSide(sideKey);
-
-    const context = sideData.context || {};
-    setTickers(context.tickers || ["AAPL"]);
-    setExecutionTF(context.execution_timeframe || "");
-    setDateStart(context.dateframe?.start || "2024-01-01");
-    setDateEnd(context.dateframe?.end || "2025-01-01");
-
-    const newBlocks: Record<string, { ARGUMENTS: Record<string, any> }> = {};
-    const newConditionGroups: Record<string, ConditionGroup> = {};
-
-    const parseSideValue = (val: any): ConditionSide => {
-      if (val && typeof val === "object" && "value" in val) {
-        return { type: "value", value: val.value, func: "", args: {} };
-      }
-      return {
-        type: "indicator",
-        func: val?.func || "",
-        value: 0,
-        args: val?.arg || {},
-      };
-    };
-
-    const parseConditions = (obj: any): SingleCondition[] => {
-      if (!obj || Object.keys(obj).length === 0) return [];
-
-      const groups: any[] = [];
-
-      if (obj.OR) {
-        groups.push(...obj.OR);
-      } else {
-        groups.push(obj);
-      }
-
-      const all: SingleCondition[] = [];
-
-      groups.forEach((group, groupIdx) => {
-        const conditionsArray = group.AND
-          ? group.AND
-          : group.left
-            ? [group]
-            : [];
-
-        conditionsArray.forEach((cond: any, idx: number) => {
-          const isLastInGroup = idx === conditionsArray.length - 1;
-          const hasMoreGroups = groupIdx < groups.length - 1;
-
-          all.push({
-            id: generateId(),
-            left: parseSideValue(cond.left),
-            operator: cond.operator || "==",
-            right: parseSideValue(cond.right),
-            nextLogicalOperator: !isLastInGroup ? "AND" : hasMoreGroups ? "OR" : "AND",
-          });
-        });
-      });
-
-      return all;
-    };
-
-    Object.entries(sideData).forEach(([blockName, blockData]) => {
-      if (blockName === "context") return;
-      const typedBlock = blockData as any;
-      newBlocks[blockName] = { ARGUMENTS: typedBlock.ARGUMENTS || {} };
-      newConditionGroups[blockName] = {
-        conditions: parseConditions(typedBlock.CONDITIONS || {}),
-      };
-    });
-
-    setBlocks((prev) => ({ ...prev, [sideKey]: newBlocks }));
-    setConditionGroups((prev) => ({ ...prev, ...newConditionGroups }));
-  }, [initialDslJson]);
-
-  // Fetch registry on mount
+  // Fetch registry and saved strategies on mount
   useEffect(() => {
     const fetchRegistry = async () => {
       try {
@@ -239,7 +159,185 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
       }
     };
     fetchRegistry();
+    const fetchStrategies = async () => {
+      try {
+        const strategies = await api.fetchStrategies();
+        setSavedStrategies(strategies);
+      } catch (err) {
+        console.error("Failed to fetch strategies:", err);
+        toast.error("Failed to load saved strategies");
+      }
+    };
+    
+    fetchStrategies();
+    
   }, []);
+
+  // DSL Parser functions for Load Strategy feature
+  const parseSideObj = (sideObj: any): ConditionSide => {
+    // Check for arithmetic operation wrapper
+    if (sideObj.op) {
+      const base = sideObj.left;
+      return {
+        type: base.func ? "indicator" : "value",
+        value: base.value || 0,
+        func: base.func || "",
+        args: base.arg || {},
+        operation: {
+          operator: sideObj.op,
+          operand: sideObj.right?.value || 0
+        }
+      };
+    }
+    
+    // Indicator
+    if (sideObj.func) {
+      return {
+        type: "indicator",
+        value: 0,
+        func: sideObj.func,
+        args: sideObj.arg || {},
+        operation: undefined
+      };
+    }
+    
+    // Literal value
+    return {
+      type: "value",
+      value: sideObj.value || 0,
+      func: "",
+      args: {},
+      operation: undefined
+    };
+  };
+
+  const parseConditions = (conditionsObj: any): SingleCondition[] => {
+    const conditions: SingleCondition[] = [];
+    
+    // Handle empty or invalid
+    if (!conditionsObj || Object.keys(conditionsObj).length === 0) {
+      return conditions;
+    }
+    
+    // Handle single condition (flat structure)
+    if (conditionsObj.left && conditionsObj.operator && conditionsObj.right) {
+      conditions.push({
+        id: generateId(),
+        left: parseSideObj(conditionsObj.left),
+        operator: conditionsObj.operator,
+        right: parseSideObj(conditionsObj.right),
+        nextLogicalOperator: "AND"
+      });
+      return conditions;
+    }
+    
+    // Handle AND array
+    if (conditionsObj.AND) {
+      conditionsObj.AND.forEach((cond: any, i: number) => {
+        conditions.push({
+          id: generateId(),
+          left: parseSideObj(cond.left),
+          operator: cond.operator,
+          right: parseSideObj(cond.right),
+          nextLogicalOperator: i < conditionsObj.AND.length - 1 ? "AND" : "AND"
+        });
+      });
+      return conditions;
+    }
+    
+    // Handle OR array (may contain AND groups)
+    if (conditionsObj.OR) {
+      conditionsObj.OR.forEach((group: any, groupIndex: number) => {
+        if (group.AND) {
+          group.AND.forEach((cond: any, i: number) => {
+            conditions.push({
+              id: generateId(),
+              left: parseSideObj(cond.left),
+              operator: cond.operator,
+              right: parseSideObj(cond.right),
+              nextLogicalOperator: i < group.AND.length - 1 ? "AND" : 
+                (groupIndex < conditionsObj.OR.length - 1 ? "OR" : "AND")
+            });
+          });
+        } else if (group.left && group.operator && group.right) {
+          // Single condition in OR group
+          conditions.push({
+            id: generateId(),
+            left: parseSideObj(group.left),
+            operator: group.operator,
+            right: parseSideObj(group.right),
+            nextLogicalOperator: groupIndex < conditionsObj.OR.length - 1 ? "OR" : "AND"
+          });
+        }
+      });
+      return conditions;
+    }
+    
+    return conditions;
+  };
+
+  const loadStrategyFromDsl = (strategy: SavedStrategy) => {
+    try {
+      const dsl = JSON.parse(strategy.dsl);
+      
+      // Determine side (LONG or SHORT)
+      const detectedSide = dsl.LONG ? "LONG" : dsl.SHORT ? "SHORT" : "LONG";
+      setSide(detectedSide);
+      
+      const sideData = dsl[detectedSide];
+      if (!sideData) {
+        toast.error("Invalid strategy format");
+        return;
+      }
+      
+      // Parse OPEN conditions
+      const newConditionGroups: Record<string, ConditionGroup> = {
+        OPEN: { conditions: [] },
+        CLOSE: { conditions: [] },
+      };
+      
+      const newBlocks: Record<string, Record<string, { ARGUMENTS: Record<string, any> }>> = {
+        LONG: {},
+        SHORT: {},
+      };
+      
+      if (sideData.OPEN?.CONDITIONS) {
+        const openConditions = parseConditions(sideData.OPEN.CONDITIONS);
+        newConditionGroups.OPEN = { conditions: openConditions };
+        newBlocks[detectedSide].OPEN = { ARGUMENTS: sideData.OPEN.ARGUMENTS || {} };
+      }
+      
+      if (sideData.CLOSE?.CONDITIONS) {
+        const closeConditions = parseConditions(sideData.CLOSE.CONDITIONS);
+        newConditionGroups.CLOSE = { conditions: closeConditions };
+        newBlocks[detectedSide].CLOSE = { ARGUMENTS: sideData.CLOSE.ARGUMENTS || {} };
+      }
+      
+      setConditionGroups(newConditionGroups);
+      setBlocks(newBlocks);
+      setStrategyName(strategy.name);
+      
+      toast.success(`Strategy "${strategy.name}" loaded!`);
+      setShowLoadDialog(false);
+    } catch (err) {
+      console.error("Failed to parse strategy:", err);
+      toast.error("Failed to parse strategy");
+    }
+  };
+
+  const formatRelativeDate = (dateString: string): string => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays}d ago`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+    if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+    return `${Math.floor(diffDays / 365)}y ago`;
+  };
 
   const addTicker = () => setTickers([...tickers, ""]);
   const removeTicker = (index: number) => setTickers(tickers.filter((_, i) => i !== index));
@@ -318,7 +416,6 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
       }
       
       // Group consecutive ANDs together, then OR the groups
-      // Example: A AND B OR C AND D = (A AND B) OR (C AND D)
       const orGroups: SingleCondition[][] = [];
       let currentAndGroup: SingleCondition[] = [conditions[0]];
       
@@ -329,14 +426,12 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
         if (cond.nextLogicalOperator === "AND") {
           currentAndGroup.push(nextCond);
         } else {
-          // OR - start new group
           orGroups.push(currentAndGroup);
           currentAndGroup = [nextCond];
         }
       }
-      orGroups.push(currentAndGroup); // Push the last group
+      orGroups.push(currentAndGroup);
       
-      // Build DSL from groups
       const buildGroup = (grp: SingleCondition[]) => {
         if (grp.length === 1) {
           return {
@@ -392,6 +487,96 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
     return dsl;
   };
 
+  // Build strategy-only DSL (for saving - without context)
+  const buildStrategyOnlyDsl = () => {
+    const buildSide = (side: ConditionSide): any => {
+      let base: any;
+      if (side.type === "indicator") {
+        base = { func: side.func, arg: side.args };
+      } else {
+        base = { value: side.value };
+      }
+      
+      if (side.operation && side.operation.operand !== undefined) {
+        return {
+          op: side.operation.operator,
+          left: base,
+          right: { value: side.operation.operand }
+        };
+      }
+      
+      return base;
+    };
+
+    const buildConditions = (group: ConditionGroup): any => {
+      const conditions = group.conditions;
+      if (conditions.length === 0) return {};
+      
+      if (conditions.length === 1) {
+        const cond = conditions[0];
+        return {
+          left: buildSide(cond.left),
+          operator: cond.operator,
+          right: buildSide(cond.right),
+        };
+      }
+      
+      const orGroups: SingleCondition[][] = [];
+      let currentAndGroup: SingleCondition[] = [conditions[0]];
+      
+      for (let i = 0; i < conditions.length - 1; i++) {
+        const cond = conditions[i];
+        const nextCond = conditions[i + 1];
+        
+        if (cond.nextLogicalOperator === "AND") {
+          currentAndGroup.push(nextCond);
+        } else {
+          orGroups.push(currentAndGroup);
+          currentAndGroup = [nextCond];
+        }
+      }
+      orGroups.push(currentAndGroup);
+      
+      const buildGroup = (grp: SingleCondition[]) => {
+        if (grp.length === 1) {
+          return {
+            left: buildSide(grp[0].left),
+            operator: grp[0].operator,
+            right: buildSide(grp[0].right),
+          };
+        }
+        return {
+          AND: grp.map(cond => ({
+            left: buildSide(cond.left),
+            operator: cond.operator,
+            right: buildSide(cond.right),
+          })),
+        };
+      };
+      
+      if (orGroups.length === 1) {
+        return buildGroup(orGroups[0]);
+      }
+      
+      return {
+        OR: orGroups.map(buildGroup),
+      };
+    };
+
+    const dsl: any = {
+      [side]: {},
+    };
+
+    Object.entries(blocks[side]).forEach(([blockName, blockData]) => {
+      dsl[side][blockName] = {
+        CONDITIONS: buildConditions(conditionGroups[blockName] || { conditions: [] }),
+        ARGUMENTS: blockData.ARGUMENTS || {},
+      };
+    });
+
+    return dsl;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -438,6 +623,17 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
     }
   };
 
+  const canProceedToStep2 = () => {
+    // At least one block with at least one condition
+    const hasOpenConditions = conditionGroups.OPEN?.conditions?.length > 0;
+    const hasCloseConditions = conditionGroups.CLOSE?.conditions?.length > 0;
+    return hasOpenConditions || hasCloseConditions;
+  };
+
+  const canRunBacktest = () => {
+    return tickers.filter(Boolean).length > 0;
+  };
+
   if (!registry) {
     return (
       <div className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
@@ -461,450 +657,715 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
         <div className="p-2.5 rounded-lg bg-primary/10 border border-primary/20">
           <Settings2 className="h-5 w-5 text-primary" />
         </div>
-        <div>
+        <div className="flex-1">
           <h3 className="text-lg font-semibold">Strategy Builder</h3>
           <p className="text-sm text-muted-foreground">Build your trading strategy visually</p>
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Context Section */}
-        <div className="p-5 rounded-xl border border-border bg-card/30 space-y-5">
-          <div className="flex items-center gap-2 mb-4">
-            <BarChart3 className="h-4 w-4 text-primary" />
-            <span className="font-medium text-sm">Market Context</span>
+      {/* Progress Bar */}
+      <div className="p-4 rounded-xl border border-border bg-card/30">
+        <div className="flex items-center">
+          {/* Step 1 */}
+          <button
+            type="button"
+            onClick={() => setStep(1)}
+            className="flex flex-col items-center gap-1.5 group"
+          >
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center 
+              transition-all border-2 ${
+              step === 1 
+                ? "bg-primary border-primary text-primary-foreground" 
+                : step > 1 
+                  ? "bg-primary/20 border-primary text-primary"
+                  : "bg-muted border-border text-muted-foreground"
+            }`}>
+              {step > 1 ? <Check className="h-5 w-5" /> : "1"}
+            </div>
+            <span className={`text-xs font-medium ${
+              step === 1 ? "text-primary" : "text-muted-foreground"
+            }`}>
+              Strategy
+            </span>
+          </button>
+          
+          {/* Connecting Line */}
+          <div className="flex-1 h-1 mx-4 bg-border rounded-full relative overflow-hidden">
+            <motion.div 
+              className="absolute inset-y-0 left-0 bg-primary rounded-full"
+              initial={false}
+              animate={{ width: step === 2 ? "100%" : "0%" }}
+              transition={{ duration: 0.3, ease: "easeInOut" }}
+            />
           </div>
           
-          {/* Tickers */}
-          <div className="space-y-3">
-            <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-              <TrendingUp className="h-3.5 w-3.5" />
-              Tickers
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="text-xs">Stock symbols to backtest (e.g., AAPL, MSFT, GOOGL)</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </Label>
-            <div className="flex flex-wrap gap-2">
-              {tickers.map((t, i) => (
-                <div key={i} className="flex items-center gap-1.5 bg-secondary/50 rounded-lg border border-border/50 px-2 py-1">
-                  <Input
-                    value={t}
-                    onChange={(e) => updateTicker(i, e.target.value)}
-                    placeholder="AAPL"
-                    className="w-20 h-7 bg-transparent border-0 p-0 font-mono text-sm focus-visible:ring-0"
-                  />
-                  {i > 0 && (
-                    <button type="button" onClick={() => removeTicker(i)} className="text-muted-foreground hover:text-destructive transition-colors">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-              ))}
-              <Button type="button" variant="ghost" size="sm" onClick={addTicker} className="h-9 px-3 text-xs">
-                <Plus className="h-3.5 w-3.5 mr-1" /> Add
-              </Button>
+          {/* Step 2 */}
+          <button
+            type="button"
+            onClick={() => canProceedToStep2() && setStep(2)}
+            disabled={!canProceedToStep2()}
+            className="flex flex-col items-center gap-1.5 group"
+          >
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center 
+              transition-all border-2 ${
+              step === 2 
+                ? "bg-primary border-primary text-primary-foreground" 
+                : canProceedToStep2()
+                  ? "bg-card border-primary/50 text-primary group-hover:border-primary"
+                  : "bg-muted border-border text-muted-foreground"
+            }`}>
+              2
             </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-              <Clock className="h-3.5 w-3.5" />
-              Execution Timeframe
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="text-xs">The timeframe used to evaluate entry/exit signals</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </Label>
-            <Select value={executionTF} onValueChange={setExecutionTF}>
-              <SelectTrigger className="bg-secondary/50 border-border/50 h-9 w-full max-w-[200px]">
-                <SelectValue placeholder="Select" />
-              </SelectTrigger>
-              <SelectContent>
-                {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
-                  <SelectItem key={tf} value={tf}>{tf}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Date Range */}
-          <div className="space-y-3">
-            <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-              <Calendar className="h-3.5 w-3.5" />
-              Date Range
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="text-xs">Select a preset or choose custom dates for backtesting</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </Label>
-            
-            {/* Date Presets */}
-            <div className="flex flex-wrap gap-2">
-              {[
-                { label: "Last 1M", months: 1 },
-                { label: "Last 3M", months: 3 },
-                { label: "Last 6M", months: 6 },
-                { label: "Last 1Y", months: 12 },
-                { label: "Last 2Y", months: 24 },
-                { label: "Last 5Y", months: 60 },
-              ].map((preset) => {
-                const presetEnd = new Date();
-                const presetStart = new Date();
-                presetStart.setMonth(presetStart.getMonth() - preset.months);
-                const presetStartStr = presetStart.toISOString().split('T')[0];
-                const presetEndStr = presetEnd.toISOString().split('T')[0];
-                const isActive = dateStart === presetStartStr && dateEnd === presetEndStr;
-                
-                return (
-                  <button
-                    key={preset.label}
-                    type="button"
-                    onClick={() => {
-                      setDateStart(presetStartStr);
-                      setDateEnd(presetEndStr);
-                    }}
-                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                      isActive
-                        ? "bg-primary/10 border-primary/40 text-primary"
-                        : "bg-secondary/30 border-border/50 text-muted-foreground hover:border-border hover:text-foreground"
-                    }`}
-                  >
-                    {preset.label}
-                  </button>
-                );
-              })}
-            </div>
-            
-            {/* Custom Date Inputs */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">Start Date</Label>
-                <Input
-                  type="date"
-                  value={dateStart}
-                  onChange={(e) => setDateStart(e.target.value)}
-                  className="bg-secondary/50 border-border/50 h-9"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">End Date</Label>
-                <Input
-                  type="date"
-                  value={dateEnd}
-                  onChange={(e) => setDateEnd(e.target.value)}
-                  className="bg-secondary/50 border-border/50 h-9"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Side */}
-          <div className="space-y-2">
-            <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-              Position Side
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="text-xs">LONG profits when price rises, SHORT profits when price falls</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </Label>
-            <div className="flex gap-2">
-              {Object.keys(registry.commands.COMMANDS).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSide(s)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg border font-medium text-sm transition-all ${
-                    side === s
-                      ? s === "LONG" 
-                        ? "bg-success/10 border-success/40 text-success"
-                        : "bg-destructive/10 border-destructive/40 text-destructive"
-                      : "bg-secondary/30 border-border/50 text-muted-foreground hover:border-border"
-                  }`}
-                >
-                  {s === "LONG" ? <ArrowUpCircle className="h-4 w-4" /> : <ArrowDownCircle className="h-4 w-4" />}
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
+            <span className={`text-xs font-medium ${
+              step === 2 ? "text-primary" : "text-muted-foreground"
+            }`}>
+              Configuration
+            </span>
+          </button>
         </div>
+      </div>
 
-        {/* Trade Settings Section - Collapsible */}
-        <Collapsible open={tradeSettingsOpen} onOpenChange={setTradeSettingsOpen}>
-          <div className="rounded-xl border border-border bg-card/30 overflow-hidden">
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="flex items-center justify-between w-full p-4 hover:bg-secondary/20 transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <Target className="h-4 w-4 text-primary" />
-                  <span className="font-medium text-sm">Trade Settings</span>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <AnimatePresence mode="wait">
+          {/* STEP 1: Strategy Definition */}
+          {step === 1 && (
+            <motion.div
+              key="step1"
+              initial={{ opacity: 0, x: -30 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -30 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className="space-y-4"
+            >
+            {/* Strategy Name */}
+            <div className="p-5 rounded-xl border border-border bg-card/30 space-y-4">
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Strategy Name</Label>
+                <Input
+                  value={strategyName}
+                  onChange={(e) => setStrategyName(e.target.value)}
+                  placeholder="My RSI Strategy"
+                  className="bg-secondary/50 border-border/50 h-9 max-w-sm"
+                />
+              </div>
+              
+              {/* Position Side */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                  Position Side
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                        <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
                       </TooltipTrigger>
-                      <TooltipContent className="max-w-xs">
-                        <p className="text-sm">
-                          Configure take-profit, stop-loss, and spread settings for all positions.
-                        </p>
+                      <TooltipContent>
+                        <p className="text-xs">LONG profits when price rises, SHORT profits when price falls</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                  {!tradeSettingsOpen && (
-                    <span className="text-xs text-muted-foreground ml-2">
-                      TP: {takeProfitPercent}% | SL: {stopLossPercent}% | Spread: {spread}
-                    </span>
+                </Label>
+                <div className="flex gap-2">
+                  {Object.keys(registry.commands.COMMANDS).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setSide(s)}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg border font-medium text-sm transition-all ${
+                        side === s
+                          ? s === "LONG" 
+                            ? "bg-success/10 border-success/40 text-success"
+                            : "bg-destructive/10 border-destructive/40 text-destructive"
+                          : "bg-secondary/30 border-border/50 text-muted-foreground hover:border-border"
+                      }`}
+                    >
+                      {s === "LONG" ? <ArrowUpCircle className="h-4 w-4" /> : <ArrowDownCircle className="h-4 w-4" />}
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Strategy Blocks */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Zap className="h-4 w-4 text-primary" />
+                  <span className="font-medium text-sm">Strategy Blocks</span>
+                </div>
+                <div className="flex gap-2">
+                  {["OPEN", "CLOSE"].map((b) =>
+                    !blocks[side][b] ? (
+                      <Button key={b} type="button" variant="outline" size="sm" onClick={() => addBlock(b)} className="h-8 text-xs">
+                        <Plus className="h-3.5 w-3.5 mr-1" /> {b}
+                      </Button>
+                    ) : null
                   )}
                 </div>
-                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${tradeSettingsOpen ? "rotate-180" : ""}`} />
-              </button>
-            </CollapsibleTrigger>
-            
-            <CollapsibleContent>
-              <div className="px-4 pb-4 space-y-4 border-t border-border/50">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                      <ArrowUpCircle className="h-3.5 w-3.5 text-success" />
-                      Take Profit (%)
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="text-xs">Price increase % to automatically close for profit</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </Label>
-                    <Input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      value={takeProfitPercent}
-                      onChange={(e) => setTakeProfitPercent(parseFloat(e.target.value) || 0)}
-                      className="bg-secondary/50 border-border/50 h-9"
-                      placeholder="10"
-                    />
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                      <ArrowDownCircle className="h-3.5 w-3.5 text-destructive" />
-                      Stop Loss (%)
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="text-xs">Price decrease % to automatically close to limit loss</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </Label>
-                    <Input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      value={stopLossPercent}
-                      onChange={(e) => setStopLossPercent(parseFloat(e.target.value) || 0)}
-                      className="bg-secondary/50 border-border/50 h-9"
-                      placeholder="6"
-                    />
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                      <Activity className="h-3.5 w-3.5 text-warning" />
-                      Spread
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="text-xs">Bid-ask spread cost applied to each trade</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </Label>
-                    <Input
-                      type="number"
-                      step="0.0001"
-                      min="0"
-                      value={spread}
-                      onChange={(e) => setSpread(parseFloat(e.target.value) || 0)}
-                      className="bg-secondary/50 border-border/50 h-9"
-                      placeholder="0.001"
-                    />
-                  </div>
-                </div>
-                
-                <p className="text-xs text-muted-foreground">
-                  Risk/Reward Ratio: <span className="font-mono font-medium text-foreground">{stopLossPercent > 0 ? (takeProfitPercent / stopLossPercent).toFixed(2) : "∞"}</span>
-                </p>
               </div>
-            </CollapsibleContent>
-          </div>
-        </Collapsible>
 
-        {/* Strategy Blocks */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Zap className="h-4 w-4 text-primary" />
-              <span className="font-medium text-sm">Strategy Blocks</span>
-            </div>
-            <div className="flex gap-2">
-              {["OPEN", "CLOSE"].map((b) =>
-                !blocks[side][b] ? (
-                  <Button key={b} type="button" variant="outline" size="sm" onClick={() => addBlock(b)} className="h-8 text-xs">
-                    <Plus className="h-3.5 w-3.5 mr-1" /> {b}
-                  </Button>
-                ) : null
+              <AnimatePresence mode="popLayout">
+                {blockNames.map((block) => (
+                  <motion.div
+                    key={block}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className={`rounded-xl border-2 overflow-hidden ${
+                      block === "OPEN" 
+                        ? "border-success/30 bg-success/5" 
+                        : "border-destructive/30 bg-destructive/5"
+                    }`}
+                  >
+                    {/* Block Header */}
+                    <div className={`flex items-center justify-between px-4 py-3 ${
+                      block === "OPEN" ? "bg-success/10" : "bg-destructive/10"
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        {block === "OPEN" ? (
+                          <Target className={`h-4 w-4 text-success`} />
+                        ) : (
+                          <Activity className={`h-4 w-4 text-destructive`} />
+                        )}
+                        <span className={`font-semibold text-sm ${
+                          block === "OPEN" ? "text-success" : "text-destructive"
+                        }`}>
+                          {block} Position
+                        </span>
+                      </div>
+                      <Button 
+                        type="button" 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => removeBlock(block)}
+                        className="h-7 w-7 p-0 hover:bg-destructive/20 hover:text-destructive"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    <div className="p-4 space-y-4">
+                      {/* Conditions */}
+                      <MultiConditionBuilder
+                        blockName={block}
+                        conditionGroup={conditionGroups[block]}
+                        setConditionGroup={(group) => setConditionGroups({ ...conditionGroups, [block]: group })}
+                        registry={registry}
+                      />
+
+                      {/* Arguments */}
+                      {Object.keys(allowedArgs[block] || {}).length > 0 && (
+                        <div className="space-y-3 pt-3 border-t border-border/30">
+                          <Label className="text-xs uppercase tracking-wider text-muted-foreground">Parameters</Label>
+                          <ArgumentSelector
+                            block={block}
+                            availableArgs={allowedArgs[block] || {}}
+                            currentArgs={blocks[side][block]?.ARGUMENTS || {}}
+                            onChange={(arg, val) => updateArgument(block, arg, val)}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+
+              {blockNames.length === 0 && (
+                <div className="p-8 rounded-xl border border-dashed border-border/50 bg-secondary/20 text-center">
+                  <p className="text-muted-foreground text-sm">Add OPEN and CLOSE blocks to define your strategy</p>
+                </div>
               )}
             </div>
-          </div>
 
-          <AnimatePresence mode="popLayout">
-            {blockNames.map((block) => (
-              <motion.div
-                key={block}
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className={`rounded-xl border-2 overflow-hidden ${
-                  block === "OPEN" 
-                    ? "border-success/30 bg-success/5" 
-                    : "border-destructive/30 bg-destructive/5"
-                }`}
-              >
-                {/* Block Header */}
-                <div className={`flex items-center justify-between px-4 py-3 ${
-                  block === "OPEN" ? "bg-success/10" : "bg-destructive/10"
-                }`}>
-                  <div className="flex items-center gap-2">
-                    {block === "OPEN" ? (
-                      <Target className={`h-4 w-4 text-success`} />
-                    ) : (
-                      <Activity className={`h-4 w-4 text-destructive`} />
-                    )}
-                    <span className={`font-semibold text-sm ${
-                      block === "OPEN" ? "text-success" : "text-destructive"
-                    }`}>
-                      {block} Position
-                    </span>
+            {/* Load Saved Strategy Section */}
+            <div className="p-4 rounded-xl border border-dashed border-border/50 bg-secondary/10">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-muted">
+                    <FolderOpen className="h-4 w-4 text-muted-foreground" />
                   </div>
-                  <Button 
-                    type="button" 
-                    variant="ghost" 
-                    size="sm" 
-                    onClick={() => removeBlock(block)}
-                    className="h-7 w-7 p-0 hover:bg-destructive/20 hover:text-destructive"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
+                  <div>
+                    <p className="text-sm font-medium">Have a saved strategy?</p>
+                    <p className="text-xs text-muted-foreground">Load previous logic to quickly iterate on it</p>
+                  </div>
                 </div>
+                <Dialog open={showLoadDialog} onOpenChange={setShowLoadDialog}>
+                  <DialogTrigger asChild>
+                    <Button type="button" variant="outline" size="sm" className="gap-2">
+                      <FolderOpen className="h-4 w-4" />
+                      Load Strategy
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Load Saved Strategy</DialogTitle>
+                      <DialogDescription>
+                        Select a strategy to load its logic into the builder. You can then modify it or test with different parameters.
+                      </DialogDescription>
+                    </DialogHeader>
+                    
+                    <ScrollArea className="h-[300px] mt-4">
+                      {savedStrategies.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground">
+                          <Bookmark className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                          <p>No saved strategies yet</p>
+                          <p className="text-xs mt-1">Save a strategy first using the Save button</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2 pr-4">
+                          {savedStrategies.map((strategy) => (
+                            <button
+                              key={strategy.id}
+                              type="button"
+                              onClick={() => loadStrategyFromDsl(strategy)}
+                              className="w-full p-3 rounded-lg border border-border 
+                                         hover:border-primary/50 hover:bg-primary/5 
+                                         text-left transition-all"
+                            >
+                              <div className="font-medium">{strategy.name}</div>
+                              <div className="text-xs text-muted-foreground mt-1">
+                                Created {formatRelativeDate(strategy.createdAt)}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </ScrollArea>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </div>
 
-                <div className="p-4 space-y-4">
-                  {/* Conditions */}
-                  <MultiConditionBuilder
-                    blockName={block}
-                    conditionGroup={conditionGroups[block]}
-                    setConditionGroup={(group) => setConditionGroups({ ...conditionGroups, [block]: group })}
-                    registry={registry}
-                  />
+            {/* Step 1 Actions */}
+            <div className="flex gap-3 pt-2">
+              <Button 
+                type="button" 
+                variant="hero" 
+                className="flex-1 h-12 text-base" 
+                disabled={!canProceedToStep2()}
+                onClick={() => setStep(2)}
+              >
+                Configure Backtest
+                <ArrowRight className="h-5 w-5 ml-2" />
+              </Button>
+            </div>
+          </motion.div>
+          )}
 
-                  {/* Arguments */}
-                  {Object.keys(allowedArgs[block] || {}).length > 0 && (
-                    <div className="space-y-3 pt-3 border-t border-border/30">
-                      <Label className="text-xs uppercase tracking-wider text-muted-foreground">Parameters</Label>
-                      <ArgumentSelector
-                        block={block}
-                        availableArgs={allowedArgs[block] || {}}
-                        currentArgs={blocks[side][block]?.ARGUMENTS || {}}
-                        onChange={(arg, val) => updateArgument(block, arg, val)}
-                      />
+          {/* STEP 2: Backtest Configuration */}
+          {step === 2 && (
+            <motion.div
+              key="step2"
+              initial={{ opacity: 0, x: 30 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 30 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className="space-y-4"
+            >
+              {/* Strategy Summary Card */}
+              <motion.div 
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                onClick={() => setStep(1)}
+                className="p-4 rounded-xl border border-primary/30 bg-primary/5 cursor-pointer 
+                           hover:bg-primary/10 hover:border-primary/50 transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2.5 rounded-lg ${
+                      side === "LONG" ? "bg-success/10" : "bg-destructive/10"
+                    }`}>
+                      {side === "LONG" 
+                        ? <ArrowUpCircle className="h-5 w-5 text-success" />
+                        : <ArrowDownCircle className="h-5 w-5 text-destructive" />
+                      }
                     </div>
-                  )}
+                    <div>
+                      <div className="font-semibold flex items-center gap-2">
+                        {strategyName || "Untitled Strategy"}
+                        <Badge variant="outline" className="text-xs">
+                          {side}
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-0.5 max-w-md truncate">
+                        {generateLogicPreview(conditionGroups.OPEN?.conditions || [])}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground 
+                                  group-hover:text-primary transition-colors">
+                    <span>Edit Strategy</span>
+                    <ArrowRight className="h-4 w-4" />
+                  </div>
                 </div>
               </motion.div>
-            ))}
-          </AnimatePresence>
 
-          {blockNames.length === 0 && (
-            <div className="p-8 rounded-xl border border-dashed border-border/50 bg-secondary/20 text-center">
-              <p className="text-muted-foreground text-sm">Add OPEN and CLOSE blocks to define your strategy</p>
-            </div>
-          )}
-        </div>
-
-        <div className="flex gap-3">
-          <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
-            <DialogTrigger asChild>
-              <Button type="button" variant="outline" className="flex-1 h-12">
-                <Save className="h-5 w-5 mr-2" />
-                Save Strategy
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Save Strategy</DialogTitle>
-                <DialogDescription>
-                  Give your strategy a name to save it for later use.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 pt-4">
+              {/* Markets Section */}
+              <div className="p-5 rounded-xl border border-border bg-card/30 space-y-4">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <TrendingUp className="h-4 w-4 text-primary" />
+                  Markets
+                </div>
                 <div className="space-y-2">
-                  <Label htmlFor="strategyName">Strategy Name</Label>
+                  <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                    Tickers
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="text-xs">Enter the stock symbol to backtest against (e.g., AAPL, TSLA)</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {tickers.map((t, i) => (
+                      <div key={i} className="flex items-center gap-1">
+                        <Input
+                          value={t}
+                          onChange={(e) => updateTicker(i, e.target.value)}
+                          placeholder="AAPL"
+                          className="w-24 bg-secondary/50 border-border/50 h-9 text-center font-mono"
+                        />
+                        {tickers.length > 1 && (
+                          <Button type="button" variant="ghost" size="icon" onClick={() => removeTicker(i)} className="h-9 w-9 hover:bg-destructive/20 hover:text-destructive">
+                            <X className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                    <Button type="button" variant="outline" size="sm" onClick={addTicker} className="h-9 gap-1">
+                      <Plus className="h-4 w-4" />
+                      Add
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Timing Section */}
+              <div className="p-5 rounded-xl border border-border bg-card/30 space-y-4">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Clock className="h-4 w-4 text-primary" />
+                  Timing
+                </div>
+                
+                {/* Timeframe */}
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                    Execution Timeframe
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="text-xs">Candle interval for signal evaluation</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </Label>
+                  <Select value={executionTF} onValueChange={setExecutionTF}>
+                    <SelectTrigger className="w-32 bg-secondary/50 border-border/50 h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
+                        <SelectItem key={tf} value={tf}>{tf}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Date Range */}
+                <div className="space-y-3">
+                  <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                    <Calendar className="h-3.5 w-3.5" />
+                    Date Range
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="text-xs">Select a preset or choose custom dates for backtesting</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </Label>
+                  
+                  {/* Date Presets */}
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { label: "1M", months: 1 },
+                      { label: "3M", months: 3 },
+                      { label: "6M", months: 6 },
+                      { label: "1Y", months: 12 },
+                      { label: "2Y", months: 24 },
+                      { label: "5Y", months: 60 },
+                    ].map((preset) => {
+                      const presetEnd = new Date();
+                      const presetStart = new Date();
+                      presetStart.setMonth(presetStart.getMonth() - preset.months);
+                      const presetStartStr = presetStart.toISOString().split('T')[0];
+                      const presetEndStr = presetEnd.toISOString().split('T')[0];
+                      const isActive = dateStart === presetStartStr && dateEnd === presetEndStr;
+                      
+                      return (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => {
+                            setDateStart(presetStartStr);
+                            setDateEnd(presetEndStr);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                            isActive
+                              ? "bg-primary/10 border-primary/40 text-primary"
+                              : "bg-secondary/30 border-border/50 text-muted-foreground hover:border-border hover:text-foreground"
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  
+                  {/* Custom Date Inputs */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">Start Date</Label>
+                      <Input
+                        type="date"
+                        value={dateStart}
+                        onChange={(e) => setDateStart(e.target.value)}
+                        className="bg-secondary/50 border-border/50 h-9"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">End Date</Label>
+                      <Input
+                        type="date"
+                        value={dateEnd}
+                        onChange={(e) => setDateEnd(e.target.value)}
+                        className="bg-secondary/50 border-border/50 h-9"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Account Section */}
+              <div className="p-5 rounded-xl border border-border bg-card/30 space-y-4">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <DollarSign className="h-4 w-4 text-primary" />
+                  Account
+                </div>
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                    Initial Balance ($)
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="text-xs">Starting capital for the backtest simulation</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </Label>
                   <Input
-                    id="strategyName"
-                    value={strategyName}
-                    onChange={(e) => setStrategyName(e.target.value)}
-                    placeholder="My RSI Strategy"
-                    className="bg-secondary border-border"
+                    type="number"
+                    value={initialBalance}
+                    onChange={(e) => setInitialBalance(parseFloat(e.target.value) || 10000)}
+                    className="bg-secondary/50 border-border/50 h-9 w-full max-w-[200px]"
+                    placeholder="10000"
                   />
                 </div>
-                <Button onClick={handleSaveStrategy} className="w-full">
-                  Save
-                </Button>
               </div>
-            </DialogContent>
-          </Dialog>
-          <Button type="submit" variant="hero" className="flex-1 h-12" disabled={loading}>
-            <Play className="h-5 w-5" />
-            {loading ? "Running Backtest..." : "Run Backtest"}
-          </Button>
-        </div>
+
+            {/* Trade Settings Section - Collapsible */}
+            <Collapsible open={tradeSettingsOpen} onOpenChange={setTradeSettingsOpen}>
+              <div className="rounded-xl border border-border bg-card/30 overflow-hidden">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center justify-between w-full p-4 hover:bg-secondary/20 transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Target className="h-4 w-4 text-primary" />
+                      <span className="font-medium text-sm">Trade Settings</span>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            <p className="text-sm">
+                              Configure take-profit, stop-loss, and spread settings for all positions.
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      {!tradeSettingsOpen && (
+                        <span className="text-xs text-muted-foreground ml-2">
+                          TP: {takeProfitPercent}% | SL: {stopLossPercent}% | Spread: {spread}
+                        </span>
+                      )}
+                    </div>
+                    <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${tradeSettingsOpen ? "rotate-180" : ""}`} />
+                  </button>
+                </CollapsibleTrigger>
+                
+                <CollapsibleContent>
+                  <div className="px-4 pb-4 space-y-4 border-t border-border/50">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
+                      <div className="space-y-2">
+                        <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                          <ArrowUpCircle className="h-3.5 w-3.5 text-success" />
+                          Take Profit (%)
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-xs">Price increase % to automatically close for profit</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          value={takeProfitPercent}
+                          onChange={(e) => setTakeProfitPercent(parseFloat(e.target.value) || 0)}
+                          className="bg-secondary/50 border-border/50 h-9"
+                          placeholder="10"
+                        />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                          <ArrowDownCircle className="h-3.5 w-3.5 text-destructive" />
+                          Stop Loss (%)
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-xs">Price decrease % to automatically close to limit loss</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          value={stopLossPercent}
+                          onChange={(e) => setStopLossPercent(parseFloat(e.target.value) || 0)}
+                          className="bg-secondary/50 border-border/50 h-9"
+                          placeholder="6"
+                        />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                          <Activity className="h-3.5 w-3.5 text-warning" />
+                          Spread
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-xs">Bid-ask spread cost applied to each trade</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </Label>
+                        <Input
+                          type="number"
+                          step="0.0001"
+                          min="0"
+                          value={spread}
+                          onChange={(e) => setSpread(parseFloat(e.target.value) || 0)}
+                          className="bg-secondary/50 border-border/50 h-9"
+                          placeholder="0.001"
+                        />
+                      </div>
+                    </div>
+                    
+                    <p className="text-xs text-muted-foreground">
+                      Risk/Reward Ratio: <span className="font-mono font-medium text-foreground">{stopLossPercent > 0 ? (takeProfitPercent / stopLossPercent).toFixed(2) : "∞"}</span>
+                    </p>
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+
+            {/* Step 2 Actions */}
+            <div className="flex gap-3 pt-2">
+              <Button 
+                type="button" 
+                variant="outline" 
+                className="h-12 px-6"
+                onClick={() => setStep(1)}
+              >
+                <ArrowLeft className="h-5 w-5 mr-2" />
+                Back
+              </Button>
+                            {/* Save Strategy Dialog */}
+                            <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+                <DialogTrigger asChild>
+                  <Button type="button" variant="outline" className="h-12 px-6" disabled={!canRunBacktest()}>
+                    <Save className="h-5 w-5 mr-2" />
+                    Save
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Save Strategy</DialogTitle>
+                    <DialogDescription>
+                      Save your complete strategy including logic and market configuration for later use.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 pt-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="strategyName">Strategy Name</Label>
+                      <Input
+                        id="strategyName"
+                        value={strategyName}
+                        onChange={(e) => setStrategyName(e.target.value)}
+                        placeholder="My RSI Strategy"
+                        className="bg-secondary border-border"
+                      />
+                    </div>
+                    <Button onClick={handleSaveStrategy} className="w-full">
+                      Save Strategy
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+              <Button type="submit" variant="hero" className="flex-1 h-12 text-base" disabled={loading || !canRunBacktest()}>
+                {loading ? (
+                  <>Running Backtest...</>
+                ) : (
+                  <>
+                    <Play className="h-5 w-5 mr-2" />
+                    Run Backtest
+                  </>
+                )}
+              </Button>
+            </div>
+          </motion.div>
+          )}
+        </AnimatePresence>
       </form>
     </motion.div>
   );
@@ -1008,111 +1469,84 @@ function MultiConditionBuilder({
   const visualGroups = computeVisualGroups(conditionGroup.conditions);
   const logicPreview = generateLogicPreview(conditionGroup.conditions);
 
-  // Find the original index of a condition for toggling
-  const getOriginalIndex = (cond: SingleCondition) => {
-    return conditionGroup.conditions.findIndex(c => c.id === cond.id);
-  };
-
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <Label className="text-xs uppercase tracking-wider text-muted-foreground">Conditions</Label>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Info className="h-4 w-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-xs">
-              <p className="text-sm">
-                <strong>AND</strong> conditions are grouped together and evaluated first. 
-                <strong> OR</strong> connects these groups.
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Example: A AND B OR C = (A AND B) OR C
-              </p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      </div>
-
-      <div className="space-y-3">
+      <div className="space-y-2">
         <AnimatePresence mode="popLayout">
           {visualGroups.map((group, groupIndex) => (
             <motion.div
-              key={`group-${groupIndex}-${group[0]?.id}`}
+              key={`group-${groupIndex}`}
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-            >
-              {/* Visual Group Box */}
-              <div className={`relative rounded-lg p-3 ${
+              className={`${
                 visualGroups.length > 1 
-                  ? "border border-primary/30 bg-primary/5" 
+                  ? `p-3 rounded-lg border ${isOpen ? "border-primary/30 bg-primary/5" : "border-primary/30 bg-primary/5"}`
                   : ""
-              }`}>
-                {/* Group Label */}
-                {visualGroups.length > 1 && (
-                  <span className="absolute -top-2 left-3 text-[10px] bg-card px-1.5 text-muted-foreground font-medium">
-                    Group {groupIndex + 1}
-                  </span>
-                )}
-                
-                <div className="space-y-2">
-                  {group.map((cond, indexInGroup) => {
-                    const originalIndex = getOriginalIndex(cond);
-                    const isLastInGroup = indexInGroup === group.length - 1;
-                    const isLastConditionOverall = originalIndex === conditionGroup.conditions.length - 1;
-                    
-                    return (
-                      <div key={cond.id}>
-                        <ConditionRow
-                          condition={cond}
-                          onChange={(updated) => updateCondition(cond.id, updated)}
-                          onRemove={() => removeCondition(cond.id)}
-                          registry={registry}
-                          accentColor={isOpen ? "success" : "destructive"}
-                        />
-                        
-                        {/* AND toggle within group (not for last in group) */}
-                        {!isLastInGroup && (
-                          <div className="flex items-center justify-center py-2">
-                            <div className="flex-1 h-px bg-primary/20" />
-                            <button
-                              type="button"
-                              onClick={() => toggleConditionOperator(cond.id)}
-                              className="mx-3 px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer hover:scale-105 bg-primary/20 text-primary border border-primary/30"
-                            >
-                              AND
-                            </button>
-                            <div className="flex-1 h-px bg-primary/20" />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              
-              {/* OR separator between groups */}
-              {groupIndex < visualGroups.length - 1 && (
-                <div className="flex items-center justify-center py-3">
-                  <div className="flex-1 h-0.5 bg-warning/30" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // Toggle the last condition in this group to OR/AND
-                      const lastCondInGroup = group[group.length - 1];
-                      toggleConditionOperator(lastCondInGroup.id);
-                    }}
-                    className="mx-4 px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer hover:scale-105 bg-warning/20 text-warning border-2 border-warning/40 shadow-sm"
-                  >
-                    OR
-                  </button>
-                  <div className="flex-1 h-0.5 bg-warning/30" />
+              }`}
+            >
+              {visualGroups.length > 1 && (
+                <div className="text-[10px] uppercase text-muted-foreground font-medium mb-2 tracking-wider">
+                  Group {groupIndex + 1}
                 </div>
               )}
+              
+              <div className="space-y-2">
+                {group.map((cond, indexInGroup) => {
+                  const originalIndex = conditionGroup.conditions.findIndex(c => c.id === cond.id);
+                  const isLastInGroup = indexInGroup === group.length - 1;
+                  const isLastConditionOverall = originalIndex === conditionGroup.conditions.length - 1;
+                  
+                  return (
+                    <div key={cond.id}>
+                      <ConditionRow
+                        condition={cond}
+                        onChange={(updated) => updateCondition(cond.id, updated)}
+                        onRemove={() => removeCondition(cond.id)}
+                        registry={registry}
+                        accentColor={isOpen ? "success" : "destructive"}
+                      />
+                      
+                      {/* AND toggle within group (not for last in group) */}
+                      {!isLastInGroup && (
+                        <div className="flex items-center justify-center py-2">
+                          <div className="flex-1 h-px bg-primary/20" />
+                          <button
+                            type="button"
+                            onClick={() => toggleConditionOperator(cond.id)}
+                            className="mx-3 px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer hover:scale-105 bg-primary/20 text-primary border border-primary/30"
+                          >
+                            AND
+                          </button>
+                          <div className="flex-1 h-px bg-primary/20" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </motion.div>
           ))}
+          
+          {/* OR separators between groups */}
+          {visualGroups.length > 1 && visualGroups.map((group, groupIndex) => {
+            if (groupIndex >= visualGroups.length - 1) return null;
+            const lastCondInGroup = group[group.length - 1];
+            
+            return (
+              <div key={`or-${groupIndex}`} className="flex items-center justify-center py-3">
+                <div className="flex-1 h-0.5 bg-warning/30" />
+                <button
+                  type="button"
+                  onClick={() => toggleConditionOperator(lastCondInGroup.id)}
+                  className="mx-4 px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer hover:scale-105 bg-warning/20 text-warning border-2 border-warning/40 shadow-sm"
+                >
+                  OR
+                </button>
+                <div className="flex-1 h-0.5 bg-warning/30" />
+              </div>
+            );
+          })}
         </AnimatePresence>
       </div>
 
