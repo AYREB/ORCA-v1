@@ -13,6 +13,11 @@ import pandas as pd
 from core.data_pulling.datapull import get_data_with_indicator
 from core.backtesting.backtesterCore import backtester
 from core.fetcher_calculators.indicatorEvaluator import build_indicator_functions
+from core.parsing.extractingTickers import collect_timeframes_from_dsl, extract_execution_timeframe
+from core.main import apply_default_arguments
+from core.main import merge_indicator_defaults
+from core.parsing.validateParsedDSL import validate_parsed_dsl
+
 
 
 def _set_value_by_path(dsl, path, value):
@@ -72,6 +77,7 @@ def _set_value_by_path(dsl, path, value):
 # ---------------- DSL Parameter Utilities ----------------
 
 def extract_optimizable_parameters(parsed_dsl):
+    
     """
     Automatically finds numeric parameters inside the DSL (ints/floats, excluding
     booleans) and returns a dict of {dot_path: value}.
@@ -200,9 +206,8 @@ def backtester_wrapper(parsed_dsl, data_dict, INDICATOR_FUNCTIONS, initial_balan
     except IndexError as e:
         raise ValueError(f"Backtester failed (likely due to insufficient data or offset/window too large): {e}")
 
-    final_value = cash + sum(
-        positions[t] * trade_log[-1]["price"] for t in positions if positions[t] > 0
-    )
+    final_value = initial_balance * (1 + pct_change / 100)
+
     return {
         "pct_change": float(pct_change),
         "final_balance": float(final_value),
@@ -316,6 +321,10 @@ def optimizer(
         - all_backtests: list of dicts {dsl, params, results}
         - best_result: dict {dsl, params, results}
     """
+    parsed_dsl = apply_default_arguments(parsed_dsl)
+    parsed_dsl = merge_indicator_defaults(parsed_dsl)
+    validate_parsed_dsl(parsed_dsl)
+
     # ---------------- Load indicator definitions ----------------
     current_dir = os.path.dirname(__file__)  # directory of this file
     registry_path = os.path.join(current_dir, "../registries/indicatorRegistry.json")
@@ -327,7 +336,8 @@ def optimizer(
 
     # ---------------- Define tickers, timeframes, dates ----------------
     TICKERS = parsed_dsl["LONG"]["context"]["tickers"]
-    DATA_TFS = parsed_dsl["LONG"]["context"]["data_timeframes"]
+    Execution_timeframe = parsed_dsl["LONG"]["context"]["execution_timeframe"]
+    DATA_TFS = collect_timeframes_from_dsl(parsed_dsl, Execution_timeframe)
     start_date = parsed_dsl["LONG"]["context"]["dateframe"]["start"]
     end_date = parsed_dsl["LONG"]["context"]["dateframe"]["end"]
 
@@ -404,6 +414,10 @@ def genetic_optimizer(
         "elite_size": int
     }
     """
+    parsed_dsl = apply_default_arguments(parsed_dsl)
+    parsed_dsl = merge_indicator_defaults(parsed_dsl)
+    validate_parsed_dsl(parsed_dsl)
+
     ga = ga_settings or {}
     population_size = int(ga.get("population", 20))
     generations = int(ga.get("generations", 10))
@@ -420,7 +434,8 @@ def genetic_optimizer(
     INDICATOR_FUNCTIONS = build_indicator_functions(INDICATORS_DEF)
 
     TICKERS = parsed_dsl["LONG"]["context"]["tickers"]
-    DATA_TFS = parsed_dsl["LONG"]["context"]["data_timeframes"]
+    EXECUTION_TF = extract_execution_timeframe(parsed_dsl)
+    DATA_TFS = collect_timeframes_from_dsl(parsed_dsl, EXECUTION_TF)
     start_date = parsed_dsl["LONG"]["context"]["dateframe"]["start"]
     end_date = parsed_dsl["LONG"]["context"]["dateframe"]["end"]
 
