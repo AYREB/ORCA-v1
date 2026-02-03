@@ -145,10 +145,10 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
                   recurring: { default: false },
                   stopLossPercent: { default: 6 },
                   takeProfitPercent: { default: 10 },
-                  recurringPeriod: { default: 5 },
-                  recurringInvestType: { default: "percentCashBalance", options: ["percentCashBalance", "fixedAmount"] },
-                  recurringInvestAmount: { default: 0.1 },
-                  maxRecurringCount: { default: 0 },
+                  recurringPeriod: { default: 5, parent: "recurring" },
+                  recurringInvestType: { default: "percentCashBalance", options: ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"], parent: "recurring" },
+                  recurringInvestAmount: { default: 0.1, parent: "recurring" },
+                  maxRecurringCount: { default: 0, parent: "recurring" },
                 },
                 CLOSE: {},
               },
@@ -476,6 +476,7 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
         args.takeProfitPercent = takeProfitPercent;
         args.stopLossPercent = stopLossPercent;
         args.spread = spread;
+        // recurring settings come from blocks[side]["OPEN"].ARGUMENTS via ArgumentSelector
       }
       
       dsl[side][blockName] = {
@@ -1320,8 +1321,9 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
                 <ArrowLeft className="h-5 w-5 mr-2" />
                 Back
               </Button>
-                            {/* Save Strategy Dialog */}
-                            <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+              
+              {/* Save Strategy Dialog */}
+              <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
                 <DialogTrigger asChild>
                   <Button type="button" variant="outline" className="h-12 px-6" disabled={!canRunBacktest()}>
                     <Save className="h-5 w-5 mr-2" />
@@ -1352,6 +1354,7 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
                   </div>
                 </DialogContent>
               </Dialog>
+              
               <Button type="submit" variant="hero" className="flex-1 h-12 text-base" disabled={loading || !canRunBacktest()}>
                 {loading ? (
                   <>Running Backtest...</>
@@ -1854,7 +1857,7 @@ function ConditionSideEditor({
   );
 }
 
-// Argument Selector Component
+// Argument Selector Component with parent-child support
 function ArgumentSelector({
   block,
   availableArgs,
@@ -1868,69 +1871,126 @@ function ArgumentSelector({
 }) {
   const [addedArgs, setAddedArgs] = useState<string[]>(Object.keys(currentArgs));
 
+  // Get children of a parent arg
+  const getChildren = (parentArg: string) => {
+    return Object.keys(availableArgs).filter(
+      (a) => availableArgs[a]?.parent === parentArg
+    );
+  };
+
   const addArg = (arg: string) => {
     if (!addedArgs.includes(arg)) {
-      setAddedArgs([...addedArgs, arg]);
+      const newArgs = [arg];
       onChange(arg, availableArgs[arg]?.default ?? null);
+      
+      // If this arg has children, also add them with defaults
+      const children = getChildren(arg);
+      children.forEach((child) => {
+        if (!addedArgs.includes(child)) {
+          newArgs.push(child);
+          onChange(child, availableArgs[child]?.default ?? null);
+        }
+      });
+      
+      setAddedArgs([...addedArgs, ...newArgs]);
     }
   };
 
   const removeArg = (arg: string) => {
-    setAddedArgs(addedArgs.filter((a) => a !== arg));
-    onChange(arg, undefined);
+    // Also remove any children of this arg
+    const children = getChildren(arg);
+    const toRemove = [arg, ...children];
+    
+    setAddedArgs(addedArgs.filter((a) => !toRemove.includes(a)));
+    toRemove.forEach((a) => onChange(a, undefined));
   };
 
-  // Filter out TP, SL, and spread from OPEN block since they're managed in Trade Settings
-  const hiddenArgs = ["takeProfitPercent", "stopLossPercent", "spread"];
+  // Check if parent is enabled (value is true)
+  const isParentEnabled = (parentArg: string) => {
+    return currentArgs[parentArg] === true;
+  };
+
+  // Filter out trade settings args from OPEN block since they're managed in Trade Settings
+  const hiddenArgs = [
+    "takeProfitPercent", 
+    "stopLossPercent", 
+    "spread"
+  ];
   const topLevelArgs = Object.keys(availableArgs).filter((a) => !availableArgs[a]?.parent && !hiddenArgs.includes(a));
+
+  // Render a single argument row
+  const renderArgRow = (arg: string, isChild: boolean = false) => {
+    const argData = availableArgs[arg];
+    if (!argData) return null;
+
+    const val = currentArgs[arg] ?? argData.default;
+    const valType = typeof argData.default;
+
+    return (
+      <div 
+        key={arg} 
+        className={`flex items-center gap-2 p-2 rounded-lg bg-background/30 border border-border/30 ${
+          isChild ? "ml-4 border-l-2 border-l-primary/30" : ""
+        }`}
+      >
+        <span className="text-xs text-muted-foreground flex-1 truncate">
+          {isChild && <span className="text-primary/50 mr-1">↳</span>}
+          {arg}
+        </span>
+        {valType === "boolean" ? (
+          <Select value={String(val)} onValueChange={(v) => onChange(arg, v === "true")}>
+            <SelectTrigger className="w-20 h-7 text-xs bg-secondary/50">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="true">true</SelectItem>
+              <SelectItem value="false">false</SelectItem>
+            </SelectContent>
+          </Select>
+        ) : argData.options ? (
+          <Select value={val} onValueChange={(v) => onChange(arg, v)}>
+            <SelectTrigger className="w-36 h-7 text-xs bg-secondary/50">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {argData.options.map((opt: string) => (
+                <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <Input
+            type="number"
+            value={val}
+            onChange={(e) => onChange(arg, parseFloat(e.target.value) || 0)}
+            className="w-20 h-7 text-xs bg-secondary/50"
+          />
+        )}
+        <button type="button" onClick={() => removeArg(arg)} className="text-muted-foreground hover:text-destructive">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-2">
-      {addedArgs.map((arg) => {
-        const argData = availableArgs[arg];
-        if (!argData) return null;
-
-        const val = currentArgs[arg] ?? argData.default;
-        const valType = typeof argData.default;
-
-        return (
-          <div key={arg} className="flex items-center gap-2 p-2 rounded-lg bg-background/30 border border-border/30">
-            <span className="text-xs text-muted-foreground flex-1 truncate">{arg}</span>
-            {valType === "boolean" ? (
-              <Select value={String(val)} onValueChange={(v) => onChange(arg, v === "true")}>
-                <SelectTrigger className="w-20 h-7 text-xs bg-secondary/50">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="true">true</SelectItem>
-                  <SelectItem value="false">false</SelectItem>
-                </SelectContent>
-              </Select>
-            ) : argData.options ? (
-              <Select value={val} onValueChange={(v) => onChange(arg, v)}>
-                <SelectTrigger className="w-36 h-7 text-xs bg-secondary/50">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {argData.options.map((opt: string) => (
-                    <SelectItem key={opt} value={opt}>{opt}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input
-                type="number"
-                value={val}
-                onChange={(e) => onChange(arg, parseFloat(e.target.value) || 0)}
-                className="w-20 h-7 text-xs bg-secondary/50"
-              />
+      {addedArgs
+        .filter((arg) => !availableArgs[arg]?.parent) // Only top-level in main loop
+        .map((arg) => (
+          <div key={arg}>
+            {renderArgRow(arg, false)}
+            
+            {/* Render children if parent is enabled (set to true) */}
+            {isParentEnabled(arg) && (
+              <div className="space-y-2 mt-2">
+                {getChildren(arg)
+                  .filter((child) => addedArgs.includes(child))
+                  .map((child) => renderArgRow(child, true))}
+              </div>
             )}
-            <button type="button" onClick={() => removeArg(arg)} className="text-muted-foreground hover:text-destructive">
-              <X className="h-3.5 w-3.5" />
-            </button>
           </div>
-        );
-      })}
+        ))}
 
       {topLevelArgs.filter((a) => !addedArgs.includes(a)).length > 0 && (
         <Select onValueChange={addArg}>
