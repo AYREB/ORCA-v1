@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Shuffle, TrendingUp, TrendingDown, Target, Percent, Play, Info, Loader2 } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area } from "recharts";
+import { Shuffle, TrendingUp, TrendingDown, Target, Percent, Play, Info, Loader2, ChevronDown, RotateCcw } from "lucide-react";
+import { ComposedChart, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, ReferenceLine } from "recharts";
 import { TradeEntry } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { toast } from "sonner";
 
 interface MonteCarloAnalysisProps {
@@ -15,8 +17,10 @@ interface MonteCarloAnalysisProps {
 }
 
 interface SimulationResults {
-  paths: Array<{ trade: number; [key: string]: number }>;
+  // Combined data with paths + percentile bands merged
+  chartData: Array<{ trade: number; [key: string]: number }>;
   allFinalValues: number[];
+  numSamplePaths: number;
   metrics: {
     expectedReturn: number;
     medianReturn: number;
@@ -32,6 +36,8 @@ interface SimulationResults {
     winRate: number;
     avgWin: number;
     avgLoss: number;
+    numWins: number;
+    numLosses: number;
   };
 }
 
@@ -53,13 +59,32 @@ const extractReturns = (trades: TradeEntry[]): number[] => {
   return returns;
 };
 
+// Calculate percentile from sorted array
+const getPercentile = (sortedArr: number[], p: number): number => {
+  const index = Math.floor((p / 100) * sortedArr.length);
+  return sortedArr[Math.min(index, sortedArr.length - 1)];
+};
+
+// Generate color for path based on final return (red to green gradient)
+const getPathColor = (finalReturn: number, opacity: number = 0.4): string => {
+  // Clamp return between -50% and +100% for color mapping
+  const normalized = Math.max(-50, Math.min(100, finalReturn));
+  // Map to 0-1 range (0 = -50%, 0.33 = 0%, 1 = +100%)
+  const t = (normalized + 50) / 150;
+  
+  // HSL interpolation: red (0) -> yellow (60) -> green (120)
+  const hue = t * 120;
+  return `hsla(${hue}, 70%, 50%, ${opacity})`;
+};
+
 // Run Monte Carlo simulation with cooldown buffer
 const runMonteCarloSimulation = (
   returns: number[],
   numSimulations: number,
   numTradesForward: number,
   cooldownBuffer: number,
-  initialEquity: number = 10000
+  initialEquity: number = 10000,
+  numSamplePaths: number = 500
 ): SimulationResults => {
   const wins = returns.filter(r => r > 0);
   const losses = returns.filter(r => r <= 0);
@@ -69,7 +94,10 @@ const runMonteCarloSimulation = (
 
   const allFinalValues: number[] = [];
   const samplePaths: number[][] = [];
-  const numSamplePaths = 15; // Keep 15 paths for visualization
+  const sampleFinalReturns: number[] = [];
+  
+  // Store all paths for percentile calculation
+  const allPaths: number[][] = [];
 
   for (let sim = 0; sim < numSimulations; sim++) {
     let equity = initialEquity;
@@ -102,12 +130,46 @@ const runMonteCarloSimulation = (
       path.push(equity);
     }
 
+    const finalReturn = ((equity - initialEquity) / initialEquity) * 100;
     allFinalValues.push(equity);
+    allPaths.push(path);
 
-    // Store sample paths for visualization
+    // Store sample paths for visualization (first N paths)
     if (sim < numSamplePaths) {
       samplePaths.push(path);
+      sampleFinalReturns.push(finalReturn);
     }
+  }
+
+  // Calculate percentile bands at each trade step
+  const maxPathLength = numTradesForward + 1;
+
+  // Build combined chart data with paths AND percentile bands
+  const chartData: Array<{ trade: number; [key: string]: number }> = [];
+
+  for (let t = 0; t < maxPathLength; t++) {
+    const valuesAtT = allPaths.map(p => p[Math.min(t, p.length - 1)]).sort((a, b) => a - b);
+    const mean = valuesAtT.reduce((a, b) => a + b, 0) / valuesAtT.length;
+    
+    const point: { trade: number; [key: string]: number } = {
+      trade: t,
+      p5: getPercentile(valuesAtT, 5),
+      p25: getPercentile(valuesAtT, 25),
+      p50: getPercentile(valuesAtT, 50),
+      p75: getPercentile(valuesAtT, 75),
+      p95: getPercentile(valuesAtT, 95),
+      mean,
+    };
+
+    // Add all sample paths to this point
+    samplePaths.forEach((path, i) => {
+      if (t < path.length) {
+        point[`path${i}`] = path[t];
+        point[`pathReturn${i}`] = sampleFinalReturns[i]; // Store final return for coloring
+      }
+    });
+
+    chartData.push(point);
   }
 
   // Calculate metrics
@@ -172,31 +234,10 @@ const runMonteCarloSimulation = (
     distribution.push({ return: bin, frequency: count });
   }
 
-  // Build paths data for chart
-  const maxPathLength = Math.max(...samplePaths.map(p => p.length));
-  const paths: Array<{ trade: number; [key: string]: number }> = [];
-
-  // Calculate mean path
-  for (let t = 0; t < maxPathLength; t++) {
-    const point: { trade: number; [key: string]: number } = { trade: t };
-    
-    // Add sample paths
-    samplePaths.forEach((path, i) => {
-      if (t < path.length) {
-        point[`path${i}`] = path[t];
-      }
-    });
-
-    // Calculate mean across all sample paths at this trade
-    const valuesAtT = samplePaths.filter(p => t < p.length).map(p => p[t]);
-    point.mean = valuesAtT.reduce((a, b) => a + b, 0) / valuesAtT.length;
-
-    paths.push(point);
-  }
-
   return {
-    paths,
+    chartData,
     allFinalValues,
+    numSamplePaths,
     metrics: {
       expectedReturn,
       medianReturn,
@@ -212,6 +253,8 @@ const runMonteCarloSimulation = (
       winRate: winRate * 100,
       avgWin,
       avgLoss,
+      numWins: wins.length,
+      numLosses: losses.length,
     },
   };
 };
@@ -221,19 +264,19 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
   const [numSimulations, setNumSimulations] = useState(10000);
   const [numTradesForward, setNumTradesForward] = useState(100);
   const [cooldownBuffer, setCooldownBuffer] = useState(3);
-  const [excludedReturns, setExcludedReturns] = useState<Set<number>>(new Set());
 
+  // Display settings
+  const [numDisplayPaths, setNumDisplayPaths] = useState<string>("100");
+  const [selectedPath, setSelectedPath] = useState<number | null>(null);
+  const [showExplainer, setShowExplainer] = useState(false);
 
   // Results state
   const [results, setResults] = useState<SimulationResults | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   // Extract returns from trades
-  const returns = useMemo(() => extractReturns(trades), [trades]);const filteredReturns = useMemo(
-    () => returns.filter((_, i) => !excludedReturns.has(i)),
-    [returns, excludedReturns]
-  );
-  
+  const returns = useMemo(() => extractReturns(trades), [trades]);
+
   // Calculate input trade stats
   const tradeStats = useMemo(() => {
     const wins = returns.filter(r => r > 0);
@@ -249,7 +292,7 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
 
   // Run simulation
   const runSimulation = useCallback(() => {
-    if (filteredReturns.length < 2) {
+    if (returns.length < 2) {
       toast.error("Need at least 2 completed trades to run simulation");
       return;
     }
@@ -260,12 +303,15 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
     setTimeout(() => {
       try {
         const result = runMonteCarloSimulation(
-          filteredReturns,
+          returns,
           numSimulations,
           numTradesForward,
-          cooldownBuffer
-        );        
+          cooldownBuffer,
+          10000,
+          500 // Store 500 sample paths for rich visualization
+        );
         setResults(result);
+        setSelectedPath(null);
         toast.success("Monte Carlo simulation complete");
       } catch (err) {
         toast.error("Simulation failed");
@@ -282,6 +328,38 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
       runSimulation();
     }
   }, []); // Only on mount
+
+  // Get number of paths to display
+  const displayPathCount = useMemo(() => {
+    return parseInt(numDisplayPaths) || 50;
+  }, [numDisplayPaths]);
+
+  // Calculate selected path stats
+  const selectedPathStats = useMemo(() => {
+    if (selectedPath === null || !results) return null;
+    
+    const pathData = results.chartData.map(p => p[`path${selectedPath}`]).filter(v => v !== undefined);
+    if (pathData.length === 0) return null;
+
+    const finalValue = pathData[pathData.length - 1];
+    const initialValue = pathData[0];
+    const returnPct = ((finalValue - initialValue) / initialValue) * 100;
+
+    // Calculate max drawdown
+    let peak = initialValue;
+    let maxDrawdown = 0;
+    for (const value of pathData) {
+      peak = Math.max(peak, value);
+      const drawdown = ((peak - value) / peak) * 100;
+      maxDrawdown = Math.max(maxDrawdown, drawdown);
+    }
+
+    return {
+      finalValue,
+      returnPct,
+      maxDrawdown,
+    };
+  }, [selectedPath, results]);
 
   // Format metrics for display
   const mcMetrics = results ? [
@@ -317,6 +395,47 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
           </p>
         </div>
       </div>
+
+      {/* Algorithm Explainer */}
+      <Collapsible open={showExplainer} onOpenChange={setShowExplainer}>
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-foreground w-full justify-start px-3">
+            <Info className="h-4 w-4" />
+            <span>How does this work?</span>
+            <ChevronDown className={`h-4 w-4 ml-auto transition-transform ${showExplainer ? 'rotate-180' : ''}`} />
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="p-4 rounded-lg border border-border bg-muted/30 mt-2"
+          >
+            <h4 className="font-semibold mb-3 text-sm">Monte Carlo Bootstrap Algorithm</h4>
+            <ol className="space-y-2 text-sm text-muted-foreground list-decimal list-inside">
+              <li>
+                <span className="text-foreground">Flip a weighted coin</span> based on your historical win rate ({tradeStats.winRate.toFixed(1)}%)
+              </li>
+              <li>
+                <span className="text-foreground">If WIN:</span> Randomly select from your {returns.filter(r => r > 0).length} historical winning trade returns
+              </li>
+              <li>
+                <span className="text-foreground">If LOSS:</span> Randomly select from your {returns.filter(r => r <= 0).length} historical losing trade returns
+              </li>
+              <li>
+                <span className="text-foreground">Cooldown buffer:</span> Prevents reusing the same return for {cooldownBuffer} consecutive trades
+              </li>
+              <li>
+                <span className="text-foreground">Repeat</span> for {numTradesForward} trades across {numSimulations.toLocaleString()} simulations
+              </li>
+            </ol>
+            <p className="text-xs text-muted-foreground mt-3 pt-3 border-t border-border">
+              This approach preserves the realistic distribution of your actual trade outcomes while exploring many possible future scenarios.
+            </p>
+          </motion.div>
+        </CollapsibleContent>
+      </Collapsible>
 
       {/* Parameter Controls */}
       <motion.div
@@ -432,44 +551,6 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
               <span className="ml-2 font-mono text-destructive">{tradeStats.avgLoss.toFixed(2)}%</span>
             </div>
           </div>
-          <div className="p-4 rounded-xl border border-border bg-card/50">
-            <h4 className="text-sm font-semibold mb-3">
-              Trade Returns (click to exclude)
-            </h4>
-
-            <div className="max-h-[200px] overflow-y-auto space-y-1 text-sm font-mono">
-              {returns.map((r, i) => {
-                const excluded = excludedReturns.has(i);
-
-                return (
-                  <div
-                    key={i}
-                    onClick={() => {
-                      setExcludedReturns(prev => {
-                        const next = new Set(prev);
-                        excluded ? next.delete(i) : next.add(i);
-                        return next;
-                      });
-                    }}
-                    className={`flex justify-between px-2 py-1 rounded cursor-pointer
-                      ${excluded
-                        ? "opacity-40 line-through bg-muted"
-                        : r >= 0
-                          ? "text-success hover:bg-success/10"
-                          : "text-destructive hover:bg-destructive/10"
-                      }`}
-                  >
-                    <span>Trade #{i + 1}</span>
-                    <span>{r >= 0 ? "+" : ""}{r.toFixed(2)}%</span>
-                  </div>
-                );
-              })}
-            </div>
-
-            <p className="mt-2 text-xs text-muted-foreground">
-              Excluded: {excludedReturns.size} / {returns.length}
-            </p>
-          </div>
 
           <Button
             onClick={runSimulation}
@@ -520,74 +601,225 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
             ))}
           </div>
 
-          {/* Simulation Charts */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Simulation Paths */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.2 }}
-              className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
-            >
-              <h4 className="text-md font-semibold mb-4">Simulation Paths (Sample)</h4>
-              <div className="h-[220px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={results.paths}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis
-                      dataKey="trade"
-                      stroke="hsl(var(--muted-foreground))"
-                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                      label={{ value: "Trades", position: "bottom", offset: -5 }}
-                    />
-                    <YAxis
-                      stroke="hsl(var(--muted-foreground))"
-                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                      tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "8px",
-                      }}
-                      formatter={(value: number) => [`$${value.toFixed(0)}`, "Equity"]}
-                    />
-                    {/* Render sample paths */}
-                    {Array.from({ length: 15 }, (_, i) => (
+          {/* Full-Width Simulation Paths Chart */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
+            className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
+          >
+            {/* Chart Header with Controls */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+              <div>
+                <h4 className="text-md font-semibold">Monte Carlo Equity Paths</h4>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {numSimulations.toLocaleString()} simulations, showing {displayPathCount} sample paths
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                {selectedPath !== null && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedPath(null)}
+                    className="gap-1 text-xs"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    Reset Selection
+                  </Button>
+                )}
+                <ToggleGroup
+                  type="single"
+                  value={numDisplayPaths}
+                  onValueChange={(v) => v && setNumDisplayPaths(v)}
+                  className="bg-muted/50 rounded-lg p-1"
+                >
+                  <ToggleGroupItem value="100" className="text-xs px-3 py-1 h-7">
+                    100
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="250" className="text-xs px-3 py-1 h-7">
+                    250
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="500" className="text-xs px-3 py-1 h-7">
+                    All 500
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </div>
+            </div>
+
+            {/* Selected Path Stats */}
+            {selectedPathStats && (
+              <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20 flex items-center gap-6 text-sm">
+                <span className="text-muted-foreground">
+                  Path #{selectedPath}:
+                </span>
+                <span>
+                  <span className="text-muted-foreground">Final: </span>
+                  <span className="font-mono">${selectedPathStats.finalValue.toFixed(0)}</span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">Return: </span>
+                  <span className={`font-mono ${selectedPathStats.returnPct >= 0 ? 'text-success' : 'text-destructive'}`}>
+                    {selectedPathStats.returnPct >= 0 ? '+' : ''}{selectedPathStats.returnPct.toFixed(1)}%
+                  </span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">Max DD: </span>
+                  <span className="font-mono text-destructive">-{selectedPathStats.maxDrawdown.toFixed(1)}%</span>
+                </span>
+              </div>
+            )}
+
+            {/* Main Chart - 500px height for better visualization */}
+            <div className="h-[500px] bg-[#0a0a0a] rounded-lg p-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={results.chartData}>
+                  <defs>
+                    <linearGradient id="band5_95" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.1} />
+                      <stop offset="100%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.02} />
+                    </linearGradient>
+                    <linearGradient id="band25_75" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.2} />
+                      <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0.05} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                  <XAxis
+                    dataKey="trade"
+                    stroke="rgba(255,255,255,0.3)"
+                    tick={{ fill: "rgba(255,255,255,0.5)", fontSize: 11 }}
+                    label={{ value: "Trade #", position: "insideBottom", offset: -5, fill: "rgba(255,255,255,0.5)" }}
+                  />
+                  <YAxis
+                    stroke="rgba(255,255,255,0.3)"
+                    tick={{ fill: "rgba(255,255,255,0.5)", fontSize: 11 }}
+                    tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
+                    domain={['auto', 'auto']}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "hsl(var(--card))",
+                      border: "1px solid hsl(var(--border))",
+                      borderRadius: "8px",
+                    }}
+                    formatter={(value: number, name: string) => {
+                      if (name === 'p95') return [`$${value.toFixed(0)}`, '95th %ile'];
+                      if (name === 'p75') return [`$${value.toFixed(0)}`, '75th %ile'];
+                      if (name === 'p50') return [`$${value.toFixed(0)}`, 'Median'];
+                      if (name === 'p25') return [`$${value.toFixed(0)}`, '25th %ile'];
+                      if (name === 'p5') return [`$${value.toFixed(0)}`, '5th %ile'];
+                      if (name === 'mean') return [`$${value.toFixed(0)}`, 'Mean'];
+                      return [`$${value.toFixed(0)}`, 'Equity'];
+                    }}
+                    labelFormatter={(label) => `Trade ${label}`}
+                  />
+
+                  {/* 5th-95th Percentile Band */}
+                  <Area
+                    type="monotone"
+                    dataKey="p95"
+                    stroke="none"
+                    fill="url(#band5_95)"
+                    fillOpacity={1}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="p5"
+                    stroke="none"
+                    fill="#0a0a0a"
+                    fillOpacity={1}
+                  />
+
+                  {/* 25th-75th Percentile Band */}
+                  <Area
+                    type="monotone"
+                    dataKey="p75"
+                    stroke="none"
+                    fill="url(#band25_75)"
+                    fillOpacity={1}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="p25"
+                    stroke="none"
+                    fill="#0a0a0a"
+                    fillOpacity={1}
+                  />
+
+                  {/* Sample Paths - color coded by final return (red=loss, green=profit) */}
+                  {Array.from({ length: displayPathCount }, (_, i) => {
+                    // Get final return for this path to determine color
+                    const lastPoint = results.chartData[results.chartData.length - 1];
+                    const pathReturn = lastPoint?.[`pathReturn${i}`] ?? 0;
+                    const pathColor = getPathColor(pathReturn, selectedPath === i ? 0.9 : selectedPath !== null ? 0.1 : 0.35);
+                    
+                    return (
                       <Line
                         key={`path${i}`}
                         type="monotone"
                         dataKey={`path${i}`}
-                        stroke={`hsl(var(--primary) / ${0.2 + (i * 0.05)})`}
-                        strokeWidth={1}
+                        stroke={pathColor}
+                        strokeWidth={selectedPath === i ? 2.5 : 1}
                         dot={false}
+                        activeDot={false}
+                        onClick={() => setSelectedPath(i)}
+                        style={{ cursor: 'pointer' }}
                       />
-                    ))}
-                    {/* Mean path */}
-                    <Line
-                      type="monotone"
-                      dataKey="mean"
-                      stroke="hsl(var(--success))"
-                      strokeWidth={2}
-                      dot={false}
-                      name="Mean"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="flex items-center justify-center gap-4 mt-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-0.5 bg-success" />
-                  <span className="text-xs text-muted-foreground">Mean Path</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-0.5 bg-primary/50" />
-                  <span className="text-xs text-muted-foreground">Sample Paths</span>
-                </div>
-              </div>
-            </motion.div>
+                    );
+                  })}
 
+                  {/* Median Line */}
+                  <Line
+                    type="monotone"
+                    dataKey="p50"
+                    stroke="hsl(var(--primary))"
+                    strokeWidth={2}
+                    strokeDasharray="5 5"
+                    dot={false}
+                    name="Median"
+                  />
+
+                  {/* Mean Line */}
+                  <Line
+                    type="monotone"
+                    dataKey="mean"
+                    stroke="#ffffff"
+                    strokeWidth={3}
+                    dot={false}
+                    name="Mean"
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Legend */}
+            <div className="flex flex-wrap items-center justify-center gap-6 mt-4 pt-3 border-t border-border">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-1 bg-white rounded" />
+                <span className="text-xs text-muted-foreground">Mean Path</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 border-t-2 border-dashed border-primary" />
+                <span className="text-xs text-muted-foreground">Median Path</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-3 rounded-sm" style={{ background: 'linear-gradient(to right, #ef4444, #eab308, #22c55e)' }} />
+                <span className="text-xs text-muted-foreground">Paths (Loss → Profit)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-3 bg-primary/20 rounded-sm" />
+                <span className="text-xs text-muted-foreground">25th-75th %ile</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-3 bg-muted-foreground/10 rounded-sm" />
+                <span className="text-xs text-muted-foreground">5th-95th %ile</span>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Secondary Charts Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Return Distribution */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -596,7 +828,7 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
               className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
             >
               <h4 className="text-md font-semibold mb-4">Return Distribution</h4>
-              <div className="h-[220px]">
+              <div className="h-[250px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={results.distribution}>
                     <defs>
@@ -609,12 +841,12 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                     <XAxis
                       dataKey="return"
                       stroke="hsl(var(--muted-foreground))"
-                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
                       tickFormatter={(value) => `${value}%`}
                     />
                     <YAxis
                       stroke="hsl(var(--muted-foreground))"
-                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
                     />
                     <Tooltip
                       contentStyle={{
@@ -624,6 +856,20 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                       }}
                       formatter={(value: number) => [value, "Frequency"]}
                       labelFormatter={(label) => `Return: ${label}%`}
+                    />
+                    {/* VaR line */}
+                    <ReferenceLine
+                      x={Math.round(results.metrics.var95 / 10) * 10}
+                      stroke="hsl(var(--destructive))"
+                      strokeDasharray="3 3"
+                      label={{ value: 'VaR 95%', position: 'top', fill: 'hsl(var(--destructive))', fontSize: 10 }}
+                    />
+                    {/* Median line */}
+                    <ReferenceLine
+                      x={Math.round(results.metrics.medianReturn / 10) * 10}
+                      stroke="hsl(var(--primary))"
+                      strokeDasharray="3 3"
+                      label={{ value: 'Median', position: 'top', fill: 'hsl(var(--primary))', fontSize: 10 }}
                     />
                     <Area
                       type="monotone"
@@ -636,53 +882,48 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                 </ResponsiveContainer>
               </div>
             </motion.div>
-          </div>
 
-          {/* Probability Metrics */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.4 }}
-            className="p-4 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
-          >
-            <h4 className="text-md font-semibold mb-3">Probability Metrics</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {probabilityMetrics.map((metric, index) => (
-                <div key={index} className="text-center">
-                  <p className="text-xs text-muted-foreground mb-1">{metric.label}</p>
-                  <p className="text-lg font-bold font-mono text-primary">{metric.value}</p>
+            {/* Probability Metrics */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.4 }}
+              className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
+            >
+              <h4 className="text-md font-semibold mb-4">Probability Metrics</h4>
+              <div className="grid grid-cols-2 gap-4">
+                {probabilityMetrics.map((metric, index) => (
+                  <div key={index} className="p-4 rounded-lg bg-muted/30 border border-border">
+                    <p className="text-xs text-muted-foreground mb-2">{metric.label}</p>
+                    <p className="text-2xl font-bold font-mono text-primary">{metric.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Additional Stats */}
+              <div className="mt-4 pt-4 border-t border-border">
+                <h5 className="text-sm font-medium mb-3">Simulation Statistics</h5>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Win Rate:</span>
+                    <span className="ml-2 font-mono text-foreground">{results.params.winRate.toFixed(1)}%</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Avg Win:</span>
+                    <span className="ml-2 font-mono text-success">+{results.params.avgWin.toFixed(2)}%</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Avg Loss:</span>
+                    <span className="ml-2 font-mono text-destructive">{results.params.avgLoss.toFixed(2)}%</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Cooldown:</span>
+                    <span className="ml-2 font-mono text-foreground">{cooldownBuffer} trades</span>
+                  </div>
                 </div>
-              ))}
-            </div>
-          </motion.div>
-
-          {/* Computed Statistics */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.5 }}
-            className="p-4 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
-          >
-            <h4 className="text-md font-semibold mb-3">Simulation Statistics</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-              <div>
-                <span className="text-muted-foreground">Win Rate:</span>
-                <span className="ml-2 font-mono text-foreground">{results.params.winRate.toFixed(1)}%</span>
               </div>
-              <div>
-                <span className="text-muted-foreground">Avg Win:</span>
-                <span className="ml-2 font-mono text-success">+{results.params.avgWin.toFixed(2)}%</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Avg Loss:</span>
-                <span className="ml-2 font-mono text-destructive">{results.params.avgLoss.toFixed(2)}%</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Cooldown:</span>
-                <span className="ml-2 font-mono text-foreground">{cooldownBuffer} trades</span>
-              </div>
-            </div>
-          </motion.div>
+            </motion.div>
+          </div>
         </>
       )}
 

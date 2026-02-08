@@ -25,6 +25,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { api, OptimizationResult, ParameterChoice, OptimizerJobStatus, BacktestResult, SavedStrategy } from "@/lib/api";
 
+
 interface ParameterOptimizerProps {
   dslJson: Record<string, unknown> | null;
   strategyId?: number | null;
@@ -128,6 +129,7 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
   const [sortField, setSortField] = useState<"pct_change" | "final_balance" | "num_trades">("pct_change");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [visibleCount, setVisibleCount] = useState(20);
+  const [selectedResultIndex, setSelectedResultIndex] = useState<number>(0);
 
   // Extract parameters when DSL changes
   useEffect(() => {
@@ -279,17 +281,28 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
     });
   };
 
+    // Get the currently selected result
+    const selectedResult = useMemo(() => {
+      if (!sortedResults.length) return null;
+      return sortedResults[selectedResultIndex] || sortedResults[0];
+    }, [sortedResults, selectedResultIndex]);
+  
+
   const handleApplyParameters = () => {
-    if (optimizerResult?.best_result?.dsl && onApplyParameters) {
-      onApplyParameters(optimizerResult.best_result.dsl);
-      toast.success("Best parameters applied to strategy!");
+    if (selectedResult?.dsl && onApplyParameters) {
+      onApplyParameters(selectedResult.dsl);
+      toast.success("Parameters applied to strategy!");
     }
   };
 
-  const handleRunBestBacktest = () => {
-    if (optimizerResult?.best_result?.dsl && onRunBacktest) {
-      onRunBacktest(optimizerResult.best_result.dsl);
+  const handleRunSelectedBacktest = () => {
+    if (selectedResult?.dsl && onRunBacktest) {
+      onRunBacktest(selectedResult.dsl);
     }
+  };
+
+  const handleSelectResult = (index: number) => {
+    setSelectedResultIndex(index);
   };
 
   const submitOptimizer = async () => {
@@ -602,155 +615,149 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
         </div>
       )}
 
-      {/* Results Section */}
+       {/* Results Section */}
       {optimizerResult && (
         <div className="space-y-6">
-          {/* Winner Card */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="p-6 rounded-xl border-2 border-success/50 bg-gradient-to-br from-success/5 to-success/10"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Trophy className="h-6 w-6 text-success" />
-                <span className="text-lg font-bold text-success">Best Performer</span>
-              </div>
-              <Badge variant="outline" className="font-mono">
-                #1 of {optimizerResult.all_backtests.length}
-              </Badge>
-            </div>
-            
-            {/* Stats Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-              <div className="text-center p-3 rounded-lg bg-background/50">
-                <p className={`text-2xl font-bold font-mono ${
-                  (optimizerResult.best_result.results.pct_change || 0) >= 0 
-                    ? "text-success" 
-                    : "text-destructive"
-                }`}>
-                  {(optimizerResult.best_result.results.pct_change || 0) >= 0 ? "+" : ""}
-                  {optimizerResult.best_result.results.pct_change?.toFixed(2)}%
-                </p>
-                <p className="text-xs text-muted-foreground">Return</p>
-              </div>
-              <div className="text-center p-3 rounded-lg bg-background/50">
-                <p className="text-2xl font-bold font-mono">
-                  ${optimizerResult.best_result.results.final_balance?.toLocaleString(undefined, { 
-                    minimumFractionDigits: 0, 
-                    maximumFractionDigits: 0 
-                  })}
-                </p>
-                <p className="text-xs text-muted-foreground">Final Balance</p>
-              </div>
-              <div className="text-center p-3 rounded-lg bg-background/50">
-                <p className="text-2xl font-bold font-mono">
-                  {optimizerResult.best_result.results.num_trades}
-                </p>
-                <p className="text-xs text-muted-foreground">Trades</p>
-              </div>
-              <div className="text-center p-3 rounded-lg bg-background/50">
-                <p className="text-2xl font-bold font-mono text-primary">
-                  {((optimizerResult.best_result.results.final_balance || 0) / initialBalance * 100 - 100).toFixed(1)}%
-                </p>
-                <p className="text-xs text-muted-foreground">vs Initial</p>
-              </div>
-            </div>
-            
-            {/* Optimized Parameters */}
-            <div className="mb-6">
-              <p className="text-sm font-medium mb-2">Optimized Parameters</p>
-              <div className="flex flex-wrap gap-2">
-                {Object.entries(optimizerResult.best_result.params).map(([key, value]) => (
-                  <Badge key={key} className="font-mono text-sm px-3 py-1.5 bg-primary/20 text-primary border-primary/30">
-                    {getCleanParamName(key)}: {value}
+          {/* Selected Result Detail Card */}
+          {selectedResult && (
+            <motion.div
+              key={selectedResultIndex}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className={`p-6 rounded-xl border-2 ${
+                selectedResultIndex === 0 
+                  ? "border-success/50 bg-gradient-to-br from-success/5 to-success/10"
+                  : "border-primary/50 bg-gradient-to-br from-primary/5 to-primary/10"
+              }`}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  {selectedResultIndex === 0 ? (
+                    <>
+                      <Trophy className="h-6 w-6 text-success" />
+                      <span className="text-lg font-bold text-success">Best Performer</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sliders className="h-6 w-6 text-primary" />
+                      <span className="text-lg font-bold text-primary">Result #{selectedResultIndex + 1}</span>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedResultIndex(Math.max(0, selectedResultIndex - 1))}
+                    disabled={selectedResultIndex === 0}
+                    className="h-8 w-8 p-0"
+                  >
+                    <ChevronUp className="h-4 w-4" />
+                  </Button>
+                  <Badge variant="outline" className="font-mono">
+                    #{selectedResultIndex + 1} of {sortedResults.length}
                   </Badge>
-                ))}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedResultIndex(Math.min(sortedResults.length - 1, selectedResultIndex + 1))}
+                    disabled={selectedResultIndex === sortedResults.length - 1}
+                    className="h-8 w-8 p-0"
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-            </div>
-            
-            {/* Action Buttons */}
-            <div className="flex gap-3">
-              <Button 
-                variant="outline" 
-                className="flex-1" 
-                onClick={handleApplyParameters}
-                disabled={!onApplyParameters}
-              >
-                <Check className="h-4 w-4 mr-2" />
-                Apply to Strategy
-              </Button>
-              <Button 
-                variant="hero" 
-                className="flex-1" 
-                onClick={handleRunBestBacktest}
-                disabled={!onRunBacktest}
-              >
-                <Play className="h-4 w-4 mr-2" />
-                Run Full Backtest
-              </Button>
-            </div>
-          </motion.div>
-
-          {/* Top 5 Quick Cards */}
-          {sortedResults.length > 1 && (
-            <div className="grid grid-cols-5 gap-2">
-              {sortedResults.slice(0, 5).map((result, index) => (
-                <motion.div 
-                  key={index}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.05 }}
-                  className={`p-3 rounded-lg border text-center transition-colors ${
-                    index === 0 
-                      ? "border-success/50 bg-success/10" 
-                      : "border-border bg-secondary/20 hover:bg-secondary/30"
-                  }`}
-                >
-                  <p className="text-xs text-muted-foreground mb-1">#{index + 1}</p>
-                  <p className={`text-lg font-bold font-mono ${
-                    (result.results.pct_change || 0) >= 0 ? "text-success" : "text-destructive"
+              
+              {/* Stats Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="text-center p-3 rounded-lg bg-background/50">
+                  <p className={`text-2xl font-bold font-mono ${
+                    (selectedResult.results.pct_change || 0) >= 0 
+                      ? "text-success" 
+                      : "text-destructive"
                   }`}>
-                    {(result.results.pct_change || 0) >= 0 ? "+" : ""}
-                    {result.results.pct_change?.toFixed(1)}%
+                    {(selectedResult.results.pct_change || 0) >= 0 ? "+" : ""}
+                    {selectedResult.results.pct_change?.toFixed(2)}%
                   </p>
-                </motion.div>
-              ))}
-            </div>
+                  <p className="text-xs text-muted-foreground">Return</p>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-background/50">
+                  <p className="text-2xl font-bold font-mono">
+                    ${selectedResult.results.final_balance?.toLocaleString(undefined, { 
+                      minimumFractionDigits: 0, 
+                      maximumFractionDigits: 0 
+                    })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Final Balance</p>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-background/50">
+                  <p className="text-2xl font-bold font-mono">
+                    {selectedResult.results.num_trades}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Trades</p>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-background/50">
+                  <p className="text-2xl font-bold font-mono text-primary">
+                    {((selectedResult.results.final_balance || 0) / initialBalance * 100 - 100).toFixed(1)}%
+                  </p>
+                  <p className="text-xs text-muted-foreground">vs Initial</p>
+                </div>
+              </div>
+              
+              {/* Optimized Parameters */}
+              <div className="mb-6">
+                <p className="text-sm font-medium mb-2">Parameters</p>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(selectedResult.params).map(([key, value]) => (
+                    <Badge key={key} className="font-mono text-sm px-3 py-1.5 bg-primary/20 text-primary border-primary/30">
+                      {getCleanParamName(key)}: {value}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button 
+                  variant="outline" 
+                  className="flex-1" 
+                  onClick={handleApplyParameters}
+                  disabled={!onApplyParameters}
+                >
+                  <Check className="h-4 w-4 mr-2" />
+                  Apply to Strategy
+                </Button>
+                <Button 
+                  variant="hero" 
+                  className="flex-1" 
+                  onClick={handleRunSelectedBacktest}
+                  disabled={!onRunBacktest}
+                >
+                  <Play className="h-4 w-4 mr-2" />
+                  Run Full Backtest
+                </Button>
+              </div>
+            </motion.div>
           )}
 
-          {/* All Results Toggle */}
-          <Button
-            variant="ghost"
-            className="w-full"
-            onClick={() => setShowAllResults(!showAllResults)}
-          >
-            {showAllResults ? (
-              <>
-                <ChevronUp className="h-4 w-4 mr-2" />
-                Hide All Results
-              </>
-            ) : (
-              <>
-                <ChevronDown className="h-4 w-4 mr-2" />
-                Show All Results ({optimizerResult.all_backtests.length})
-              </>
-            )}
-          </Button>
-
           {/* Results Leaderboard Table */}
-          {showAllResults && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              className="rounded-xl border border-border overflow-hidden"
-            >
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            className="rounded-xl border border-border overflow-hidden"
+          >
+            <div className="p-4 bg-muted/30 border-b border-border">
+              <h4 className="font-semibold">All Results ({sortedResults.length})</h4>
+              <p className="text-sm text-muted-foreground">Click a row to view details</p>
+            </div>
+            <ScrollArea className="h-[400px]">
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-muted/30 hover:bg-muted/30">
-                    <TableHead className="w-16">Rank</TableHead>
+                  <TableRow className="bg-muted/20 hover:bg-muted/20">
+                    <TableHead className="w-16 sticky top-0 bg-muted/20">Rank</TableHead>
                     <TableHead 
-                      className="cursor-pointer hover:text-primary transition-colors"
+                      className="cursor-pointer hover:text-primary transition-colors sticky top-0 bg-muted/20"
                       onClick={() => handleSort("pct_change")}
                     >
                       <div className="flex items-center gap-1">
@@ -762,7 +769,7 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                       </div>
                     </TableHead>
                     <TableHead 
-                      className="cursor-pointer hover:text-primary transition-colors"
+                      className="cursor-pointer hover:text-primary transition-colors sticky top-0 bg-muted/20"
                       onClick={() => handleSort("final_balance")}
                     >
                       <div className="flex items-center gap-1">
@@ -774,7 +781,7 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                       </div>
                     </TableHead>
                     <TableHead 
-                      className="cursor-pointer hover:text-primary transition-colors"
+                      className="cursor-pointer hover:text-primary transition-colors sticky top-0 bg-muted/20"
                       onClick={() => handleSort("num_trades")}
                     >
                       <div className="flex items-center gap-1">
@@ -785,17 +792,21 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                         )}
                       </div>
                     </TableHead>
-                    <TableHead className="text-right">Parameters</TableHead>
+                    <TableHead className="sticky top-0 bg-muted/20">Parameters</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {sortedResults.slice(0, visibleCount).map((result, index) => (
                     <TableRow 
                       key={index}
-                      className={index === 0 && sortField === "pct_change" && sortDirection === "desc" 
-                        ? "bg-success/5" 
-                        : ""
-                      }
+                      className={`cursor-pointer transition-colors ${
+                        index === selectedResultIndex 
+                          ? "bg-primary/10 border-l-2 border-l-primary" 
+                          : index === 0 && sortField === "pct_change" && sortDirection === "desc"
+                            ? "bg-success/5 hover:bg-success/10"
+                            : "hover:bg-muted/50"
+                      }`}
+                      onClick={() => handleSelectResult(index)}
                     >
                       <TableCell className="font-mono font-bold">
                         {index === 0 && sortField === "pct_change" && sortDirection === "desc" && (
@@ -818,45 +829,42 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                       <TableCell className="font-mono">
                         {result.results.num_trades}
                       </TableCell>
-                      <TableCell className="text-right">
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                                <Info className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="left" className="font-mono text-xs max-w-xs">
-                              <div className="space-y-1">
-                                {Object.entries(result.params).map(([k, v]) => (
-                                  <div key={k} className="flex justify-between gap-4">
-                                    <span className="text-muted-foreground">{getCleanParamName(k)}:</span>
-                                    <span className="font-semibold">{v}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1 max-w-xs">
+                          {Object.entries(result.params).slice(0, 3).map(([k, v]) => (
+                            <Badge 
+                              key={k} 
+                              variant="secondary" 
+                              className="text-xs font-mono px-1.5 py-0"
+                            >
+                              {getCleanParamName(k).split(' ').pop()}: {v}
+                            </Badge>
+                          ))}
+                          {Object.keys(result.params).length > 3 && (
+                            <Badge variant="outline" className="text-xs px-1.5 py-0">
+                              +{Object.keys(result.params).length - 3}
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-              
-              {/* Load More Button */}
-              {visibleCount < sortedResults.length && (
-                <div className="p-4 text-center border-t border-border">
-                  <Button 
-                    variant="ghost" 
-                    onClick={() => setVisibleCount(prev => prev + 20)}
-                  >
-                    Load More ({sortedResults.length - visibleCount} remaining)
-                  </Button>
-                </div>
-              )}
-            </motion.div>
-          )}
+            </ScrollArea>
+            
+            {/* Load More Button */}
+            {visibleCount < sortedResults.length && (
+              <div className="p-4 text-center border-t border-border">
+                <Button 
+                  variant="ghost" 
+                  onClick={() => setVisibleCount(prev => prev + 20)}
+                >
+                  Load More ({sortedResults.length - visibleCount} remaining)
+                </Button>
+              </div>
+            )}
+          </motion.div>
         </div>
       )}
     </motion.div>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useAuth } from "@/context/AuthContext";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Play, Settings2, TrendingUp, Calendar, Clock, Plus, X, 
@@ -10,67 +11,30 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
-import { useAuth } from "@/context/AuthContext";
-import { SavedStrategy } from "@/lib/api";
+import { api, SavedStrategy } from "@/lib/api";
+import { MultiConditionBuilder } from "./ConditionBuilder";
+import { ArgumentSelector } from "./ArgumentSelector";
+import { 
+  Registry, 
+  ConditionGroup, 
+  SingleCondition, 
+  ConditionSide,
+  generateId, 
+  createDefaultCondition, 
+  FALLBACK_REGISTRY 
+} from "./backtest-types";
 
 interface BacktestFormProps {
   onRunBacktest: (results: any) => void;
-  initialDslJson?: Record<string, any> | null;
-  onDslChange?: (dslJson: Record<string, any>, dslText: string) => void;
-  showActions?: boolean;
 }
 
-interface ConditionSideOperation {
-  operator: "+" | "-" | "*" | "/";
-  operand: number;
-}
-
-interface ConditionSide {
-  type: "value" | "indicator";
-  value: number;
-  func: string;
-  args: Record<string, any>;
-  operation?: ConditionSideOperation;
-}
-
-interface SingleCondition {
-  id: string;
-  left: ConditionSide;
-  operator: string;
-  right: ConditionSide;
-  nextLogicalOperator: "AND" | "OR"; // Connects to next condition
-}
-
-interface ConditionGroup {
-  conditions: SingleCondition[];
-}
-
-interface Registry {
-  commands: { COMMANDS: Record<string, any> };
-  indicators: { INDICATORS: Record<string, { args: string[]; defaults: Record<string, any> }> };
-  arguments: { ARGUMENTS: Record<string, Record<string, Record<string, any>>> };
-}
-
-const generateId = () => Math.random().toString(36).substring(2, 9);
-
-const createDefaultCondition = (): SingleCondition => ({
-  id: generateId(),
-  left: { type: "indicator", value: 0, func: "RSI", args: { period: 14, timeframe: "1h", offset: 0 }, operation: undefined },
-  operator: "<",
-  right: { type: "value", value: 30, func: "", args: {}, operation: undefined },
-  nextLogicalOperator: "AND",
-});
-
-const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showActions = true }: BacktestFormProps) => {
+const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
   const [loading, setLoading] = useState(false);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -119,43 +83,7 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
         setRegistry(data as unknown as Registry);
       } catch (err) {
         console.error("Failed to fetch registry:", err);
-        setRegistry({
-          commands: { COMMANDS: { LONG: {}, SHORT: {} } },
-          indicators: {
-            INDICATORS: {
-              PRICE: { args: ["field", "offset"], defaults: { field: "close", offset: 0 } },
-              VOLUME: { args: ["offset"], defaults: { offset: 0 } },
-              SMA: { args: ["period", "timeframe", "offset"], defaults: { period: 14, timeframe: "1h", offset: 0 } },
-              EMA: { args: ["period", "timeframe", "offset"], defaults: { period: 14, timeframe: "1h", offset: 0 } },
-              RSI: { args: ["period", "timeframe", "offset"], defaults: { period: 14, timeframe: "1h", offset: 0 } },
-              MACD: { args: ["fast", "slow", "signal", "timeframe", "offset"], defaults: { fast: 12, slow: 26, signal: 9, timeframe: "1h", offset: 0 } },
-              BBANDS: { args: ["period", "stddev", "timeframe", "offset"], defaults: { period: 20, stddev: 2, timeframe: "1h", offset: 0 } },
-              ATR: { args: ["period", "timeframe", "offset"], defaults: { period: 14, timeframe: "1h", offset: 0 } },
-              STOCH: { args: ["k_period", "d_period", "timeframe", "offset"], defaults: { k_period: 14, d_period: 3, timeframe: "1h", offset: 0 } },
-              CCI: { args: ["period", "timeframe", "offset"], defaults: { period: 20, timeframe: "1h", offset: 0 } },
-              OBV: { args: ["timeframe", "offset"], defaults: { timeframe: "1h", offset: 0 } },
-            },
-          },
-          arguments: {
-            ARGUMENTS: {
-              LONG: {
-                OPEN: {
-                  initialOpenPositionInvestType: { default: "percentCashBalance", options: ["percentCashBalance", "fixedAmount"] },
-                  initialOpenPositionInvestAmount: { default: 0.1 },
-                  recurring: { default: false },
-                  stopLossPercent: { default: 6 },
-                  takeProfitPercent: { default: 10 },
-                  recurringPeriod: { default: 5, parent: "recurring" },
-                  recurringInvestType: { default: "percentCashBalance", options: ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"], parent: "recurring" },
-                  recurringInvestAmount: { default: 0.1, parent: "recurring" },
-                  maxRecurringCount: { default: 0, parent: "recurring" },
-                },
-                CLOSE: {},
-              },
-              SHORT: { OPEN: {}, CLOSE: {} },
-            },
-          },
-        });
+        setRegistry(FALLBACK_REGISTRY);
       }
     };
     fetchRegistry();
@@ -476,7 +404,6 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
         args.takeProfitPercent = takeProfitPercent;
         args.stopLossPercent = stopLossPercent;
         args.spread = spread;
-        // recurring settings come from blocks[side]["OPEN"].ARGUMENTS via ArgumentSelector
       }
       
       dsl[side][blockName] = {
@@ -490,19 +417,19 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
 
   // Build strategy-only DSL (for saving - without context)
   const buildStrategyOnlyDsl = () => {
-    const buildSide = (side: ConditionSide): any => {
+    const buildSide = (sideData: ConditionSide): any => {
       let base: any;
-      if (side.type === "indicator") {
-        base = { func: side.func, arg: side.args };
+      if (sideData.type === "indicator") {
+        base = { func: sideData.func, arg: sideData.args };
       } else {
-        base = { value: side.value };
+        base = { value: sideData.value };
       }
       
-      if (side.operation && side.operation.operand !== undefined) {
+      if (sideData.operation && sideData.operation.operand !== undefined) {
         return {
-          op: side.operation.operator,
+          op: sideData.operation.operator,
           left: base,
-          right: { value: side.operation.operand }
+          right: { value: sideData.operation.operand }
         };
       }
       
@@ -607,7 +534,6 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
       return;
     }
     const dsl = buildJsonDsl();
-    onDslChange?.(dsl, JSON.stringify(dsl, null, 2));
 
     try {
       await api.createStrategy({
@@ -625,7 +551,6 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
   };
 
   const canProceedToStep2 = () => {
-    // At least one block with at least one condition
     const hasOpenConditions = conditionGroups.OPEN?.conditions?.length > 0;
     const hasCloseConditions = conditionGroups.CLOSE?.conditions?.length > 0;
     return hasOpenConditions || hasCloseConditions;
@@ -968,43 +893,32 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 onClick={() => setStep(1)}
-                className="p-4 rounded-xl border border-primary/30 bg-primary/5 cursor-pointer 
-                           hover:bg-primary/10 hover:border-primary/50 transition-all group"
+                className="p-4 rounded-xl border border-primary/30 bg-primary/5 cursor-pointer hover:bg-primary/10 transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`p-2.5 rounded-lg ${
-                      side === "LONG" ? "bg-success/10" : "bg-destructive/10"
-                    }`}>
-                      {side === "LONG" 
-                        ? <ArrowUpCircle className="h-5 w-5 text-success" />
-                        : <ArrowDownCircle className="h-5 w-5 text-destructive" />
-                      }
+                    <div className={`p-2 rounded-lg ${side === "LONG" ? "bg-success/20" : "bg-destructive/20"}`}>
+                      {side === "LONG" ? (
+                        <ArrowUpCircle className="h-4 w-4 text-success" />
+                      ) : (
+                        <ArrowDownCircle className="h-4 w-4 text-destructive" />
+                      )}
                     </div>
                     <div>
-                      <div className="font-semibold flex items-center gap-2">
-                        {strategyName || "Untitled Strategy"}
-                        <Badge variant="outline" className="text-xs">
-                          {side}
-                        </Badge>
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-0.5 max-w-md truncate">
-                        {generateLogicPreview(conditionGroups.OPEN?.conditions || [])}
-                      </div>
+                      <p className="font-medium text-sm">{strategyName || "Unnamed Strategy"}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {side} • {conditionGroups.OPEN?.conditions.length || 0} open conditions • {conditionGroups.CLOSE?.conditions.length || 0} close conditions
+                      </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground 
-                                  group-hover:text-primary transition-colors">
-                    <span>Edit Strategy</span>
-                    <ArrowRight className="h-4 w-4" />
-                  </div>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
                 </div>
               </motion.div>
 
-              {/* Markets Section */}
+              {/* Market Selection */}
               <div className="p-5 rounded-xl border border-border bg-card/30 space-y-4">
                 <div className="flex items-center gap-2 text-sm font-medium">
-                  <TrendingUp className="h-4 w-4 text-primary" />
+                  <BarChart3 className="h-4 w-4 text-primary" />
                   Markets
                 </div>
                 <div className="space-y-2">
@@ -1016,19 +930,19 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
                           <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p className="text-xs">Enter the stock symbol to backtest against (e.g., AAPL, TSLA)</p>
+                          <p className="text-xs">Enter stock symbols (e.g., AAPL, MSFT, GOOGL)</p>
                         </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   </Label>
                   <div className="flex flex-wrap gap-2">
-                    {tickers.map((t, i) => (
-                      <div key={i} className="flex items-center gap-1">
+                    {tickers.map((ticker, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
                         <Input
-                          value={t}
+                          value={ticker}
                           onChange={(e) => updateTicker(i, e.target.value)}
                           placeholder="AAPL"
-                          className="w-24 bg-secondary/50 border-border/50 h-9 text-center font-mono"
+                          className="w-24 h-9 bg-secondary/50 border-border/50 uppercase font-mono"
                         />
                         {tickers.length > 1 && (
                           <Button type="button" variant="ghost" size="icon" onClick={() => removeTicker(i)} className="h-9 w-9 hover:bg-destructive/20 hover:text-destructive">
@@ -1103,8 +1017,8 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
                       { label: "3M", months: 3 },
                       { label: "6M", months: 6 },
                       { label: "1Y", months: 12 },
-                      { label: "2Y", months: 24 },
-                      { label: "5Y", months: 60 },
+                      { label: "2Y", months: 23 },
+                      //{ label: "5Y", months: 60 },
                     ].map((preset) => {
                       const presetEnd = new Date();
                       const presetStart = new Date();
@@ -1373,639 +1287,5 @@ const BacktestForm = ({ onRunBacktest, initialDslJson = null, onDslChange, showA
     </motion.div>
   );
 };
-
-// Compute visual groups for display (AND groups connected by OR)
-const computeVisualGroups = (conditions: SingleCondition[]): SingleCondition[][] => {
-  if (conditions.length === 0) return [];
-  
-  const groups: SingleCondition[][] = [];
-  let currentGroup: SingleCondition[] = [conditions[0]];
-  
-  for (let i = 0; i < conditions.length - 1; i++) {
-    if (conditions[i].nextLogicalOperator === "AND") {
-      currentGroup.push(conditions[i + 1]);
-    } else {
-      groups.push(currentGroup);
-      currentGroup = [conditions[i + 1]];
-    }
-  }
-  groups.push(currentGroup);
-  
-  return groups;
-};
-
-// Generate human-readable logic preview
-const generateLogicPreview = (conditions: SingleCondition[]): string => {
-  if (conditions.length === 0) return "";
-  
-  const groups = computeVisualGroups(conditions);
-  
-  const formatSideLabel = (side: ConditionSide): string => {
-    let base: string;
-    if (side.type === "indicator") {
-      const mainArg = side.args.period || side.args.field || "";
-      base = `${side.func}${mainArg ? `(${mainArg})` : ""}`;
-    } else {
-      base = String(side.value);
-    }
-    
-    if (side.operation && side.operation.operand !== undefined) {
-      base = `${base} ${side.operation.operator} ${side.operation.operand}`;
-    }
-    
-    return base;
-  };
-  
-  const groupStrings = groups.map((group) => {
-    const conditionStrings = group.map((cond) => {
-      return `${formatSideLabel(cond.left)} ${cond.operator} ${formatSideLabel(cond.right)}`;
-    });
-    
-    const joined = conditionStrings.join(" AND ");
-    return group.length > 1 ? `(${joined})` : joined;
-  });
-  
-  return groupStrings.join(" OR ");
-};
-
-// Multi-Condition Builder Component
-function MultiConditionBuilder({
-  blockName,
-  conditionGroup,
-  setConditionGroup,
-  registry,
-}: {
-  blockName: string;
-  conditionGroup: ConditionGroup;
-  setConditionGroup: (group: ConditionGroup) => void;
-  registry: Registry;
-}) {
-  const addCondition = () => {
-    setConditionGroup({
-      conditions: [...conditionGroup.conditions, createDefaultCondition()],
-    });
-  };
-
-  const updateCondition = (id: string, updated: SingleCondition) => {
-    setConditionGroup({
-      conditions: conditionGroup.conditions.map(c => c.id === id ? updated : c),
-    });
-  };
-
-  const removeCondition = (id: string) => {
-    setConditionGroup({
-      conditions: conditionGroup.conditions.filter(c => c.id !== id),
-    });
-  };
-
-  const toggleConditionOperator = (conditionId: string) => {
-    setConditionGroup({
-      conditions: conditionGroup.conditions.map(c => 
-        c.id === conditionId 
-          ? { ...c, nextLogicalOperator: c.nextLogicalOperator === "AND" ? "OR" : "AND" }
-          : c
-      ),
-    });
-  };
-
-  const isOpen = blockName === "OPEN";
-  const visualGroups = computeVisualGroups(conditionGroup.conditions);
-  const logicPreview = generateLogicPreview(conditionGroup.conditions);
-
-  return (
-    <div className="space-y-3">
-      <div className="space-y-2">
-        <AnimatePresence mode="popLayout">
-          {visualGroups.map((group, groupIndex) => (
-            <motion.div
-              key={`group-${groupIndex}`}
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className={`${
-                visualGroups.length > 1 
-                  ? `p-3 rounded-lg border ${isOpen ? "border-primary/30 bg-primary/5" : "border-primary/30 bg-primary/5"}`
-                  : ""
-              }`}
-            >
-              {visualGroups.length > 1 && (
-                <div className="text-[10px] uppercase text-muted-foreground font-medium mb-2 tracking-wider">
-                  Group {groupIndex + 1}
-                </div>
-              )}
-              
-              <div className="space-y-2">
-                {group.map((cond, indexInGroup) => {
-                  const originalIndex = conditionGroup.conditions.findIndex(c => c.id === cond.id);
-                  const isLastInGroup = indexInGroup === group.length - 1;
-                  const isLastConditionOverall = originalIndex === conditionGroup.conditions.length - 1;
-                  
-                  return (
-                    <div key={cond.id}>
-                      <ConditionRow
-                        condition={cond}
-                        onChange={(updated) => updateCondition(cond.id, updated)}
-                        onRemove={() => removeCondition(cond.id)}
-                        registry={registry}
-                        accentColor={isOpen ? "success" : "destructive"}
-                      />
-                      
-                      {/* AND toggle within group (not for last in group) */}
-                      {!isLastInGroup && (
-                        <div className="flex items-center justify-center py-2">
-                          <div className="flex-1 h-px bg-primary/20" />
-                          <button
-                            type="button"
-                            onClick={() => toggleConditionOperator(cond.id)}
-                            className="mx-3 px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer hover:scale-105 bg-primary/20 text-primary border border-primary/30"
-                          >
-                            AND
-                          </button>
-                          <div className="flex-1 h-px bg-primary/20" />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </motion.div>
-          ))}
-          
-          {/* OR separators between groups */}
-          {visualGroups.length > 1 && visualGroups.map((group, groupIndex) => {
-            if (groupIndex >= visualGroups.length - 1) return null;
-            const lastCondInGroup = group[group.length - 1];
-            
-            return (
-              <div key={`or-${groupIndex}`} className="flex items-center justify-center py-3">
-                <div className="flex-1 h-0.5 bg-warning/30" />
-                <button
-                  type="button"
-                  onClick={() => toggleConditionOperator(lastCondInGroup.id)}
-                  className="mx-4 px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer hover:scale-105 bg-warning/20 text-warning border-2 border-warning/40 shadow-sm"
-                >
-                  OR
-                </button>
-                <div className="flex-1 h-0.5 bg-warning/30" />
-              </div>
-            );
-          })}
-        </AnimatePresence>
-      </div>
-
-      <Button 
-        type="button" 
-        variant="outline" 
-        size="sm" 
-        onClick={addCondition}
-        className={`w-full h-9 border-dashed ${
-          isOpen 
-            ? "border-success/30 text-success hover:bg-success/10 hover:border-success/50" 
-            : "border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
-        }`}
-      >
-        <Plus className="h-3.5 w-3.5 mr-1.5" /> Add Condition
-      </Button>
-
-      {/* Logic Preview */}
-      {conditionGroup.conditions.length >= 2 && (
-        <motion.div
-          initial={{ opacity: 0, y: 5 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="p-2.5 rounded-md bg-muted/50 border border-border"
-        >
-          <div className="flex items-start gap-2">
-            <span className="text-xs text-muted-foreground">📋 Logic:</span>
-            <code className="text-xs font-mono text-foreground break-all">
-              {logicPreview}
-            </code>
-          </div>
-        </motion.div>
-      )}
-    </div>
-  );
-}
-
-// Single Condition Row
-function ConditionRow({
-  condition,
-  onChange,
-  onRemove,
-  registry,
-  accentColor,
-}: {
-  condition: SingleCondition;
-  onChange: (cond: SingleCondition) => void;
-  onRemove: () => void;
-  registry: Registry;
-  accentColor: "success" | "destructive";
-}) {
-  return (
-    <div className="flex items-center gap-2 p-3 rounded-lg bg-background/50 border border-border/50">
-      <ConditionSideEditor
-        side={condition.left}
-        onChange={(left) => onChange({ ...condition, left })}
-        registry={registry}
-      />
-      
-      <Select
-        value={condition.operator}
-        onValueChange={(op) => onChange({ ...condition, operator: op })}
-      >
-        <SelectTrigger className="w-16 h-9 bg-secondary/50 border-border/50 font-mono text-sm">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {["<", ">", "<=", ">=", "==", "!="].map((op) => (
-            <SelectItem key={op} value={op} className="font-mono">{op}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
-      <ConditionSideEditor
-        side={condition.right}
-        onChange={(right) => onChange({ ...condition, right })}
-        registry={registry}
-      />
-
-      <Button 
-        type="button" 
-        variant="ghost" 
-        size="sm"
-        onClick={onRemove}
-        className="h-9 w-9 p-0 hover:bg-destructive/20 hover:text-destructive flex-shrink-0"
-      >
-        <X className="h-4 w-4" />
-      </Button>
-    </div>
-  );
-}
-
-// Condition Side Editor
-function ConditionSideEditor({
-  side,
-  onChange,
-  registry,
-}: {
-  side: ConditionSide;
-  onChange: (side: ConditionSide) => void;
-  registry: Registry;
-}) {
-  const [open, setOpen] = useState(false);
-  const [hasOperation, setHasOperation] = useState(!!side.operation);
-
-  const getSummary = () => {
-    let base: string;
-    if (side.type === "value") {
-      base = String(side.value);
-    } else {
-      const mainArg = side.args.period || side.args.field || "";
-      base = `${side.func}${mainArg ? `(${mainArg})` : ""}`;
-    }
-    
-    if (side.operation && side.operation.operand !== undefined) {
-      base = `${base} ${side.operation.operator} ${side.operation.operand}`;
-    }
-    
-    return base;
-  };
-
-  const handleToggleOperation = (enabled: boolean) => {
-    setHasOperation(enabled);
-    if (enabled) {
-      onChange({ ...side, operation: { operator: "*", operand: 1 } });
-    } else {
-      onChange({ ...side, operation: undefined });
-    }
-  };
-
-  const handleOperationChange = (field: "operator" | "operand", value: any) => {
-    const currentOp = side.operation || { operator: "*" as const, operand: 1 };
-    onChange({
-      ...side,
-      operation: { ...currentOp, [field]: value }
-    });
-  };
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all text-sm flex-1 min-w-0 ${
-            side.type === "indicator"
-              ? "bg-primary/5 border-primary/20 text-primary"
-              : "bg-secondary/50 border-border/50"
-          }`}
-        >
-          <span className="font-medium truncate">{getSummary()}</span>
-          <ChevronDown className={`h-3.5 w-3.5 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent 
-        className="w-72 p-3 space-y-3 max-h-96 overflow-y-auto" 
-        align="start"
-        side="bottom"
-        sideOffset={4}
-      >
-        <Select
-          value={side.type}
-          onValueChange={(val: "value" | "indicator") => {
-            if (val === "indicator") {
-              onChange({ type: "indicator", value: 0, func: "RSI", args: { period: 14, timeframe: "1h", offset: 0 }, operation: side.operation });
-            } else {
-              onChange({ type: "value", value: 30, func: "", args: {}, operation: side.operation });
-            }
-          }}
-        >
-          <SelectTrigger className="h-8 bg-secondary/50">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="value">Value</SelectItem>
-            <SelectItem value="indicator">Indicator</SelectItem>
-          </SelectContent>
-        </Select>
-
-        {side.type === "value" && (
-          <Input
-            type="number"
-            value={side.value}
-            onChange={(e) => onChange({ ...side, value: parseFloat(e.target.value) || 0 })}
-            className="h-8 bg-secondary/50"
-          />
-        )}
-
-        {side.type === "indicator" && (
-          <>
-            <Select
-              value={side.func}
-              onValueChange={(func) => {
-                const defaults = registry.indicators.INDICATORS[func]?.defaults || {};
-                onChange({ ...side, func, args: { ...defaults } });
-              }}
-            >
-              <SelectTrigger className="h-8 bg-secondary/50">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.keys(registry.indicators.INDICATORS).map((ind) => (
-                  <SelectItem key={ind} value={ind}>{ind}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <div className="grid grid-cols-2 gap-2">
-              {Object.entries(side.args).map(([param, val]) => (
-                <div key={param} className="space-y-1">
-                  <span className="text-[10px] uppercase text-muted-foreground">{param}</span>
-                  {param === "field" ? (
-                    <Select
-                      value={String(val)}
-                      onValueChange={(v) => onChange({ ...side, args: { ...side.args, [param]: v } })}
-                    >
-                      <SelectTrigger className="h-7 text-xs bg-secondary/50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {["open", "high", "low", "close"].map((o) => (
-                          <SelectItem key={o} value={o}>{o}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : param === "timeframe" ? (
-                    <Select
-                      value={String(val)}
-                      onValueChange={(v) => onChange({ ...side, args: { ...side.args, [param]: v } })}
-                    >
-                      <SelectTrigger className="h-7 text-xs bg-secondary/50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
-                          <SelectItem key={tf} value={tf}>{tf}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Input
-                      type="number"
-                      value={val as number}
-                      onChange={(e) => onChange({ ...side, args: { ...side.args, [param]: parseFloat(e.target.value) || 0 } })}
-                      className="h-7 text-xs bg-secondary/50"
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-
-        {/* Mathematical Operation Section */}
-        <div className="pt-2 border-t border-border/50 space-y-2">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox
-              checked={hasOperation}
-              onCheckedChange={(checked) => handleToggleOperation(!!checked)}
-            />
-            <span className="text-xs text-muted-foreground">Apply operation</span>
-          </label>
-          
-          {hasOperation && (
-            <div className="flex items-center gap-2">
-              <Select
-                value={side.operation?.operator || "*"}
-                onValueChange={(v) => handleOperationChange("operator", v)}
-              >
-                <SelectTrigger className="w-16 h-8 bg-secondary/50 font-mono">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {["*", "/", "+", "-"].map((op) => (
-                    <SelectItem key={op} value={op} className="font-mono">{op}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                type="number"
-                step="0.01"
-                value={side.operation?.operand ?? 1}
-                onChange={(e) => handleOperationChange("operand", parseFloat(e.target.value) || 0)}
-                className="flex-1 h-8 bg-secondary/50"
-                placeholder="1.05"
-              />
-            </div>
-          )}
-          
-          {hasOperation && (
-            <p className="text-[10px] text-muted-foreground">
-              Preview: {getSummary()}
-            </p>
-          )}
-        </div>
-
-        <Button 
-          type="button" 
-          size="sm" 
-          onClick={() => setOpen(false)}
-          className="w-full h-7 text-xs"
-        >
-          Done
-        </Button>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-// Argument Selector Component with parent-child support
-function ArgumentSelector({
-  block,
-  availableArgs,
-  currentArgs,
-  onChange,
-}: {
-  block: string;
-  availableArgs: Record<string, any>;
-  currentArgs: Record<string, any>;
-  onChange: (arg: string, val: any) => void;
-}) {
-  const [addedArgs, setAddedArgs] = useState<string[]>(Object.keys(currentArgs));
-
-  // Get children of a parent arg
-  const getChildren = (parentArg: string) => {
-    return Object.keys(availableArgs).filter(
-      (a) => availableArgs[a]?.parent === parentArg
-    );
-  };
-
-  const addArg = (arg: string) => {
-    if (!addedArgs.includes(arg)) {
-      const newArgs = [arg];
-      onChange(arg, availableArgs[arg]?.default ?? null);
-      
-      // If this arg has children, also add them with defaults
-      const children = getChildren(arg);
-      children.forEach((child) => {
-        if (!addedArgs.includes(child)) {
-          newArgs.push(child);
-          onChange(child, availableArgs[child]?.default ?? null);
-        }
-      });
-      
-      setAddedArgs([...addedArgs, ...newArgs]);
-    }
-  };
-
-  const removeArg = (arg: string) => {
-    // Also remove any children of this arg
-    const children = getChildren(arg);
-    const toRemove = [arg, ...children];
-    
-    setAddedArgs(addedArgs.filter((a) => !toRemove.includes(a)));
-    toRemove.forEach((a) => onChange(a, undefined));
-  };
-
-  // Check if parent is enabled (value is true)
-  const isParentEnabled = (parentArg: string) => {
-    return currentArgs[parentArg] === true;
-  };
-
-  // Filter out trade settings args from OPEN block since they're managed in Trade Settings
-  const hiddenArgs = [
-    "takeProfitPercent", 
-    "stopLossPercent", 
-    "spread"
-  ];
-  const topLevelArgs = Object.keys(availableArgs).filter((a) => !availableArgs[a]?.parent && !hiddenArgs.includes(a));
-
-  // Render a single argument row
-  const renderArgRow = (arg: string, isChild: boolean = false) => {
-    const argData = availableArgs[arg];
-    if (!argData) return null;
-
-    const val = currentArgs[arg] ?? argData.default;
-    const valType = typeof argData.default;
-
-    return (
-      <div 
-        key={arg} 
-        className={`flex items-center gap-2 p-2 rounded-lg bg-background/30 border border-border/30 ${
-          isChild ? "ml-4 border-l-2 border-l-primary/30" : ""
-        }`}
-      >
-        <span className="text-xs text-muted-foreground flex-1 truncate">
-          {isChild && <span className="text-primary/50 mr-1">↳</span>}
-          {arg}
-        </span>
-        {valType === "boolean" ? (
-          <Select value={String(val)} onValueChange={(v) => onChange(arg, v === "true")}>
-            <SelectTrigger className="w-20 h-7 text-xs bg-secondary/50">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="true">true</SelectItem>
-              <SelectItem value="false">false</SelectItem>
-            </SelectContent>
-          </Select>
-        ) : argData.options ? (
-          <Select value={val} onValueChange={(v) => onChange(arg, v)}>
-            <SelectTrigger className="w-36 h-7 text-xs bg-secondary/50">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {argData.options.map((opt: string) => (
-                <SelectItem key={opt} value={opt}>{opt}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <Input
-            type="number"
-            value={val}
-            onChange={(e) => onChange(arg, parseFloat(e.target.value) || 0)}
-            className="w-20 h-7 text-xs bg-secondary/50"
-          />
-        )}
-        <button type="button" onClick={() => removeArg(arg)} className="text-muted-foreground hover:text-destructive">
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
-    );
-  };
-
-  return (
-    <div className="space-y-2">
-      {addedArgs
-        .filter((arg) => !availableArgs[arg]?.parent) // Only top-level in main loop
-        .map((arg) => (
-          <div key={arg}>
-            {renderArgRow(arg, false)}
-            
-            {/* Render children if parent is enabled (set to true) */}
-            {isParentEnabled(arg) && (
-              <div className="space-y-2 mt-2">
-                {getChildren(arg)
-                  .filter((child) => addedArgs.includes(child))
-                  .map((child) => renderArgRow(child, true))}
-              </div>
-            )}
-          </div>
-        ))}
-
-      {topLevelArgs.filter((a) => !addedArgs.includes(a)).length > 0 && (
-        <Select onValueChange={addArg}>
-          <SelectTrigger className="w-full h-8 text-xs bg-secondary/30 border-dashed">
-            <SelectValue placeholder="+ Add parameter..." />
-          </SelectTrigger>
-          <SelectContent>
-            {topLevelArgs.filter((a) => !addedArgs.includes(a)).map((arg) => (
-              <SelectItem key={arg} value={arg}>{arg}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
-    </div>
-  );
-}
 
 export default BacktestForm;
