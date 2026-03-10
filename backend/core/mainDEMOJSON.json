@@ -5,12 +5,9 @@
                 "AAPL"
             ],
             "execution_timeframe": "1h",
-            "data_timeframes": [
-                "1h"
-            ],
             "dateframe": {
-                "start": "2024-02-02",
-                "end": "2024-12-28"
+                "start": "2024-04-10",
+                "end": "2026-03-10"
             }
         },
         "OPEN": {
@@ -29,15 +26,9 @@
                 }
             },
             "ARGUMENTS": {
-                "stopLossPercent": 100,
-                "takeProfitPercent": 100,
-                "initialOpenPositionInvestType": "percentCashBalance",
-                "initialOpenPositionInvestAmount": 0.2,
-                "recurring": true,
-                "recurringPeriod": 5,
-                "recurringInvestType": "percentCashBalance",
-                "recurringInvestAmount": 0.1,
-                "maxRecurringCount": 0
+                "takeProfitPercent": 10,
+                "stopLossPercent": 6,
+                "spread": 0.001
             }
         },
         "CLOSE": {
@@ -50,14 +41,12 @@
                         "offset": 0
                     }
                 },
-                "operator": ">",
+                "operator": "<",
                 "right": {
-                    "value": 75
+                    "value": 30
                 }
             },
-            "ARGUMENTS": {
-                "test": 0.5
-            }
+            "ARGUMENTS": {}
         }
     }
 }

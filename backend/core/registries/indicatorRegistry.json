@@ -1,38 +1,69 @@
 {
     "INDICATORS": {
-        "PRICE": {
-            "function": "get_price",
-            "args": ["OHLC", "offset"],
-            "defaults": {"OHLC": "close", "offset": 0}
-        },
-        "VOLUME": {
-            "function": "get_volume",
-            "args": ["offset"],
-            "defaults": {"offset": 0}
-        },
-        "SMA": {
-            "function": "compute_sma",
-            "args": ["period", "timeframe", "offset"],
-            "defaults": {"period": 14, "timeframe": "1h", "offset": 0}, 
-            "supports_timeframe": true
-        },
-        "EMA": {
-            "function": "compute_ema",
-            "args": ["period", "timeframe", "offset"], 
-            "defaults": {"period": 14, "timeframe": "1h", "offset": 0},
-            "supports_timeframe": true
-        },
-        "RSI": {
-            "function": "compute_rsi",
-            "args": ["period", "timeframe", "offset"],  
-            "defaults": {"period": 14, "timeframe": "1h", "offset": 0}, 
-            "supports_timeframe": true
-        },
-        "MACD": {
-            "function": "compute_macd",
-            "args": ["fast", "slow", "signal", "timeframe", "offset"], 
-            "defaults": {"fast": 12, "slow": 26, "signal": 9, "timeframe": "1h", "offset": 0}, 
-            "supports_timeframe": true
-        }
+      "PRICE": {
+        "function": "get_price",
+        "args": ["OHLC", "offset"],
+        "defaults": {"OHLC": "close", "offset": 0}
+      },
+      "VOLUME": {
+        "function": "get_volume",
+        "args": ["offset"],
+        "defaults": {"offset": 0}
+      },
+      "SMA": {
+        "function": "compute_sma",
+        "args": ["period", "timeframe", "offset"],
+        "defaults": {"period": 14, "timeframe": "1h", "offset": 0},
+        "supports_timeframe": true
+      },
+      "EMA": {
+        "function": "compute_ema",
+        "args": ["period", "timeframe", "offset"],
+        "defaults": {"period": 14, "timeframe": "1h", "offset": 0},
+        "supports_timeframe": true
+      },
+      "RSI": {
+        "function": "compute_rsi",
+        "args": ["period", "timeframe", "offset"],
+        "defaults": {"period": 14, "timeframe": "1h", "offset": 0},
+        "supports_timeframe": true
+      },
+      "MACD": {
+        "function": "compute_macd",
+        "args": ["fast", "slow", "signal", "timeframe", "offset"],
+        "defaults": {"fast": 12, "slow": 26, "signal": 9, "timeframe": "1h", "offset": 0},
+        "supports_timeframe": true
+      },
+      "BBANDS": {
+        "function": "compute_bbands",
+        "args": ["period", "stddev", "timeframe", "offset"],
+        "defaults": {"period": 20, "stddev": 2, "timeframe": "1h", "offset": 0},
+        "supports_timeframe": true
+      },
+      "ATR": {
+        "function": "compute_atr",
+        "args": ["period", "timeframe", "offset"],
+        "defaults": {"period": 14, "timeframe": "1h", "offset": 0},
+        "supports_timeframe": true
+      },
+      "STOCH": {
+        "function": "compute_stochastic",
+        "args": ["k_period", "d_period", "slowing", "timeframe", "offset"],
+        "defaults": {"k_period": 14, "d_period": 3, "slowing": 3, "timeframe": "1h", "offset": 0},
+        "supports_timeframe": true
+      },
+      "CCI": {
+        "function": "compute_cci",
+        "args": ["period", "timeframe", "offset"],
+        "defaults": {"period": 20, "timeframe": "1h", "offset": 0},
+        "supports_timeframe": true
+      },
+      "OBV": {
+        "function": "compute_obv",
+        "args": ["timeframe", "offset"],
+        "defaults": {"timeframe": "1h", "offset": 0},
+        "supports_timeframe": true
+      }
     }
-}
+  }
+  

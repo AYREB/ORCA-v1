@@ -50,9 +50,14 @@
           "type": "float",
           "default": 0.4,
           "description": "Optional take-profit percentage above the execution price."
-        }
-      },
-      "CLOSE": {
+        },
+        "spread": {
+          "type": "float",
+          "default": 0.0,
+          "description": "Spread"
+       }
+     },
+     "CLOSE": {
         "test": {
           "type": "float",
           "default": 0.5,
