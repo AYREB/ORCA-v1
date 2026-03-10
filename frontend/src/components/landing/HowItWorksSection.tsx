@@ -30,14 +30,14 @@ const steps = [
 
 const HowItWorksSection = () => {
   return (
-    <section id="how-it-works" className="py-24 relative bg-secondary/20">
+    <section id="how-it-works" className="py-16 relative bg-secondary/20">
       <div className="container mx-auto px-4 relative z-10">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.5 }}
-          className="text-center mb-16"
+          className="text-center mb-12"
         >
           <h2 className="text-3xl md:text-4xl font-bold mb-4">
             From Idea to Results in
@@ -65,13 +65,13 @@ const HowItWorksSection = () => {
               
               <div className="relative z-10 text-center">
                 {/* Step number */}
-                <div className="inline-flex items-center justify-center w-24 h-24 rounded-2xl border border-primary/30 bg-card mb-6 relative overflow-hidden group hover:border-primary/50 transition-colors">
+                <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl border border-primary/30 bg-card mb-6 relative overflow-hidden group hover:border-primary/50 transition-colors">
                   <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                  <span className="font-mono text-3xl font-bold text-primary/30 absolute top-2 left-3">{step.number}</span>
-                  <step.icon className="h-10 w-10 text-primary relative z-10" />
+                  <span className="font-mono text-2xl font-bold text-primary/30 absolute top-2 left-3">{step.number}</span>
+                  <step.icon className="h-8 w-8 text-primary relative z-10" />
                 </div>
                 
-                <h3 className="text-xl font-semibold mb-3">{step.title}</h3>
+                <h3 className="text-lg font-semibold mb-3">{step.title}</h3>
                 <p className="text-sm text-muted-foreground">{step.description}</p>
               </div>
             </motion.div>

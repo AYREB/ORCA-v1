@@ -227,13 +227,13 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.3, delay: 0.3 + index * 0.03 }}
-            className="p-4 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
+            className="p-3 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
           >
             <div className="flex items-center gap-2 mb-2">
               <metric.icon className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">{metric.label}</span>
             </div>
-            <p className={`text-xl font-bold font-mono ${metric.color}`}>{metric.value}</p>
+            <p className={`text-lg font-bold font-mono ${metric.color}`}>{metric.value}</p>
           </motion.div>
         ))}
       </div>

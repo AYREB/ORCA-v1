@@ -23,9 +23,9 @@ const EquityChart = ({ data, isLoading = false }: EquityChartProps) => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, delay: 0.2 }}
-      className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
+      className="p-5 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
     >
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h3 className="text-lg font-semibold">Equity Curve</h3>
           <p className="text-sm text-muted-foreground">Portfolio performance over time</p>

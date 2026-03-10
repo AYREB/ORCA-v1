@@ -21,11 +21,11 @@ const Navbar = ({ onLoginClick, onSignupClick }: NavbarProps) => {
       className="fixed top-0 left-0 right-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl"
     >
       <div className="container mx-auto px-4">
-        <div className="flex h-16 items-center justify-between">
+        <div className="flex h-14 items-center justify-between">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2">
-            <img src={orcaLogo} alt="Orca Logo" className="h-9 w-9 rounded-lg" />
-            <span className="text-xl font-bold tracking-tight">Orca</span>
+          <img src={orcaLogo} alt="Orca Logo" className="h-7 w-7 rounded-lg" />
+          <span className="text-lg font-bold tracking-tight">Orca</span>
           </Link>
 
           {/* Desktop Navigation */}

@@ -48,7 +48,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.1 }}
-            className="text-4xl md:text-6xl lg:text-7xl font-bold leading-tight mb-6"
+            className="text-3xl md:text-5xl lg:text-6xl font-bold leading-tight mb-6"
           >
             Backtest Your
             <br />
@@ -62,7 +62,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.2 }}
-            className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-10"
+            className="text-base md:text-lg text-muted-foreground max-w-2xl mx-auto mb-8"
           >
             Institutional-grade backtesting without writing a single line of code. 
             Build, test, and optimize your strategies with our visual strategy builder.
@@ -73,7 +73,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.3 }}
-            className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-16"
+            className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12"
           >
             <Button variant="hero" size="xl" onClick={onSignupClick}>
               Start Free Trial
@@ -98,7 +98,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
               { value: "15+", label: "Years of Data" },
             ].map((stat, index) => (
               <div key={index} className="text-center">
-                <div className="text-2xl md:text-3xl font-bold font-mono text-primary">{stat.value}</div>
+                <div className="text-xl md:text-2xl font-bold font-mono text-primary">{stat.value}</div>
                 <div className="text-sm text-muted-foreground">{stat.label}</div>
               </div>
             ))}
@@ -144,7 +144,7 @@ const PreviewCard = ({ icon, title, description, delay }: { icon: React.ReactNod
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
     transition={{ duration: 0.5, delay }}
-    className="p-6 rounded-xl border border-border/50 bg-card/50 backdrop-blur-sm hover:border-primary/30 transition-colors"
+    className="p-5 rounded-xl border border-border/50 bg-card/50 backdrop-blur-sm hover:border-primary/30 transition-colors"
   >
     <div className="flex items-center gap-3 mb-3">
       <div className="p-2 rounded-lg bg-secondary">{icon}</div>

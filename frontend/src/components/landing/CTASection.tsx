@@ -8,7 +8,7 @@ interface CTASectionProps {
 
 const CTASection = ({ onSignupClick }: CTASectionProps) => {
   return (
-    <section className="py-24 relative overflow-hidden">
+    <section className="py-16 relative overflow-hidden">
       {/* Background */}
       <div className="absolute inset-0 bg-gradient-to-b from-transparent via-primary/5 to-primary/10" />
       <motion.div
@@ -30,7 +30,7 @@ const CTASection = ({ onSignupClick }: CTASectionProps) => {
             <span className="text-sm font-medium text-primary">14-Day Free Trial</span>
           </div>
 
-          <h2 className="text-3xl md:text-5xl font-bold mb-6">
+          <h2 className="text-2xl md:text-4xl font-bold mb-6">
             Ready to Validate Your
             <br />
             <span className="text-gradient-primary">Trading Edge?</span>
