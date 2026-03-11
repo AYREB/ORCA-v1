@@ -244,7 +244,7 @@ class DjangoAPI {
   // Backtest with DSL text (raw DSL string)
   async backtestDSLText(
     dslText: string,
-    options?: { strategyId?: number; strategyName?: string }
+    options?: { strategyId?: number; strategyName?: string; initialBalance?: number }
   ): Promise<BacktestResult> {
     return this.request<BacktestResult>('/backtestDSLText/', {
       method: 'POST',
@@ -252,6 +252,7 @@ class DjangoAPI {
         dsl_text: dslText,
         strategy_id: options?.strategyId,
         strategy_name: options?.strategyName,
+        initial_balance: options?.initialBalance,
       }),
     });
   }
@@ -259,7 +260,7 @@ class DjangoAPI {
   // Backtest with DSL JSON (parsed DSL object)
   async backtestDSLJSON(
     dslJson: Record<string, unknown>,
-    options?: { strategyId?: number; strategyName?: string }
+    options?: { strategyId?: number; strategyName?: string; initialBalance?: number }
   ): Promise<BacktestResult> {
     return this.request<BacktestResult>('/backtestDSLJSON/', {
       method: 'POST',
@@ -267,6 +268,7 @@ class DjangoAPI {
         dsl_json: dslJson,
         strategy_id: options?.strategyId,
         strategy_name: options?.strategyName,
+        initial_balance: options?.initialBalance,
       }),
     });
   }

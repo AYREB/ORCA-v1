@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import { 
   Sliders, Loader2, Trophy, ChevronDown, ChevronUp,
@@ -40,6 +40,17 @@ interface ExtractedParameter {
   indicator: string | null;
   displayName: string;
   paramType: string;
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "—";
+  if (seconds < 60) return `${Math.ceil(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.ceil(seconds % 60);
+  if (mins < 60) return `${mins}m ${secs}s`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return `${hours}h ${remMins}m`;
 }
 
 // Extract optimizable parameters from DSL with enhanced display info
@@ -130,6 +141,14 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [visibleCount, setVisibleCount] = useState(20);
   const [selectedResultIndex, setSelectedResultIndex] = useState<number>(0);
+  const [progress, setProgress] = useState(0);
+  const [completedRuns, setCompletedRuns] = useState(0);
+  const [totalRuns, setTotalRuns] = useState(0);
+  const [optimizerStatus, setOptimizerStatus] = useState<OptimizerJobStatus["status"] | "idle">("idle");
+  const [sampledCycleCount, setSampledCycleCount] = useState(0);
+  const [sampledCycleSeconds, setSampledCycleSeconds] = useState(0);
+  const lastCompletedRef = useRef(0);
+  const lastSampleTsRef = useRef<number | null>(null);
 
   // Extract parameters when DSL changes
   useEffect(() => {
@@ -179,13 +198,23 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
     return hasActiveParam ? total : 0;
   }, [paramChoices]);
 
-  const estimatedTime = useMemo(() => {
-    if (estimatedCombinations === 0) return "—";
-    const seconds = estimatedCombinations * 1.5;
-    if (seconds < 60) return `~${Math.ceil(seconds)} seconds`;
-    const minutes = Math.ceil(seconds / 60);
-    return `~${minutes} minute${minutes > 1 ? "s" : ""}`;
+  const estimatedSeconds = useMemo(() => {
+    if (estimatedCombinations === 0) return 0;
+    return Math.ceil(estimatedCombinations * 1.5);
   }, [estimatedCombinations]);
+
+  const estimatedTime = useMemo(() => {
+    return formatDuration(estimatedSeconds);
+  }, [estimatedSeconds]);
+
+  const runningEtaSeconds = useMemo(() => {
+    if (!loading) return null;
+
+    if (sampledCycleCount < 3 || totalRuns <= 0) return null;
+    const avgSecondsPerRun = sampledCycleSeconds / sampledCycleCount;
+    const remainingRuns = Math.max(0, totalRuns - completedRuns);
+    return Math.max(0, Math.ceil(avgSecondsPerRun * remainingRuns));
+  }, [loading, sampledCycleCount, sampledCycleSeconds, totalRuns, completedRuns]);
 
   // Get range preview values
   const getRangePreview = (choice: ParameterChoice): number[] => {
@@ -315,6 +344,14 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
     setError(null);
     setOptimizerResult(null);
     setVisibleCount(20);
+    setProgress(0);
+    setCompletedRuns(0);
+    setTotalRuns(0);
+    setOptimizerStatus("queued");
+    setSampledCycleCount(0);
+    setSampledCycleSeconds(0);
+    lastCompletedRef.current = 0;
+    lastSampleTsRef.current = Date.now();
 
     try {
       const payload: Record<string, ParameterChoice> = {};
@@ -327,18 +364,70 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
       if (Object.keys(payload).length === 0) {
         toast.error("Select at least one parameter to optimize");
         setLoading(false);
+        setOptimizerStatus("idle");
         return;
       }
 
-      const result = await api.optimizeParameters(dslJson, payload, initialBalance);
-      setOptimizerResult(result);
-      toast.success("Optimization complete!");
+      const start = await api.startOptimizeJob(dslJson, payload, initialBalance);
+      setTotalRuns(start.total_runs || estimatedCombinations);
+
+      const poll = async () => {
+        try {
+          const status: OptimizerJobStatus = await api.getOptimizeJobStatus(start.job_id);
+          const nowTs = Date.now();
+          const currentCompleted = status.completed_runs || 0;
+          const previousCompleted = lastCompletedRef.current;
+          const previousTs = lastSampleTsRef.current;
+
+          if (previousTs !== null && currentCompleted > previousCompleted) {
+            const deltaRuns = currentCompleted - previousCompleted;
+            const deltaSeconds = Math.max(0, (nowTs - previousTs) / 1000);
+            setSampledCycleCount((prev) => prev + deltaRuns);
+            setSampledCycleSeconds((prev) => prev + deltaSeconds);
+          }
+
+          lastCompletedRef.current = currentCompleted;
+          lastSampleTsRef.current = nowTs;
+
+          setOptimizerStatus(status.status);
+          setCompletedRuns(currentCompleted);
+          setTotalRuns(status.total_runs || start.total_runs || estimatedCombinations);
+          setProgress(status.progress || 0);
+
+          if (status.status === "completed" && status.result) {
+            setOptimizerResult(status.result);
+            setLoading(false);
+            setOptimizerStatus("completed");
+            toast.success("Optimization complete!");
+            return;
+          }
+
+          if (status.status === "error") {
+            const statusError = status.error || "Optimizer request failed";
+            setError(statusError);
+            setLoading(false);
+            setOptimizerStatus("error");
+            toast.error(statusError);
+            return;
+          }
+
+          window.setTimeout(poll, 1000);
+        } catch (pollErr) {
+          const pollErrorMessage = pollErr instanceof Error ? pollErr.message : "Optimizer status polling failed";
+          setError(pollErrorMessage);
+          setLoading(false);
+          setOptimizerStatus("error");
+          toast.error(pollErrorMessage);
+        }
+      };
+
+      poll();
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Optimizer request failed";
       setError(errorMessage);
       toast.error(errorMessage);
-    } finally {
       setLoading(false);
+      setOptimizerStatus("error");
     }
   };
 
@@ -585,6 +674,29 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
           </div>
         </div>
 
+        {/* Progress Panel */}
+        <div className="mt-4 p-4 rounded-lg bg-secondary/30 border border-border space-y-3">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>Progress</span>
+            <span className="font-mono">
+              {completedRuns}/{totalRuns || estimatedCombinations || "—"} ({progress.toFixed(0)}%)
+            </span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-secondary overflow-hidden border border-border">
+            <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
+          </div>
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>Estimated Time</span>
+            <span className="font-mono">
+              {loading
+                ? runningEtaSeconds !== null
+                  ? `${formatDuration(runningEtaSeconds)} remaining`
+                  : `Sampling... ${Math.min(sampledCycleCount, 3)}/3 runs`
+                : estimatedTime}
+            </span>
+          </div>
+        </div>
+
         {/* Run Button */}
         <div className="mt-6">
           <Button
@@ -596,7 +708,7 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
             {loading ? (
               <>
                 <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                Running Optimizer...
+                {optimizerStatus === "queued" ? "Queued..." : `Running Optimizer... ${progress.toFixed(0)}%`}
               </>
             ) : (
               <>

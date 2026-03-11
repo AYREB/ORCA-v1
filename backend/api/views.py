@@ -320,13 +320,14 @@ def backtestDSLText(request):
             user = get_user_from_request(request)
             body = parse_body(request)
             dsl = body.get("dsl_text", "")
+            initial_balance = body.get("initial_balance", 10000)
             strategy = None
             strategy_label = body.get("strategy_name") or body.get("label")
             strategy_id = body.get("strategy_id")
             if strategy_id and user:
                 strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-            result = dslTextToJsonBacktest(dsl)
+            result = dslTextToJsonBacktest(dsl, initial_balance=initial_balance)
             record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label or "")
             if strategy:
                 strategy.last_result = result
@@ -351,13 +352,14 @@ def backtestDSLJSON(request):
             user = get_user_from_request(request)
             body = parse_body(request)
             dsl = body.get("dsl_json", "")
+            initial_balance = body.get("initial_balance", 10000)
             strategy = None
             strategy_label = body.get("strategy_name") or body.get("label")
             strategy_id = body.get("strategy_id")
             if strategy_id and user:
                 strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-            result = dslJSONBacktest(dsl)
+            result = dslJSONBacktest(dsl, initial_balance=initial_balance)
             record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label or "")
             if strategy:
                 strategy.last_result = result

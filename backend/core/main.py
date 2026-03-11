@@ -93,26 +93,26 @@ def apply_default_arguments(parsed_dsl, registry_path="Core/Registries/arguments
     return parsed_dsl
 
 
-def dslTextToJsonBacktest(dsl_text):
+def dslTextToJsonBacktest(dsl_text, initial_balance=10000):
     print("dsl_GO")
     print(dsl_text)
     parsed_dsl = parser.parse_dsl(dsl_text)
     print(parsed_dsl)
-    trade_data = main(parsed_dsl)
+    trade_data = main(parsed_dsl, initial_balance=initial_balance)
     return trade_data
 
-def dslJSONBacktest(dsl_json):
+def dslJSONBacktest(dsl_json, initial_balance=10000):
     print("dsl_GO")
     print(dsl_json)
 
-    with open("/Users/alexmunden/Desktop/Coding/Orca/ORCA-v1/backend/core/mainDEMOJSON.json", "w") as f:
+    with open("mainDEMOJSON.json", "w") as f:
         json.dump(dsl_json,f,indent=4)
     
-    trade_data = main(dsl_json)
+    trade_data = main(dsl_json, initial_balance=initial_balance)
     return trade_data
 
 
-def main(parsed_dsl):
+def main(parsed_dsl, initial_balance=10000):
     # ---------------- Parse and validate DSL ----------------
     parsed_dsl = apply_default_arguments(parsed_dsl)
     parsed_dsl = merge_indicator_defaults(parsed_dsl) 
@@ -198,7 +198,8 @@ def main(parsed_dsl):
     trade_log, cash, positions, pct_change = backtester(
         parsed_dsl,
         data_dict,
-        INDICATOR_FUNCTIONS
+        INDICATOR_FUNCTIONS,
+        initial_balance=initial_balance
     )
 
    # Decide the timeframe per ticker; default '1h'

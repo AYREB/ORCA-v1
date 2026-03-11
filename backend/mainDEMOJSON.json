@@ -1,0 +1,53 @@
+{
+    "LONG": {
+        "context": {
+            "tickers": [
+                "AAPL"
+            ],
+            "execution_timeframe": "1h",
+            "dateframe": {
+                "start": "2024-01-01",
+                "end": "2025-01-01"
+            }
+        },
+        "OPEN": {
+            "CONDITIONS": {
+                "left": {
+                    "func": "RSI",
+                    "arg": {
+                        "period": 14,
+                        "timeframe": "1h",
+                        "offset": 0
+                    }
+                },
+                "operator": "<",
+                "right": {
+                    "value": 30
+                }
+            },
+            "ARGUMENTS": {
+                "recurring": false,
+                "takeProfitPercent": 10,
+                "stopLossPercent": 6,
+                "spread": 0.001
+            }
+        },
+        "CLOSE": {
+            "CONDITIONS": {
+                "left": {
+                    "func": "RSI",
+                    "arg": {
+                        "period": 14,
+                        "timeframe": "1h",
+                        "offset": 0
+                    }
+                },
+                "operator": "<",
+                "right": {
+                    "value": 30
+                }
+            },
+            "ARGUMENTS": {}
+        }
+    }
+}

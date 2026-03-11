@@ -27,6 +27,17 @@ interface GeneticOptimizerProps {
   onBestApplied?: (result: BacktestResult, strategy?: { id?: number; name: string }) => void;
 }
 
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "—";
+  if (seconds < 60) return `${Math.ceil(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.ceil(seconds % 60);
+  if (mins < 60) return `${mins}m ${secs}s`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return `${hours}h ${remMins}m`;
+}
+
 // shared helper from ParameterOptimizer (duplicated to keep component standalone)
 function extractOptimizableParameters(
   node: unknown,
@@ -94,6 +105,10 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
+  const [sampledCycleCount, setSampledCycleCount] = useState(0);
+  const [sampledCycleSeconds, setSampledCycleSeconds] = useState(0);
+  const lastCompletedRef = useRef(0);
+  const lastSampleTsRef = useRef<number | null>(null);
 
   const setGroupEnabled = (group: "arguments" | "conditions", enabled: boolean) => {
     setParamChoices((prev) => {
@@ -232,6 +247,17 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
   );
 
   const estimatedRuns = useMemo(() => gaSettings.population * gaSettings.generations, [gaSettings]);
+  const estimatedSeconds = useMemo(() => Math.ceil(estimatedRuns * 1.5), [estimatedRuns]);
+  const estimatedTime = useMemo(() => formatDuration(estimatedSeconds), [estimatedSeconds]);
+
+  const runningEtaSeconds = useMemo(() => {
+    if (!loading) return null;
+
+    if (sampledCycleCount < 3 || totalRuns <= 0) return null;
+    const avgSecondsPerRun = sampledCycleSeconds / sampledCycleCount;
+    const remainingRuns = Math.max(0, totalRuns - completedRuns);
+    return Math.max(0, Math.ceil(avgSecondsPerRun * remainingRuns));
+  }, [loading, sampledCycleCount, sampledCycleSeconds, totalRuns, completedRuns]);
 
   const generationsData = useMemo(() => {
     const gens = gaSettings.generations || 1;
@@ -446,6 +472,10 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
     setProgress(0);
     setCompletedRuns(0);
     setTotalRuns(0);
+    setSampledCycleCount(0);
+    setSampledCycleSeconds(0);
+    lastCompletedRef.current = 0;
+    lastSampleTsRef.current = Date.now();
 
     try {
       const payload: Record<string, ParameterChoice> = {};
@@ -471,7 +501,22 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
 
       const poll = async () => {
         const status: GeneticJobStatus = await api.getGeneticJobStatus(start.job_id);
-        setCompletedRuns(status.completed_runs);
+        const nowTs = Date.now();
+        const currentCompleted = status.completed_runs || 0;
+        const previousCompleted = lastCompletedRef.current;
+        const previousTs = lastSampleTsRef.current;
+
+        if (previousTs !== null && currentCompleted > previousCompleted) {
+          const deltaRuns = currentCompleted - previousCompleted;
+          const deltaSeconds = Math.max(0, (nowTs - previousTs) / 1000);
+          setSampledCycleCount((prev) => prev + deltaRuns);
+          setSampledCycleSeconds((prev) => prev + deltaSeconds);
+        }
+
+        lastCompletedRef.current = currentCompleted;
+        lastSampleTsRef.current = nowTs;
+
+        setCompletedRuns(currentCompleted);
         setTotalRuns(status.total_runs);
         setProgress(status.progress);
         if (status.status === "completed" && status.result) {
@@ -596,6 +641,9 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             <p className="text-xs text-muted-foreground">
               Estimated runs: {estimatedRuns}
             </p>
+            <p className="text-xs text-muted-foreground">
+              Estimated time: {estimatedTime}
+            </p>
           </div>
           <Button variant="outline" size="sm" onClick={setAllEnabled}>
             Enable all
@@ -672,7 +720,7 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
           </div>
         </ScrollArea>
 
-        <div className="mt-4 space-y-2">
+        <div className="mt-4 p-4 rounded-lg bg-secondary/30 border border-border space-y-3">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>Progress</span>
             <span className="font-mono">
@@ -680,9 +728,19 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             </span>
           </div>
           <div className="h-2 w-full rounded-full bg-secondary overflow-hidden border border-border">
-            <div className="h-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
+            <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
           </div>
-          <div className="pt-3 space-y-2">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>Estimated Time</span>
+            <span className="font-mono">
+              {loading
+                ? runningEtaSeconds !== null
+                  ? `${formatDuration(runningEtaSeconds)} remaining`
+                  : `Sampling... ${Math.min(sampledCycleCount, 3)}/3 runs`
+                : estimatedTime}
+            </span>
+          </div>
+          <div className="pt-2 space-y-2">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>Generation Flow</span>
               <span className="font-mono">

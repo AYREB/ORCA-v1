@@ -41,6 +41,11 @@
           "description": "Maximum number of recurring investments per position (0 = unlimited).",
           "parent":"recurring"
         },
+        "spread": {
+          "type": "float",
+          "default": 0.0,
+          "description": "Bid/ask spread percentage applied on entries and exits (e.g. 0.1 = 0.1%)."
+        },
         "stopLossPercent": {
           "type": "float",
           "default": 0.2,
