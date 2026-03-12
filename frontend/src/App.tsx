@@ -11,6 +11,7 @@ import Optimizer from "./pages/Optimizer";
 import Genetic from "./pages/Genetic";
 import NotFound from "./pages/NotFound";
 import Strategies from "./pages/Strategies";
+import PaperAccounts from "./pages/PaperAccounts";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
 
@@ -63,6 +64,14 @@ const App = () => (
                 element={
                   <ProtectedRoute>
                     <Strategies />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/dashboard/paper-accounts"
+                element={
+                  <ProtectedRoute>
+                    <PaperAccounts />
                   </ProtectedRoute>
                 }
               />

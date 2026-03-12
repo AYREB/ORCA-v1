@@ -8,7 +8,8 @@ import {
   LogOut,
   ChevronLeft,
   Sliders,
-  Dna
+  Dna,
+  Wallet
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ const navItems = [
   { icon: Sliders, label: "Optimizer", path: "/dashboard/optimizer" },
   { icon: Dna, label: "Genetic", path: "/dashboard/genetic" },
   { icon: LineChart, label: "Strategies", path: "/dashboard/strategies" },
+  { icon: Wallet, label: "Paper Accounts", path: "/dashboard/paper-accounts" },
   { icon: History, label: "History", path: "/dashboard/history" },
 ];
 
