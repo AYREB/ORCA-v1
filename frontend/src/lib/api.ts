@@ -232,6 +232,12 @@ class DjangoAPI {
     });
   }
 
+  async logout(): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>('/logout/', {
+      method: 'POST',
+    });
+  }
+
   async getCurrentUser(): Promise<AuthUser> {
     return this.request<AuthUser>('/me/');
   }

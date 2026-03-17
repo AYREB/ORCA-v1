@@ -66,6 +66,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const logout = useCallback(() => {
+    void api.logout().catch(() => {
+      // Ignore network/backend errors and still clear local auth state.
+    });
     localStorage.removeItem(AUTH_STORAGE_KEY);
     setUser(null);
     setToken(null);

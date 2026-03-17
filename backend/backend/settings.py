@@ -10,22 +10,113 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
+import warnings
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = BASE_DIR.parent
+
+
+def load_env_file(env_path: Path) -> None:
+    """Load KEY=VALUE pairs into process env without overriding existing vars."""
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+
+        os.environ.setdefault(key, value)
+
+
+# Support either backend/.env or project-root .env
+load_env_file(BASE_DIR / ".env")
+load_env_file(PROJECT_ROOT / ".env")
+
+
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name: str, default: int, minimum: int | None = None) -> int:
+    value = os.getenv(name)
+    if value is None:
+        parsed = default
+    else:
+        try:
+            parsed = int(value)
+        except ValueError:
+            parsed = default
+    if minimum is not None and parsed < minimum:
+        return minimum
+    return parsed
+
+
+def env_float(name: str, default: float, minimum: float | None = None) -> float:
+    value = os.getenv(name)
+    if value is None:
+        parsed = default
+    else:
+        try:
+            parsed = float(value)
+        except ValueError:
+            parsed = default
+    if minimum is not None and parsed < minimum:
+        return minimum
+    return parsed
+
+
+def env_list(name: str, default: list[str] | None = None) -> list[str]:
+    value = os.getenv(name)
+    if value is None:
+        return list(default or [])
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-kec75p(j&ql4h7ox&5_jqhu@5wq72m%&cex0w(@i-itx7o#2pz'
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_bool("DEBUG", True)
 
-ALLOWED_HOSTS = []
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "django-insecure-development-only-change-me"
+    else:
+        warnings.warn(
+            "DJANGO_SECRET_KEY is not set with DEBUG=False. "
+            "Using an ephemeral key; set DJANGO_SECRET_KEY in deployment.",
+            RuntimeWarning,
+        )
+        SECRET_KEY = os.urandom(48).hex()
+
+ALLOWED_HOSTS = env_list(
+    "ALLOWED_HOSTS",
+    ["127.0.0.1", "localhost", "[::1]"] if DEBUG else [],
+)
+if not ALLOWED_HOSTS and not DEBUG:
+    warnings.warn(
+        "ALLOWED_HOSTS is empty with DEBUG=False. Falling back to localhost-only.",
+        RuntimeWarning,
+    )
+    ALLOWED_HOSTS = ["127.0.0.1", "localhost", "[::1]"]
 
 
 # Application definition
@@ -54,11 +145,29 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-CORS_ALLOWED_ORIGINS = [
+_default_local_origins = [
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
     "http://192.168.1.169:8080",
-    "http://localhost:8080"
 ]
+CORS_ALLOWED_ORIGINS = [*env_list("CORS_ALLOWED_ORIGINS", _default_local_origins if DEBUG else [])]
+if DEBUG:
+    # Keep common local origins available in development, even if .env overrides CORS list.
+    CORS_ALLOWED_ORIGINS = list(dict.fromkeys([*CORS_ALLOWED_ORIGINS, *_default_local_origins]))
+if not CORS_ALLOWED_ORIGINS and not DEBUG:
+    warnings.warn(
+        "CORS_ALLOWED_ORIGINS is empty with DEBUG=False. Falling back to localhost-only origins.",
+        RuntimeWarning,
+    )
+    CORS_ALLOWED_ORIGINS = list(_default_local_origins)
+CORS_ALLOW_CREDENTIALS = False
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", CORS_ALLOWED_ORIGINS if DEBUG else [])
+if DEBUG:
+    CSRF_TRUSTED_ORIGINS = list(dict.fromkeys([*CSRF_TRUSTED_ORIGINS, *CORS_ALLOWED_ORIGINS]))
+if not CSRF_TRUSTED_ORIGINS and not DEBUG:
+    CSRF_TRUSTED_ORIGINS = list(CORS_ALLOWED_ORIGINS)
 
 ROOT_URLCONF = 'backend.urls'
 
@@ -78,6 +187,26 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'backend.wsgi.application'
+
+
+# Security hardening (kept dev-friendly via DEBUG defaults).
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = "DENY"
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"
+
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
+
+SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", not DEBUG)
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", not DEBUG)
+CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", not DEBUG)
+SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 0 if DEBUG else 31536000, minimum=0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", not DEBUG)
+SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", not DEBUG)
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 
 # Database
@@ -126,14 +255,48 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# API protection and abuse limits.
+MAX_JSON_BODY_BYTES = env_int("MAX_JSON_BODY_BYTES", 1048576, minimum=1)
+MAX_DSL_TEXT_LENGTH = env_int("MAX_DSL_TEXT_LENGTH", 50000, minimum=1000)
+MAX_INITIAL_BALANCE = env_float("MAX_INITIAL_BALANCE", 100000000.0, minimum=1.0)
+ASYNC_JOB_TTL_SECONDS = env_int("ASYNC_JOB_TTL_SECONDS", 3600, minimum=60)
+ASYNC_JOB_MAX_ENTRIES = env_int("ASYNC_JOB_MAX_ENTRIES", 500, minimum=20)
+ASYNC_JOB_MAX_PER_USER = env_int("ASYNC_JOB_MAX_PER_USER", 3, minimum=1)
+API_RATE_LIMITS = {
+    "auth": {
+        "max_requests": env_int("RATE_LIMIT_AUTH_MAX_REQUESTS", 20, minimum=1),
+        "window_seconds": env_int("RATE_LIMIT_AUTH_WINDOW_SECONDS", 300, minimum=1),
+    },
+    "compute": {
+        "max_requests": env_int("RATE_LIMIT_COMPUTE_MAX_REQUESTS", 10, minimum=1),
+        "window_seconds": env_int("RATE_LIMIT_COMPUTE_WINDOW_SECONDS", 60, minimum=1),
+    },
+    "status": {
+        "max_requests": env_int("RATE_LIMIT_STATUS_MAX_REQUESTS", 120, minimum=1),
+        "window_seconds": env_int("RATE_LIMIT_STATUS_WINDOW_SECONDS", 60, minimum=1),
+    },
+    "general": {
+        "max_requests": env_int("RATE_LIMIT_GENERAL_MAX_REQUESTS", 180, minimum=1),
+        "window_seconds": env_int("RATE_LIMIT_GENERAL_WINDOW_SECONDS", 60, minimum=1),
+    },
+}
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.TokenAuthentication",
     ]
+}
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "orca-api-cache",
+    }
 }

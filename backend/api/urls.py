@@ -12,6 +12,7 @@ urlpatterns = [
     path("health/", health),
     path("register/", views.register),
     path("login/", views.login),
+    path("logout/", views.logout),
     path("me/", views.me),
     path("strategies/", views.strategies),
     path("strategies/<int:strategy_id>/", views.strategy_detail),

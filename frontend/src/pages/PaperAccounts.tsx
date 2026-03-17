@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Helmet } from "react-helmet-async";
+import { motion } from "framer-motion";
 import {
   Activity,
   BarChart3,
@@ -392,12 +393,23 @@ const PaperAccounts = () => {
 
   const equityChartData = useMemo(() => {
     if (!selectedAccount) return [];
-    return [...selectedAccount.performanceHistory]
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-      .map((point) => ({
-        time: new Date(point.timestamp).toLocaleDateString(),
+    const sorted = [...selectedAccount.performanceHistory]
+      .filter((point) => Number.isFinite(new Date(point.timestamp).getTime()) && Number.isFinite(point.equity))
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    return sorted.map((point, index) => {
+      const timestamp = new Date(point.timestamp);
+      const label =
+        sorted.length > 12
+          ? `${index + 1}`
+          : timestamp.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return {
+        run: index + 1,
+        label,
+        fullLabel: timestamp.toLocaleString(),
         equity: point.equity,
-      }));
+      };
+    });
   }, [selectedAccount]);
 
   const runReturnsData = useMemo(() => {
@@ -405,11 +417,18 @@ const PaperAccounts = () => {
     return [...selectedAccount.runs]
       .slice(0, 20)
       .reverse()
-      .map((run) => ({
-        time: new Date(run.executedAt).toLocaleDateString(),
+      .map((run, index) => ({
+        run: index + 1,
+        label: `R${index + 1}`,
+        fullLabel: `${new Date(run.executedAt).toLocaleString()} - ${run.strategyName}`,
         returnPct: run.pctChange,
         strategy: run.strategyName,
       }));
+  }, [selectedAccount]);
+
+  const recentRuns = useMemo(() => {
+    if (!selectedAccount) return [];
+    return selectedAccount.runs.slice(0, 8);
   }, [selectedAccount]);
 
   const openCreateAccountDialog = () => {
@@ -706,52 +725,63 @@ const PaperAccounts = () => {
         />
 
         <main className={`transition-all duration-300 ${sidebarCollapsed ? "ml-16" : "ml-64"}`}>
-          <div className="p-6 max-w-[1500px] mx-auto space-y-6">
-            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-              <div>
-                <h1 className="text-2xl font-bold">Paper Accounts</h1>
-                <p className="text-sm text-muted-foreground">
-                  Build full paper-trading portfolios with strategy execution, trade logs, and account analytics.
-                </p>
+          <div className="mx-auto max-w-[1500px] space-y-6 p-6">
+            <motion.section
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35 }}
+              className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-primary/15 via-card/95 to-card p-6"
+            >
+              <div className="absolute -left-14 -top-14 h-44 w-44 rounded-full bg-primary/15 blur-3xl" />
+              <div className="absolute -bottom-12 right-0 h-44 w-44 rounded-full bg-accent/10 blur-3xl" />
+              <div className="relative z-10 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-primary/90">
+                    <Rocket className="h-3.5 w-3.5" />
+                    Sim execution lab
+                  </div>
+                  <h1 className="text-3xl font-semibold">Paper Accounts</h1>
+                  <p className="text-sm text-muted-foreground">
+                    Build isolated portfolios, run strategies at current simulated equity, and audit performance over time.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="outline" onClick={loadStrategies} disabled={isLoadingStrategies}>
+                    {isLoadingStrategies ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Refreshing
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        Refresh Strategies
+                      </>
+                    )}
+                  </Button>
+                  <Button onClick={openCreateAccountDialog}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    New Paper Account
+                  </Button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" onClick={loadStrategies} disabled={isLoadingStrategies}>
-                  {isLoadingStrategies ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Refreshing Strategies
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-4 w-4 mr-2" />
-                      Refresh Strategies
-                    </>
-                  )}
-                </Button>
-                <Button onClick={openCreateAccountDialog}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Paper Account
-                </Button>
-              </div>
-            </div>
+            </motion.section>
 
-            <div className="grid grid-cols-1 xl:grid-cols-[360px_minmax(0,1fr)] gap-6">
-              <Card className="bg-card/60 backdrop-blur-sm border-border">
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
+              <Card className="border-border bg-card/70">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-lg">Accounts</CardTitle>
-                  <CardDescription>
-                    Create, edit, and switch between paper trading accounts.
-                  </CardDescription>
+                  <CardTitle className="text-lg">Account Book</CardTitle>
+                  <CardDescription>Switch workspaces and track each simulation separately.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   {accounts.length === 0 ? (
-                    <div className="rounded-lg border border-dashed border-border p-6 text-center space-y-3">
-                      <Wallet className="h-8 w-8 mx-auto text-muted-foreground" />
+                    <div className="space-y-3 rounded-lg border border-dashed border-border p-6 text-center">
+                      <Wallet className="mx-auto h-8 w-8 text-muted-foreground" />
                       <p className="text-sm text-muted-foreground">
-                        No paper accounts yet. Create one to start tracking simulated performance.
+                        No paper accounts yet. Create one to start your simulation workflow.
                       </p>
                       <Button size="sm" onClick={openCreateAccountDialog}>
-                        <Plus className="h-4 w-4 mr-2" />
+                        <Plus className="mr-2 h-4 w-4" />
                         Create Account
                       </Button>
                     </div>
@@ -769,13 +799,13 @@ const PaperAccounts = () => {
                               className={`w-full rounded-xl border p-4 text-left transition-colors ${
                                 isSelected
                                   ? "border-primary/40 bg-primary/10"
-                                  : "border-border bg-secondary/20 hover:bg-secondary/40"
+                                  : "border-border bg-background/40 hover:bg-background/70"
                               }`}
                             >
-                              <div className="flex items-start justify-between gap-2 mb-2">
+                              <div className="mb-2 flex items-start justify-between gap-2">
                                 <div>
-                                  <p className="font-semibold line-clamp-1">{account.name}</p>
-                                  <p className="text-xs text-muted-foreground line-clamp-1">
+                                  <p className="line-clamp-1 font-semibold">{account.name}</p>
+                                  <p className="line-clamp-1 text-xs text-muted-foreground">
                                     {account.description || "No description"}
                                   </p>
                                 </div>
@@ -806,12 +836,13 @@ const PaperAccounts = () => {
                                   </Button>
                                 </div>
                               </div>
-                              <div className="grid grid-cols-2 gap-2 text-xs mt-3">
-                                <div className="rounded-md bg-background/70 p-2">
-                                  <p className="text-muted-foreground">Current</p>
+
+                              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                                <div className="rounded-md border border-border bg-background/70 p-2">
+                                  <p className="text-muted-foreground">Equity</p>
                                   <p className="font-mono font-semibold">{formatMoney(account.currentBalance)}</p>
                                 </div>
-                                <div className="rounded-md bg-background/70 p-2">
+                                <div className="rounded-md border border-border bg-background/70 p-2">
                                   <p className="text-muted-foreground">Return</p>
                                   <p
                                     className={`font-mono font-semibold ${
@@ -823,7 +854,7 @@ const PaperAccounts = () => {
                                   </p>
                                 </div>
                               </div>
-                              <div className="flex items-center justify-between mt-3 text-xs text-muted-foreground">
+                              <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
                                 <span>{account.appliedStrategyIds.length} strategies</span>
                                 <span>{account.runs.length} runs</span>
                               </div>
@@ -838,32 +869,36 @@ const PaperAccounts = () => {
 
               {!selectedAccount || !selectedAccountMetrics ? (
                 <Card className="border-dashed bg-card/40">
-                  <CardContent className="py-16 text-center space-y-3">
-                    <Rocket className="h-10 w-10 mx-auto text-muted-foreground" />
+                  <CardContent className="space-y-3 py-20 text-center">
+                    <Rocket className="mx-auto h-10 w-10 text-muted-foreground" />
                     <p className="text-muted-foreground">
-                      Select an account to manage strategies, run paper trades, and review analytics.
+                      Select an account to run strategies and inspect the full performance workspace.
                     </p>
                   </CardContent>
                 </Card>
               ) : (
                 <div className="space-y-6">
-                  <Card className="bg-card/60 border-border">
-                    <CardHeader className="pb-4">
-                      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <Card className="relative overflow-hidden border-border bg-card/70">
+                    <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-primary/10 blur-2xl" />
+                    <CardHeader className="relative z-10 pb-4">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <CardTitle className="text-xl">{selectedAccount.name}</CardTitle>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <CardTitle className="text-2xl">{selectedAccount.name}</CardTitle>
                             <Badge variant="outline" className="text-xs">
                               Started {new Date(selectedAccount.createdAt).toLocaleDateString()}
                             </Badge>
+                            <Badge variant="outline" className="text-xs">
+                              {selectedAccount.runs.length} runs
+                            </Badge>
                           </div>
                           <CardDescription>
-                            {selectedAccount.description || "Simulated environment for strategy execution and testing."}
+                            {selectedAccount.description || "Simulated environment for strategy execution and risk analysis."}
                           </CardDescription>
                         </div>
                         <div className="flex items-center gap-2">
                           <Button variant="outline" onClick={() => openEditAccountDialog(selectedAccount)}>
-                            <Pencil className="h-4 w-4 mr-2" />
+                            <Pencil className="mr-2 h-4 w-4" />
                             Edit Account
                           </Button>
                           <Button
@@ -871,25 +906,25 @@ const PaperAccounts = () => {
                             className="text-destructive hover:text-destructive"
                             onClick={() => handleDeleteAccount(selectedAccount.id)}
                           >
-                            <Trash2 className="h-4 w-4 mr-2" />
+                            <Trash2 className="mr-2 h-4 w-4" />
                             Delete Account
                           </Button>
                         </div>
                       </div>
                     </CardHeader>
-                    <CardContent className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                      <div className="rounded-lg border border-border bg-background/70 p-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                    <CardContent className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                      <div className="rounded-lg border border-border bg-background/60 p-3">
+                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <Wallet className="h-3.5 w-3.5" />
                           Current Equity
-                        </div>
+                        </p>
                         <p className="font-mono text-lg font-semibold">{formatMoney(selectedAccount.currentBalance)}</p>
                       </div>
-                      <div className="rounded-lg border border-border bg-background/70 p-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                      <div className="rounded-lg border border-border bg-background/60 p-3">
+                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <TrendingUp className="h-3.5 w-3.5" />
-                          All-Time Return
-                        </div>
+                          Total Return
+                        </p>
                         <p
                           className={`font-mono text-lg font-semibold ${
                             selectedAccountMetrics.totalReturnPct >= 0 ? "text-success" : "text-destructive"
@@ -899,63 +934,55 @@ const PaperAccounts = () => {
                           {selectedAccountMetrics.totalReturnPct.toFixed(2)}%
                         </p>
                       </div>
-                      <div className="rounded-lg border border-border bg-background/70 p-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                      <div className="rounded-lg border border-border bg-background/60 p-3">
+                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <LineChart className="h-3.5 w-3.5" />
                           All-Time High
-                        </div>
+                        </p>
                         <p className="font-mono text-lg font-semibold">{formatMoney(selectedAccountMetrics.allTimeHigh)}</p>
                       </div>
-                      <div className="rounded-lg border border-border bg-background/70 p-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                      <div className="rounded-lg border border-border bg-background/60 p-3">
+                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <TrendingDown className="h-3.5 w-3.5" />
                           Drawdown
-                        </div>
-                        <p
-                          className={`font-mono text-lg font-semibold ${
-                            selectedAccountMetrics.drawdownPct >= 0 ? "text-success" : "text-destructive"
-                          }`}
-                        >
-                          {selectedAccountMetrics.drawdownPct >= 0 ? "+" : ""}
+                        </p>
+                        <p className="font-mono text-lg font-semibold text-destructive">
                           {selectedAccountMetrics.drawdownPct.toFixed(2)}%
                         </p>
                       </div>
-                      <div className="rounded-lg border border-border bg-background/70 p-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                      <div className="rounded-lg border border-border bg-background/60 p-3">
+                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <Target className="h-3.5 w-3.5" />
-                          Best / Worst Run
-                        </div>
-                        <p className="font-mono text-base font-semibold">
-                          <span className="text-success">
-                            {selectedAccountMetrics.bestRun >= 0 ? "+" : ""}
-                            {selectedAccountMetrics.bestRun.toFixed(2)}%
-                          </span>
+                          Best / Worst
+                        </p>
+                        <p className="font-mono text-sm font-semibold">
+                          <span className="text-success">+{selectedAccountMetrics.bestRun.toFixed(2)}%</span>
                           {" / "}
                           <span className="text-destructive">{selectedAccountMetrics.worstRun.toFixed(2)}%</span>
                         </p>
                       </div>
-                      <div className="rounded-lg border border-border bg-background/70 p-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                      <div className="rounded-lg border border-border bg-background/60 p-3">
+                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <BarChart3 className="h-3.5 w-3.5" />
-                          Strategy Runs
-                        </div>
+                          Total Runs
+                        </p>
                         <p className="font-mono text-lg font-semibold">{selectedAccountMetrics.totalRuns}</p>
                       </div>
-                      <div className="rounded-lg border border-border bg-background/70 p-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                      <div className="rounded-lg border border-border bg-background/60 p-3">
+                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <Activity className="h-3.5 w-3.5" />
                           Trades / Win Rate
-                        </div>
-                        <p className="font-mono text-base font-semibold">
+                        </p>
+                        <p className="font-mono text-sm font-semibold">
                           {selectedAccountMetrics.totalTrades} / {selectedAccountMetrics.allTimeWinRate.toFixed(1)}%
                         </p>
                       </div>
-                      <div className="rounded-lg border border-border bg-background/70 p-3">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                      <div className="rounded-lg border border-border bg-background/60 p-3">
+                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <Clock3 className="h-3.5 w-3.5" />
-                          Last Run
-                        </div>
-                        <p className="font-mono text-sm font-semibold">
+                          Last Execution
+                        </p>
+                        <p className="font-mono text-xs font-semibold">
                           {selectedAccountMetrics.lastRunAt
                             ? new Date(selectedAccountMetrics.lastRunAt).toLocaleString()
                             : "No runs yet"}
@@ -964,98 +991,101 @@ const PaperAccounts = () => {
                     </CardContent>
                   </Card>
 
-                  <Tabs defaultValue="overview" className="w-full">
-                    <TabsList className="mb-4 bg-card/50 border border-border p-1">
+                  <Tabs defaultValue="overview" className="w-full" key={selectedAccount.id}>
+                    <TabsList className="mb-4 border border-border bg-card/50 p-1">
                       <TabsTrigger value="overview" className="data-[state=active]:bg-primary/20">
-                        Overview
+                        Command Desk
                       </TabsTrigger>
                       <TabsTrigger value="strategies" className="data-[state=active]:bg-primary/20">
-                        Strategies
+                        Strategy Deck
                       </TabsTrigger>
                       <TabsTrigger value="activity" className="data-[state=active]:bg-primary/20">
-                        Activity & Trades
+                        Run Journal
                       </TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="overview" className="space-y-6">
-                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                        <Card className="bg-card/60 border-border">
+                      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                        <Card className="border-border bg-card/60">
                           <CardHeader>
-                            <CardTitle className="text-lg">Equity Curve</CardTitle>
-                            <CardDescription>All-time account value after each paper run.</CardDescription>
+                            <CardTitle className="text-lg">Equity Trajectory</CardTitle>
+                            <CardDescription>Account value after each run, normalized by execution order.</CardDescription>
                           </CardHeader>
-                          <CardContent className="h-[320px]">
+                          <CardContent className="h-[340px]">
                             <ResponsiveContainer width="100%" height="100%">
-                              <AreaChart data={equityChartData}>
+                              <AreaChart data={equityChartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
                                 <defs>
                                   <linearGradient id="paperEquityFill" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="hsl(175 80% 50%)" stopOpacity={0.35} />
-                                    <stop offset="95%" stopColor="hsl(175 80% 50%)" stopOpacity={0} />
+                                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.35} />
+                                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.02} />
                                   </linearGradient>
                                 </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(222 30% 18%)" />
+                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                                 <XAxis
-                                  dataKey="time"
-                                  stroke="hsl(215 20% 55%)"
-                                  tick={{ fill: "hsl(215 20% 55%)", fontSize: 12 }}
+                                  dataKey="label"
+                                  stroke="hsl(var(--muted-foreground))"
+                                  tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
                                 />
                                 <YAxis
-                                  stroke="hsl(215 20% 55%)"
-                                  tick={{ fill: "hsl(215 20% 55%)", fontSize: 12 }}
-                                  tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
+                                  stroke="hsl(var(--muted-foreground))"
+                                  tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                                  tickFormatter={(value) => `$${Math.round(value).toLocaleString()}`}
+                                  width={88}
                                 />
                                 <Tooltip
                                   contentStyle={{
-                                    backgroundColor: "hsl(222 47% 8%)",
-                                    border: "1px solid hsl(222 30% 18%)",
+                                    backgroundColor: "hsl(var(--card))",
+                                    border: "1px solid hsl(var(--border))",
                                   }}
-                                  formatter={(value: number) => formatMoney(value)}
+                                  labelFormatter={(_, payload) => payload?.[0]?.payload?.fullLabel ?? ""}
+                                  formatter={(value: number) => [formatMoney(value), "Equity"]}
                                 />
                                 <Area
                                   type="monotone"
                                   dataKey="equity"
-                                  stroke="hsl(175 80% 50%)"
-                                  strokeWidth={2}
+                                  stroke="hsl(var(--primary))"
+                                  strokeWidth={2.5}
                                   fill="url(#paperEquityFill)"
+                                  dot={false}
                                 />
                               </AreaChart>
                             </ResponsiveContainer>
                           </CardContent>
                         </Card>
 
-                        <Card className="bg-card/60 border-border">
+                        <Card className="border-border bg-card/60">
                           <CardHeader>
-                            <CardTitle className="text-lg">Run Performance</CardTitle>
-                            <CardDescription>Return percentage for recent strategy executions.</CardDescription>
+                            <CardTitle className="text-lg">Run Return Ladder</CardTitle>
+                            <CardDescription>Recent run outcomes to spot consistency and volatility quickly.</CardDescription>
                           </CardHeader>
-                          <CardContent className="h-[320px]">
+                          <CardContent className="h-[340px]">
                             <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={runReturnsData}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(222 30% 18%)" />
+                              <BarChart data={runReturnsData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                                 <XAxis
-                                  dataKey="time"
-                                  stroke="hsl(215 20% 55%)"
-                                  tick={{ fill: "hsl(215 20% 55%)", fontSize: 12 }}
+                                  dataKey="label"
+                                  stroke="hsl(var(--muted-foreground))"
+                                  tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
                                 />
                                 <YAxis
-                                  stroke="hsl(215 20% 55%)"
-                                  tick={{ fill: "hsl(215 20% 55%)", fontSize: 12 }}
+                                  stroke="hsl(var(--muted-foreground))"
+                                  tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
                                   tickFormatter={(value) => `${value.toFixed(0)}%`}
                                 />
                                 <Tooltip
                                   contentStyle={{
-                                    backgroundColor: "hsl(222 47% 8%)",
-                                    border: "1px solid hsl(222 30% 18%)",
+                                    backgroundColor: "hsl(var(--card))",
+                                    border: "1px solid hsl(var(--border))",
                                   }}
                                   formatter={(value: number) => [`${value.toFixed(2)}%`, "Return"]}
-                                  labelFormatter={(label, payload) => {
-                                    const item = payload?.[0]?.payload;
-                                    return item ? `${item.time} - ${item.strategy}` : `${label}`;
-                                  }}
+                                  labelFormatter={(_, payload) => payload?.[0]?.payload?.fullLabel ?? ""}
                                 />
                                 <Bar dataKey="returnPct" radius={[4, 4, 0, 0]}>
                                   {runReturnsData.map((entry, index) => (
-                                    <Cell key={`${entry.time}-${index}`} fill={entry.returnPct >= 0 ? "#22c55e" : "#ef4444"} />
+                                    <Cell
+                                      key={`${entry.label}-${index}`}
+                                      fill={entry.returnPct >= 0 ? "hsl(var(--success))" : "hsl(var(--destructive))"}
+                                    />
                                   ))}
                                 </Bar>
                               </BarChart>
@@ -1063,16 +1093,64 @@ const PaperAccounts = () => {
                           </CardContent>
                         </Card>
                       </div>
+
+                      <Card className="border-border bg-card/60">
+                        <CardHeader>
+                          <CardTitle className="text-lg">Recent Executions</CardTitle>
+                          <CardDescription>Latest strategy runs with quick access to full backtest detail.</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          {recentRuns.length === 0 ? (
+                            <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                              No executions yet. Run an applied strategy to populate this feed.
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              {recentRuns.map((run) => (
+                                <button
+                                  key={run.id}
+                                  onClick={() => setSelectedRunId(run.id)}
+                                  className={`w-full rounded-lg border p-3 text-left transition-colors ${
+                                    selectedRunId === run.id
+                                      ? "border-primary/40 bg-primary/10"
+                                      : "border-border bg-background/50 hover:bg-background/75"
+                                  }`}
+                                >
+                                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                      <p className="font-medium">{run.strategyName}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(run.executedAt).toLocaleString()}</p>
+                                    </div>
+                                    <div className="flex items-center gap-2 text-xs">
+                                      <Badge
+                                        variant="outline"
+                                        className={
+                                          run.pctChange >= 0
+                                            ? "border-success/40 bg-success/10 text-success"
+                                            : "border-destructive/40 bg-destructive/10 text-destructive"
+                                        }
+                                      >
+                                        {run.pctChange >= 0 ? "+" : ""}
+                                        {run.pctChange.toFixed(2)}%
+                                      </Badge>
+                                      <span className="text-muted-foreground">{run.tradeCount} trades</span>
+                                      <span className="text-muted-foreground">{run.winRate.toFixed(1)}% win</span>
+                                    </div>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
                     </TabsContent>
 
                     <TabsContent value="strategies" className="space-y-6">
-                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                        <Card className="bg-card/60 border-border">
+                      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                        <Card className="border-border bg-card/60">
                           <CardHeader>
-                            <CardTitle className="text-lg">Apply Existing Strategy</CardTitle>
-                            <CardDescription>
-                              Attach any saved strategy to this account and run it with current equity.
-                            </CardDescription>
+                            <CardTitle className="text-lg">Apply Saved Strategy</CardTitle>
+                            <CardDescription>Attach from your global strategy library to this account.</CardDescription>
                           </CardHeader>
                           <CardContent className="space-y-3">
                             <Select value={selectedApplyStrategyId} onValueChange={setSelectedApplyStrategyId}>
@@ -1097,18 +1175,16 @@ const PaperAccounts = () => {
                               onClick={handleApplyStrategy}
                               disabled={!selectedApplyStrategyId || availableStrategiesToApply.length === 0}
                             >
-                              <Plus className="h-4 w-4 mr-2" />
+                              <Plus className="mr-2 h-4 w-4" />
                               Apply Strategy
                             </Button>
                           </CardContent>
                         </Card>
 
-                        <Card className="bg-card/60 border-border">
+                        <Card className="border-border bg-card/60">
                           <CardHeader>
-                            <CardTitle className="text-lg">Create Strategy In Account</CardTitle>
-                            <CardDescription>
-                              Create and save a new strategy directly from this paper account context.
-                            </CardDescription>
+                            <CardTitle className="text-lg">Create Strategy Here</CardTitle>
+                            <CardDescription>Draft a strategy, save it, and apply in one workflow.</CardDescription>
                           </CardHeader>
                           <CardContent className="space-y-3">
                             <Input
@@ -1125,12 +1201,12 @@ const PaperAccounts = () => {
                             <Button onClick={handleCreateStrategyInAccount} disabled={isCreatingStrategy}>
                               {isCreatingStrategy ? (
                                 <>
-                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                   Creating
                                 </>
                               ) : (
                                 <>
-                                  <Plus className="h-4 w-4 mr-2" />
+                                  <Plus className="mr-2 h-4 w-4" />
                                   Create & Apply
                                 </>
                               )}
@@ -1139,12 +1215,10 @@ const PaperAccounts = () => {
                         </Card>
                       </div>
 
-                      <Card className="bg-card/60 border-border">
+                      <Card className="border-border bg-card/60">
                         <CardHeader>
-                          <CardTitle className="text-lg">Applied Strategies</CardTitle>
-                          <CardDescription>
-                            Run, detach, or delete strategies from this account's trading setup.
-                          </CardDescription>
+                          <CardTitle className="text-lg">Applied Strategy Deck</CardTitle>
+                          <CardDescription>Run, detach, or permanently delete strategies from this account context.</CardDescription>
                         </CardHeader>
                         <CardContent>
                           {selectedAccountStrategies.length === 0 ? (
@@ -1157,21 +1231,22 @@ const PaperAccounts = () => {
                                 const key = `${selectedAccount.id}:${strategy.id}`;
                                 const isRunning = runningKey === key;
                                 const lastResult = strategy.lastResult;
+
                                 return (
                                   <div
                                     key={strategy.id}
-                                    className="rounded-xl border border-border bg-background/50 p-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"
+                                    className="flex flex-col gap-4 rounded-xl border border-border bg-background/50 p-4 lg:flex-row lg:items-center lg:justify-between"
                                   >
                                     <div className="space-y-1">
-                                      <div className="flex items-center gap-2">
+                                      <div className="flex flex-wrap items-center gap-2">
                                         <p className="font-semibold">{strategy.name}</p>
                                         {lastResult?.pct_change !== undefined && (
                                           <Badge
                                             variant="outline"
                                             className={
                                               lastResult.pct_change >= 0
-                                                ? "text-success border-success/40 bg-success/10"
-                                                : "text-destructive border-destructive/40 bg-destructive/10"
+                                                ? "border-success/40 bg-success/10 text-success"
+                                                : "border-destructive/40 bg-destructive/10 text-destructive"
                                             }
                                           >
                                             {lastResult.pct_change >= 0 ? "+" : ""}
@@ -1179,11 +1254,12 @@ const PaperAccounts = () => {
                                           </Badge>
                                         )}
                                       </div>
-                                      <p className="text-xs text-muted-foreground line-clamp-2">
+                                      <p className="line-clamp-2 text-xs text-muted-foreground">
                                         {strategy.dsl || "No DSL text"}
                                       </p>
                                     </div>
-                                    <div className="flex items-center gap-2">
+
+                                    <div className="flex flex-wrap items-center gap-2">
                                       <Button
                                         size="sm"
                                         onClick={() => handleRunStrategy(selectedAccount.id, strategy.id)}
@@ -1191,12 +1267,12 @@ const PaperAccounts = () => {
                                       >
                                         {isRunning ? (
                                           <>
-                                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                             Running
                                           </>
                                         ) : (
                                           <>
-                                            <Play className="h-4 w-4 mr-2" />
+                                            <Play className="mr-2 h-4 w-4" />
                                             Run
                                           </>
                                         )}
@@ -1214,7 +1290,7 @@ const PaperAccounts = () => {
                                         className="text-destructive hover:text-destructive"
                                         onClick={() => handleDeleteStrategyEverywhere(strategy.id)}
                                       >
-                                        <Trash2 className="h-4 w-4 mr-2" />
+                                        <Trash2 className="mr-2 h-4 w-4" />
                                         Delete
                                       </Button>
                                     </div>
@@ -1229,20 +1305,20 @@ const PaperAccounts = () => {
 
                     <TabsContent value="activity" className="space-y-4">
                       {selectedAccount.runs.length === 0 ? (
-                        <Card className="bg-card/60 border-border">
-                          <CardContent className="py-16 text-center space-y-3">
-                            <Play className="h-10 w-10 mx-auto text-muted-foreground" />
+                        <Card className="border-border bg-card/60">
+                          <CardContent className="space-y-3 py-16 text-center">
+                            <Play className="mx-auto h-10 w-10 text-muted-foreground" />
                             <p className="text-sm text-muted-foreground">
-                              Run any applied strategy to generate trade logs, charts, and full performance analytics.
+                              Execute an applied strategy to unlock trade logs, chart replay, and analytics.
                             </p>
                           </CardContent>
                         </Card>
                       ) : selectedRun ? (
                         <>
-                          <Card className="bg-card/60 border-border">
+                          <Card className="border-border bg-card/60">
                             <CardContent className="pt-6">
-                              <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-                                <div className="lg:col-span-2 space-y-2">
+                              <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+                                <div className="space-y-2 lg:col-span-2">
                                   <p className="text-xs text-muted-foreground">Selected run</p>
                                   <Select value={selectedRun.id} onValueChange={setSelectedRunId}>
                                     <SelectTrigger>
@@ -1279,7 +1355,7 @@ const PaperAccounts = () => {
                           </Card>
 
                           <Tabs defaultValue="numerical" className="w-full" key={selectedRun.id}>
-                            <TabsList className="bg-card/50 border border-border p-1">
+                            <TabsList className="border border-border bg-card/50 p-1">
                               <TabsTrigger value="numerical" className="data-[state=active]:bg-primary/20">
                                 Numerical + Trades
                               </TabsTrigger>
