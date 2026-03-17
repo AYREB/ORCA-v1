@@ -13,6 +13,7 @@ import NotFound from "./pages/NotFound";
 import Strategies from "./pages/Strategies";
 import PaperAccounts from "./pages/PaperAccounts";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
+import Help from "./pages/Help"
 import { AuthProvider } from "./context/AuthContext";
 
 const queryClient = new QueryClient();
@@ -75,6 +76,7 @@ const App = () => (
                   </ProtectedRoute>
                 }
               />
+              <Route path="/dashboard/help" element={<Help />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </BrowserRouter>
