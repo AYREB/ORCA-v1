@@ -767,7 +767,7 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
                   </Label>
                   <div className="flex flex-wrap gap-2">
                     {tickers.map((ticker, i) => (
-                      <div key={`${ticker}-${i}`} className="flex items-center gap-1.5">
+                      <div key={i} className="flex items-center gap-1.5">
                         <Input
                           value={ticker}
                           onChange={(e) => updateTicker(i, e.target.value)}
