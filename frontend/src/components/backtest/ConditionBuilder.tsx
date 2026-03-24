@@ -1,73 +1,64 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, X, ChevronDown } from "lucide-react";
+import { Plus, X, ChevronsUpDown, ArrowLeftRight, Calculator } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Checkbox } from "@/components/ui/checkbox";
-import { 
-  ConditionSide, 
-  SingleCondition, 
-  ConditionGroup, 
-  Registry, 
-  generateId, 
-  createDefaultCondition 
+import IndicatorCommandPalette from "./IndicatorCommandPalette";
+import {
+  ConditionSide,
+  SingleCondition,
+  ConditionGroup,
+  Registry,
+  INDICATOR_META,
+  generateId,
 } from "./backtest-types";
 
-// Compute visual groups for display (AND groups connected by OR)
-const computeVisualGroups = (conditions: SingleCondition[]): SingleCondition[][] => {
-  if (conditions.length === 0) return [];
-  
-  const groups: SingleCondition[][] = [];
-  let currentGroup: SingleCondition[] = [conditions[0]];
-  
-  for (let i = 0; i < conditions.length - 1; i++) {
-    if (conditions[i].nextLogicalOperator === "AND") {
-      currentGroup.push(conditions[i + 1]);
-    } else {
-      groups.push(currentGroup);
-      currentGroup = [conditions[i + 1]];
-    }
+// ── Helpers ──────────────────────────────────────────────────
+
+const formatSideLabel = (side: ConditionSide): string => {
+  if (side.type === "value") {
+    let base = String(side.value);
+    if (side.operation) base = `${base}${side.operation.operator}${side.operation.operand}`;
+    return base;
   }
-  groups.push(currentGroup);
-  
-  return groups;
+  const args = Object.entries(side.args).filter(([k]) => k !== "offset");
+  const argVals = args.map(([, v]) => v);
+  let base = argVals.length > 0 ? `${side.func}(${argVals.join(", ")})` : side.func;
+  if (side.operation) base = `${base}${side.operation.operator}${side.operation.operand}`;
+  return base;
 };
 
-// Generate human-readable logic preview
 const generateLogicPreview = (conditions: SingleCondition[]): string => {
   if (conditions.length === 0) return "";
-  
   const groups = computeVisualGroups(conditions);
-  
-  const formatSideLabel = (side: ConditionSide): string => {
-    let base: string;
-    if (side.type === "indicator") {
-      const mainArg = side.args.period || side.args.field || "";
-      base = `${side.func}${mainArg ? `(${mainArg})` : ""}`;
-    } else {
-      base = String(side.value);
-    }
-    
-    if (side.operation && side.operation.operand !== undefined) {
-      base = `${base}${side.operation.operator}${side.operation.operand}`;
-    }
-    
-    return base;
-  };
-  
-  const groupStrings = groups.map(group => {
-    const condStrings = group.map(cond => 
-      `${formatSideLabel(cond.left)} ${cond.operator} ${formatSideLabel(cond.right)}`
+  const groupStrings = groups.map((group) => {
+    const condStrings = group.map(
+      (c) => `${formatSideLabel(c.left)} ${c.operator} ${formatSideLabel(c.right)}`
     );
     return group.length > 1 ? `(${condStrings.join(" AND ")})` : condStrings[0];
   });
-  
   return groupStrings.join(" OR ");
 };
 
-// Multi-Condition Builder Component
+const computeVisualGroups = (conditions: SingleCondition[]): SingleCondition[][] => {
+  if (conditions.length === 0) return [];
+  const groups: SingleCondition[][] = [];
+  let cur: SingleCondition[] = [conditions[0]];
+  for (let i = 0; i < conditions.length - 1; i++) {
+    if (conditions[i].nextLogicalOperator === "AND") {
+      cur.push(conditions[i + 1]);
+    } else {
+      groups.push(cur);
+      cur = [conditions[i + 1]];
+    }
+  }
+  groups.push(cur);
+  return groups;
+};
+
+// ── Main Component ───────────────────────────────────────────
+
+const OPERATORS = ["<", ">", "<=", ">=", "==", "!="];
+
 export function MultiConditionBuilder({
   blockName,
   conditionGroup,
@@ -79,10 +70,30 @@ export function MultiConditionBuilder({
   setConditionGroup: (group: ConditionGroup) => void;
   registry: Registry;
 }) {
-  const addCondition = () => {
-    setConditionGroup({
-      conditions: [...conditionGroup.conditions, createDefaultCondition()],
-    });
+  // "adding" state: null = idle, "left" = picking left side, "right" = picking operator + right side
+  const [adding, setAdding] = useState<"left" | "right" | null>(null);
+  const [pendingLeft, setPendingLeft] = useState<ConditionSide | null>(null);
+  const [pendingOp, setPendingOp] = useState<string | null>(null);
+
+  const isOpen = blockName === "OPEN";
+  const hasConditions = conditionGroup.conditions.length > 0;
+
+  const addConditionFromParts = (left: ConditionSide, op: string, right: ConditionSide) => {
+    const cond: SingleCondition = {
+      id: generateId(),
+      left,
+      operator: op,
+      right,
+      nextLogicalOperator: "AND",
+    };
+    setConditionGroup({ conditions: [...conditionGroup.conditions, cond] });
+    resetAdd();
+  };
+
+  const resetAdd = () => {
+    setAdding(null);
+    setPendingLeft(null);
+    setPendingOp(null);
   };
 
   const updateCondition = (id: string, updated: SingleCondition) => {
@@ -100,108 +111,177 @@ export function MultiConditionBuilder({
   const toggleConditionOperator = (id: string) => {
     setConditionGroup({
       conditions: conditionGroup.conditions.map((c) =>
-        c.id === id ? { ...c, nextLogicalOperator: c.nextLogicalOperator === "AND" ? "OR" : "AND" } : c
+        c.id === id
+          ? { ...c, nextLogicalOperator: c.nextLogicalOperator === "AND" ? "OR" : "AND" }
+          : c
       ),
     });
   };
 
-  const isOpen = blockName === "OPEN";
-  const visualGroups = computeVisualGroups(conditionGroup.conditions);
   const logicPreview = generateLogicPreview(conditionGroup.conditions);
 
   return (
-    <div className="space-y-3">
-      <div className="space-y-2">
+    <div className="space-y-1">
+      <div className="space-y-0">
         <AnimatePresence mode="popLayout">
-          {visualGroups.map((group, groupIndex) => (
+          {conditionGroup.conditions.map((cond, idx) => (
             <motion.div
-              key={`group-${groupIndex}`}
-              initial={{ opacity: 0, y: 10 }}
+              key={cond.id}
+              initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className={`rounded-lg border ${
-                visualGroups.length > 1
-                  ? "bg-secondary/30 border-border/50 p-2"
-                  : "bg-transparent border-transparent p-0"
-              }`}
+              transition={{ duration: 0.12 }}
             >
-              {group.map((cond, condIndex) => {
-                const showAndBadge = condIndex < group.length - 1;
-
-                return (
-                  <div key={cond.id}>
-                    <ConditionRow
-                      condition={cond}
-                      onChange={(updated) => updateCondition(cond.id, updated)}
-                      onRemove={() => removeCondition(cond.id)}
-                      registry={registry}
-                      accentColor={isOpen ? "success" : "destructive"}
-                    />
-                    
-                    {showAndBadge && (
-                      <div className="flex items-center justify-center py-1.5">
-                        <button
-                          type="button"
-                          onClick={() => toggleConditionOperator(cond.id)}
-                          className="px-3 py-0.5 rounded-full text-[10px] font-bold transition-all cursor-pointer hover:scale-105 bg-primary/10 text-primary border border-primary/30"
-                        >
-                          AND
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              <ConditionRow
+                condition={cond}
+                onChange={(updated) => updateCondition(cond.id, updated)}
+                onRemove={() => removeCondition(cond.id)}
+                registry={registry}
+                isOpen={isOpen}
+              />
+              {idx < conditionGroup.conditions.length - 1 && (
+                <div className="flex items-center py-1.5 px-1">
+                  <div className="flex-1 h-px bg-border" />
+                  <button
+                    type="button"
+                    onClick={() => toggleConditionOperator(cond.id)}
+                    className={`mx-2 px-2.5 py-0.5 rounded text-[10px] font-bold tracking-wide transition-all cursor-pointer hover:scale-105 ${
+                      cond.nextLogicalOperator === "AND"
+                        ? "bg-primary/10 text-primary border border-primary/20"
+                        : "bg-warning/15 text-warning border border-warning/30"
+                    }`}
+                  >
+                    {cond.nextLogicalOperator}
+                  </button>
+                  <div className="flex-1 h-px bg-border" />
+                </div>
+              )}
             </motion.div>
           ))}
-
-          {visualGroups.length > 1 && visualGroups.map((group, groupIndex) => {
-            if (groupIndex >= visualGroups.length - 1) return null;
-            const lastCondInGroup = group[group.length - 1];
-            
-            return (
-              <div key={`or-${groupIndex}`} className="flex items-center justify-center py-3">
-                <div className="flex-1 h-0.5 bg-warning/30" />
-                <button
-                  type="button"
-                  onClick={() => toggleConditionOperator(lastCondInGroup.id)}
-                  className="mx-4 px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer hover:scale-105 bg-warning/20 text-warning border-2 border-warning/40 shadow-sm"
-                >
-                  OR
-                </button>
-                <div className="flex-1 h-0.5 bg-warning/30" />
-              </div>
-            );
-          })}
         </AnimatePresence>
       </div>
 
-      <Button 
-        type="button" 
-        variant="outline" 
-        size="sm" 
-        onClick={addCondition}
-        className={`w-full h-9 border-dashed ${
-          isOpen 
-            ? "border-success/30 text-success hover:bg-success/10 hover:border-success/50" 
-            : "border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
-        }`}
-      >
-        <Plus className="h-3.5 w-3.5 mr-1.5" /> Add Condition
-      </Button>
+      {/* Add condition */}
+      <AnimatePresence mode="wait">
+        {adding === null ? (
+          hasConditions ? (
+            <button
+              key="add-link"
+              type="button"
+              onClick={() => setAdding("left")}
+              className={`inline-flex items-center gap-1 text-[11px] transition-colors mt-0.5 ${
+                isOpen
+                  ? "text-muted-foreground hover:text-success"
+                  : "text-muted-foreground hover:text-destructive"
+              }`}
+            >
+              <Plus className="h-2.5 w-2.5" /> Add condition
+            </button>
+          ) : (
+            <Button
+              key="add-btn"
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setAdding("left")}
+              className={`w-full h-8 border-dashed text-xs ${
+                isOpen
+                  ? "border-success/30 text-success hover:bg-success/10 hover:border-success/50"
+                  : "border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
+              }`}
+            >
+              <Plus className="h-3 w-3 mr-1" /> Add your first condition
+            </Button>
+          )
+        ) : (
+          <motion.div
+            key="inline-builder"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.12 }}
+            className="rounded-lg border border-border bg-background/60 p-2 space-y-1.5"
+          >
+            {/* Step 1: pick left side */}
+            {adding === "left" && (
+              <IndicatorCommandPalette
+                registry={registry}
+                onSelect={(side) => {
+                  setPendingLeft(side);
+                  setAdding("right");
+                  setPendingOp("<");
+                }}
+                onCancel={resetAdd}
+              />
+            )}
+
+            {/* Step 2: pick operator + right side together */}
+            {adding === "right" && pendingLeft && (
+              <div className="space-y-1.5">
+                {/* Preview of what's been picked */}
+                <div className="flex items-center gap-1.5">
+                  <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px] font-mono font-medium">
+                    {formatSideLabel(pendingLeft)}
+                  </span>
+                  {pendingOp && (
+                    <span className="px-1.5 py-0.5 rounded bg-secondary text-foreground text-[11px] font-mono">
+                      {pendingOp}
+                    </span>
+                  )}
+                </div>
+
+                {/* Operator buttons */}
+                <div className="flex items-center gap-0.5">
+                  {OPERATORS.map((op) => (
+                    <button
+                      key={op}
+                      type="button"
+                      onClick={() => setPendingOp(op)}
+                      className={`px-2 py-1 rounded border font-mono text-[11px] transition-colors ${
+                        pendingOp === op
+                          ? "border-primary bg-primary/15 text-primary"
+                          : "border-border bg-secondary/50 hover:bg-accent hover:text-accent-foreground"
+                      }`}
+                    >
+                      {op}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={resetAdd}
+                    className="ml-auto text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                {/* Right-side palette (only after operator is picked) */}
+                {pendingOp && (
+                  <IndicatorCommandPalette
+                    registry={registry}
+                    onSelect={(right) => {
+                      addConditionFromParts(pendingLeft, pendingOp, right);
+                    }}
+                    onCancel={resetAdd}
+                    placeholder="Pick right side..."
+                  />
+                )}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Logic Preview */}
       {conditionGroup.conditions.length >= 2 && (
         <motion.div
-          initial={{ opacity: 0, y: 5 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="p-2.5 rounded-md bg-muted/50 border border-border"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="px-2 py-1 rounded bg-muted/40 border border-border"
         >
-          <div className="flex items-start gap-2">
-            <span className="text-xs text-muted-foreground">📋 Logic:</span>
-            <code className="text-xs font-mono text-foreground break-all">
-              {logicPreview}
-            </code>
+          <div className="flex items-start gap-1.5">
+            <span className="text-[10px] text-muted-foreground font-medium shrink-0">Logic:</span>
+            <code className="text-[10px] font-mono text-foreground break-all">{logicPreview}</code>
           </div>
         </motion.div>
       )}
@@ -209,273 +289,408 @@ export function MultiConditionBuilder({
   );
 }
 
-// Single Condition Row
+// ── Condition Row — clean read, click to edit ────────────────
+
 function ConditionRow({
   condition,
   onChange,
   onRemove,
   registry,
-  accentColor,
+  isOpen,
 }: {
   condition: SingleCondition;
   onChange: (cond: SingleCondition) => void;
   onRemove: () => void;
   registry: Registry;
-  accentColor: "success" | "destructive";
+  isOpen: boolean;
 }) {
+  const [editingSide, setEditingSide] = useState<"left" | "right" | null>(null);
+  const [expandedSide, setExpandedSide] = useState<"left" | "right" | null>(null);
+
+  const cycleOperator = () => {
+    const idx = OPERATORS.indexOf(condition.operator);
+    const next = OPERATORS[(idx + 1) % OPERATORS.length];
+    onChange({ ...condition, operator: next });
+  };
+
+  const handleSideClick = (side: "left" | "right") => {
+    const sideData = side === "left" ? condition.left : condition.right;
+    if (sideData.type === "indicator") {
+      // Toggle expand for args
+      setExpandedSide(expandedSide === side ? null : side);
+    }
+    // Value inline editing is handled by SideDisplay
+  };
+
+  const handleReplace = (side: "left" | "right") => {
+    setEditingSide(side);
+    setExpandedSide(null);
+  };
+
   return (
-    <div className="flex items-center gap-2 p-3 rounded-lg bg-background/50 border border-border/50">
-      <ConditionSideEditor
-        side={condition.left}
-        onChange={(left) => onChange({ ...condition, left })}
-        registry={registry}
-      />
-      
-      <Select
-        value={condition.operator}
-        onValueChange={(op) => onChange({ ...condition, operator: op })}
-      >
-        <SelectTrigger className="w-16 h-9 bg-secondary/50 border-border/50 font-mono text-sm">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {["<", ">", "<=", ">=", "==", "!="].map((op) => (
-            <SelectItem key={op} value={op} className="font-mono">{op}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+    <div
+      className={`group rounded-lg bg-secondary/20 border border-border/30 hover:border-border/50 transition-colors border-l-2 ${
+        isOpen ? "border-l-success/50" : "border-l-destructive/50"
+      }`}
+    >
+      {/* Main row — clean readable line */}
+      <div className="flex items-center gap-3 px-4 py-2">
+        {editingSide === "left" ? (
+          <div className="flex-1 min-w-[180px]">
+            <IndicatorCommandPalette
+              registry={registry}
+              onSelect={(newSide) => {
+                onChange({ ...condition, left: newSide });
+                setEditingSide(null);
+              }}
+              onCancel={() => setEditingSide(null)}
+            />
+          </div>
+        ) : (
+          <SideDisplay
+            side={condition.left}
+            onChange={(left) => onChange({ ...condition, left })}
+            onClick={() => handleSideClick("left")}
+            isExpanded={expandedSide === "left"}
+          />
+        )}
 
-      <ConditionSideEditor
-        side={condition.right}
-        onChange={(right) => onChange({ ...condition, right })}
-        registry={registry}
-      />
+        <button
+          type="button"
+          onClick={cycleOperator}
+          className="px-3 py-1 rounded-md border border-border/60 bg-muted/50 font-mono text-xs font-semibold text-muted-foreground hover:text-foreground hover:border-border hover:bg-secondary transition-all whitespace-nowrap cursor-pointer shrink-0 inline-flex items-center gap-1"
+          title="Click to cycle operator"
+        >
+          <span>{condition.operator}</span>
+          <ChevronsUpDown className="h-2.5 w-2.5 opacity-40" />
+        </button>
 
-      <Button 
-        type="button" 
-        variant="ghost" 
-        size="sm"
-        onClick={onRemove}
-        className="h-9 w-9 p-0 hover:bg-destructive/20 hover:text-destructive flex-shrink-0"
-      >
-        <X className="h-4 w-4" />
-      </Button>
+        {editingSide === "right" ? (
+          <div className="flex-1 min-w-[180px]">
+            <IndicatorCommandPalette
+              registry={registry}
+              onSelect={(newSide) => {
+                onChange({ ...condition, right: newSide });
+                setEditingSide(null);
+              }}
+              onCancel={() => setEditingSide(null)}
+            />
+          </div>
+        ) : (
+          <SideDisplay
+            side={condition.right}
+            onChange={(right) => onChange({ ...condition, right })}
+            onClick={() => handleSideClick("right")}
+            isExpanded={expandedSide === "right"}
+          />
+        )}
+
+        <button
+          type="button"
+          onClick={() => onChange({ ...condition, left: condition.right, right: condition.left })}
+          className="h-6 w-6 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shrink-0"
+          title="Swap left and right"
+        >
+          <ArrowLeftRight className="h-3 w-3" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onRemove}
+          className="h-6 w-6 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all shrink-0"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* Expanded args editor — slides below when indicator clicked */}
+      <AnimatePresence>
+        {expandedSide && (
+          <ExpandedArgsEditor
+            side={expandedSide === "left" ? condition.left : condition.right}
+            onChange={(updated) =>
+              onChange(
+                expandedSide === "left"
+                  ? { ...condition, left: updated }
+                  : { ...condition, right: updated }
+              )
+            }
+            onReplace={() => handleReplace(expandedSide)}
+            onClose={() => setExpandedSide(null)}
+            registry={registry}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-// Condition Side Editor
-function ConditionSideEditor({
+// ── Side Display — clean label, click to interact ────────────
+
+const MATH_OPERATORS = ["+", "-", "*", "/"] as const;
+
+function SideDisplay({
   side,
   onChange,
+  onClick,
+  isExpanded,
+}: {
+  side: ConditionSide;
+  onChange: (side: ConditionSide) => void;
+  onClick: () => void;
+  isExpanded: boolean;
+}) {
+  const [editingValue, setEditingValue] = useState(false);
+  const [showMath, setShowMath] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingValue && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editingValue]);
+
+  const mathUI = showMath && (
+    <div className="flex items-center gap-1 mt-1">
+      <div className="flex items-center gap-0.5">
+        {MATH_OPERATORS.map((op) => (
+          <button
+            key={op}
+            type="button"
+            onClick={() => {
+              const current = side.operation;
+              onChange({
+                ...side,
+                operation: { operator: op, operand: current?.operand ?? 1 },
+              });
+            }}
+            className={`w-5 h-5 flex items-center justify-center rounded text-[10px] font-mono font-bold transition-colors ${
+              side.operation?.operator === op
+                ? "bg-primary/15 text-primary border border-primary/30"
+                : "bg-secondary/50 text-muted-foreground border border-border/50 hover:text-foreground"
+            }`}
+          >
+            {op}
+          </button>
+        ))}
+      </div>
+      <input
+        type="number"
+        value={side.operation?.operand ?? 1}
+        onChange={(e) =>
+          onChange({
+            ...side,
+            operation: {
+              operator: side.operation?.operator || "+",
+              operand: parseFloat(e.target.value) || 0,
+            },
+          })
+        }
+        className="h-5 w-14 px-1 rounded border border-border/50 bg-background text-[11px] font-mono text-foreground outline-none focus:border-primary/50"
+      />
+      {side.operation && (
+        <button
+          type="button"
+          onClick={() => onChange({ ...side, operation: undefined })}
+          className="text-[9px] text-muted-foreground hover:text-destructive transition-colors"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+    </div>
+  );
+
+  // Value type — click to inline edit
+  if (side.type === "value") {
+    if (editingValue) {
+      return (
+        <div>
+          <input
+            ref={inputRef}
+            type="number"
+            value={side.value}
+            onChange={(e) => onChange({ ...side, value: parseFloat(e.target.value) || 0 })}
+            onBlur={() => setEditingValue(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === "Escape") setEditingValue(false);
+            }}
+            className="h-7 w-20 px-2 rounded border border-primary/40 bg-background text-xs font-mono text-foreground outline-none focus:ring-1 focus:ring-primary/30 transition-colors"
+          />
+          {mathUI}
+        </div>
+      );
+    }
+    return (
+      <div className="group/side flex items-center gap-0.5">
+        <button
+          type="button"
+          onClick={() => setEditingValue(true)}
+          className="px-2 py-1 rounded font-mono text-xs font-semibold text-foreground border-b border-dashed border-muted-foreground/30 hover:bg-accent/50 transition-colors cursor-text"
+          title="Click to edit value"
+        >
+          {formatSideLabel(side)}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowMath(!showMath)}
+          className={`h-5 w-5 flex items-center justify-center rounded opacity-0 group-hover/side:opacity-100 transition-all ${
+            side.operation || showMath
+              ? "opacity-100 text-primary bg-primary/10"
+              : "text-muted-foreground hover:text-primary hover:bg-primary/10"
+          }`}
+          title="Add math operation"
+        >
+          <Calculator className="h-2.5 w-2.5" />
+        </button>
+        {(showMath || side.operation) && mathUI}
+      </div>
+    );
+  }
+
+  // Indicator type — clean label like RSI(14, 1h)
+  return (
+    <div className="group/side flex items-center gap-0.5">
+      <button
+        type="button"
+        onClick={onClick}
+        className={`px-2 py-1 rounded font-mono text-[12px] font-semibold transition-colors cursor-pointer ${
+          isExpanded
+            ? "bg-primary/15 text-primary"
+            : "text-foreground border-b border-dashed border-muted-foreground/30 hover:bg-accent/50"
+        }`}
+        title="Click to edit parameters"
+      >
+        {formatSideLabel(side)}
+      </button>
+      <button
+        type="button"
+        onClick={() => setShowMath(!showMath)}
+        className={`h-5 w-5 flex items-center justify-center rounded opacity-0 group-hover/side:opacity-100 transition-all ${
+          side.operation || showMath
+            ? "opacity-100 text-primary bg-primary/10"
+            : "text-muted-foreground hover:text-primary hover:bg-primary/10"
+        }`}
+        title="Add math operation"
+      >
+        <Calculator className="h-2.5 w-2.5" />
+      </button>
+      {(showMath || side.operation) && mathUI}
+    </div>
+  );
+}
+
+// ── Expanded Args Editor — appears below the row ─────────────
+
+function ExpandedArgsEditor({
+  side,
+  onChange,
+  onReplace,
+  onClose,
   registry,
 }: {
   side: ConditionSide;
   onChange: (side: ConditionSide) => void;
+  onReplace: () => void;
+  onClose: () => void;
   registry: Registry;
 }) {
-  const [open, setOpen] = useState(false);
-  const [hasOperation, setHasOperation] = useState(!!side.operation);
+  if (side.type !== "indicator") return null;
 
-  const getSummary = () => {
-    let base: string;
-    if (side.type === "value") {
-      base = String(side.value);
-    } else {
-      const mainArg = side.args.period || side.args.field || "";
-      base = `${side.func}${mainArg ? `(${mainArg})` : ""}`;
-    }
-    
-    if (side.operation && side.operation.operand !== undefined) {
-      base = `${base} ${side.operation.operator} ${side.operation.operand}`;
-    }
-    
-    return base;
-  };
+  const ind = registry.indicators.INDICATORS[side.func];
+  const argKeys = ind?.args || [];
+  const meta = INDICATOR_META[side.func];
 
-  const handleToggleOperation = (enabled: boolean) => {
-    setHasOperation(enabled);
-    if (enabled) {
-      onChange({ ...side, operation: { operator: "*", operand: 1 } });
-    } else {
-      onChange({ ...side, operation: undefined });
-    }
-  };
-
-  const handleOperationChange = (field: "operator" | "operand", value: any) => {
-    const currentOp = side.operation || { operator: "*" as const, operand: 1 };
-    onChange({
-      ...side,
-      operation: { ...currentOp, [field]: value }
-    });
-  };
+  if (argKeys.length === 0) return null;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all text-sm flex-1 min-w-0 ${
-            side.type === "indicator"
-              ? "bg-primary/5 border-primary/20 text-primary"
-              : "bg-secondary/50 border-border/50"
-          }`}
-        >
-          <span className="font-medium truncate">{getSummary()}</span>
-          <ChevronDown className={`h-3.5 w-3.5 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent 
-        className="w-72 p-3 space-y-3 max-h-96 overflow-y-auto" 
-        align="start"
-        side="bottom"
-        sideOffset={4}
-      >
-        <Select
-          value={side.type}
-          onValueChange={(val: "value" | "indicator") => {
-            if (val === "indicator") {
-              onChange({ type: "indicator", value: 0, func: "RSI", args: { period: 14, timeframe: "1h", offset: 0 }, operation: side.operation });
-            } else {
-              onChange({ type: "value", value: 30, func: "", args: {}, operation: side.operation });
-            }
-          }}
-        >
-          <SelectTrigger className="h-8 bg-secondary/50">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="value">Value</SelectItem>
-            <SelectItem value="indicator">Indicator</SelectItem>
-          </SelectContent>
-        </Select>
+    <motion.div
+      initial={{ height: 0, opacity: 0 }}
+      animate={{ height: "auto", opacity: 1 }}
+      exit={{ height: 0, opacity: 0 }}
+      transition={{ duration: 0.15 }}
+      className="overflow-hidden"
+    >
+      <div className="px-4 pb-2.5 pt-0.5">
+        <div className="flex items-center gap-2 bg-muted/40 rounded-md px-3 py-2 flex-wrap">
+          {meta && (
+            <span className="text-[10px] text-muted-foreground mr-1">{meta.description}</span>
+          )}
+          {argKeys.map((param: string) => {
+            const val = side.args[param];
 
-        {side.type === "value" && (
-          <Input
-            type="number"
-            value={side.value}
-            onChange={(e) => onChange({ ...side, value: parseFloat(e.target.value) || 0 })}
-            className="h-8 bg-secondary/50"
-          />
-        )}
-
-        {side.type === "indicator" && (
-          <>
-            <Select
-              value={side.func}
-              onValueChange={(func) => {
-                const defaults = registry.indicators.INDICATORS[func]?.defaults || {};
-                onChange({ ...side, func, args: { ...defaults } });
-              }}
-            >
-              <SelectTrigger className="h-8 bg-secondary/50">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.keys(registry.indicators.INDICATORS).map((ind) => (
-                  <SelectItem key={ind} value={ind}>{ind}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <div className="grid grid-cols-2 gap-2">
-              {Object.entries(side.args).map(([param, val]) => (
-                <div key={param} className="space-y-1">
-                  <span className="text-[10px] uppercase text-muted-foreground">{param}</span>
-                  {param === "field" ? (
-                    <Select
-                      value={String(val)}
-                      onValueChange={(v) => onChange({ ...side, args: { ...side.args, [param]: v } })}
-                    >
-                      <SelectTrigger className="h-7 text-xs bg-secondary/50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {["open", "high", "low", "close"].map((o) => (
-                          <SelectItem key={o} value={o}>{o}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : param === "timeframe" ? (
-                    <Select
-                      value={String(val)}
-                      onValueChange={(v) => onChange({ ...side, args: { ...side.args, [param]: v } })}
-                    >
-                      <SelectTrigger className="h-7 text-xs bg-secondary/50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
-                          <SelectItem key={tf} value={tf}>{tf}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Input
-                      type="number"
-                      value={val as number}
-                      onChange={(e) => onChange({ ...side, args: { ...side.args, [param]: parseFloat(e.target.value) || 0 } })}
-                      className="h-7 text-xs bg-secondary/50"
-                    />
-                  )}
+            if (param === "field" || param === "OHLC") {
+              return (
+                <div key={param} className="flex items-center gap-1">
+                  <span className="text-[10px] text-muted-foreground font-medium">{param}:</span>
+                  <select
+                    value={String(val)}
+                    onChange={(e) =>
+                      onChange({ ...side, args: { ...side.args, [param]: e.target.value } })
+                    }
+                    className="h-6 px-1.5 rounded border border-border/50 bg-background text-[11px] font-mono text-foreground outline-none focus:border-primary/50 transition-colors cursor-pointer"
+                  >
+                    {["open", "high", "low", "close"].map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
                 </div>
-              ))}
-            </div>
-          </>
-        )}
+              );
+            }
 
-        {/* Mathematical Operation Section */}
-        <div className="pt-2 border-t border-border/50 space-y-2">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox
-              checked={hasOperation}
-              onCheckedChange={(checked) => handleToggleOperation(!!checked)}
-            />
-            <span className="text-xs text-muted-foreground">Apply operation</span>
-          </label>
-          
-          {hasOperation && (
-            <div className="flex items-center gap-2">
-              <Select
-                value={side.operation?.operator || "*"}
-                onValueChange={(v) => handleOperationChange("operator", v)}
-              >
-                <SelectTrigger className="w-16 h-8 bg-secondary/50 font-mono">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {["*", "/", "+", "-"].map((op) => (
-                    <SelectItem key={op} value={op} className="font-mono">{op}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                type="number"
-                step="0.01"
-                value={side.operation?.operand ?? 1}
-                onChange={(e) => handleOperationChange("operand", parseFloat(e.target.value) || 0)}
-                className="flex-1 h-8 bg-secondary/50"
-                placeholder="1.05"
-              />
-            </div>
-          )}
-          
-          {hasOperation && (
-            <p className="text-[10px] text-muted-foreground">
-              Preview: {getSummary()}
-            </p>
-          )}
+            if (param === "timeframe") {
+              return (
+                <div key={param} className="flex items-center gap-1">
+                  <span className="text-[10px] text-muted-foreground font-medium">{param}:</span>
+                  <select
+                    value={String(val)}
+                    onChange={(e) =>
+                      onChange({ ...side, args: { ...side.args, [param]: e.target.value } })
+                    }
+                    className="h-6 px-1.5 rounded border border-border/50 bg-background text-[11px] font-mono text-foreground outline-none focus:border-primary/50 transition-colors cursor-pointer"
+                  >
+                    {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
+                      <option key={tf} value={tf}>{tf}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            }
+
+            return (
+              <div key={param} className="flex items-center gap-1">
+                <span className="text-[10px] text-muted-foreground font-medium">{param}:</span>
+                <input
+                  type="number"
+                  value={val as number}
+                  onChange={(e) =>
+                    onChange({
+                      ...side,
+                      args: { ...side.args, [param]: parseFloat(e.target.value) || 0 },
+                    })
+                  }
+                  className="h-6 w-14 px-1.5 rounded border border-border/50 bg-background text-[11px] font-mono text-foreground outline-none focus:border-primary/50 transition-colors"
+                />
+              </div>
+            );
+          })}
+
+          <button
+            type="button"
+            onClick={onReplace}
+            className="ml-auto text-[10px] text-muted-foreground hover:text-primary hover:underline transition-colors"
+          >
+            change
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            done
+          </button>
         </div>
-
-        <Button 
-          type="button" 
-          size="sm" 
-          onClick={() => setOpen(false)}
-          className="w-full h-7 text-xs"
-        >
-          Done
-        </Button>
-      </PopoverContent>
-    </Popover>
+      </div>
+    </motion.div>
   );
 }

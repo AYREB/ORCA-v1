@@ -40,6 +40,27 @@ export interface ConditionSideOperation {
     right: { type: "value", value: 30, func: "", args: {}, operation: undefined },
     nextLogicalOperator: "AND",
   });
+
+  export interface IndicatorMeta {
+    category: "Trend" | "Momentum" | "Volume" | "Price" | "Volatility";
+    description: string;
+  }
+
+  export const INDICATOR_META: Record<string, IndicatorMeta> = {
+    PRICE: { category: "Price", description: "Raw price data (OHLC)" },
+    VOLUME: { category: "Volume", description: "Trading volume" },
+    SMA: { category: "Trend", description: "Simple Moving Average" },
+    EMA: { category: "Trend", description: "Exponential Moving Average" },
+    RSI: { category: "Momentum", description: "Relative Strength Index" },
+    MACD: { category: "Momentum", description: "Moving Avg Convergence Divergence" },
+    BBANDS: { category: "Volatility", description: "Bollinger Bands" },
+    ATR: { category: "Volatility", description: "Average True Range" },
+    STOCH: { category: "Momentum", description: "Stochastic Oscillator" },
+    CCI: { category: "Momentum", description: "Commodity Channel Index" },
+    OBV: { category: "Volume", description: "On-Balance Volume" },
+  };
+  
+  export const INDICATOR_CATEGORIES = ["Price", "Trend", "Momentum", "Volatility", "Volume"] as const;
   
   export const FALLBACK_REGISTRY: Registry = {
     commands: { COMMANDS: { LONG: {}, SHORT: {} } },
