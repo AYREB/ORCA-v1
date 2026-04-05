@@ -15,6 +15,7 @@ import PaperAccounts from "./pages/PaperAccounts";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import Help from "./pages/Help"
 import { AuthProvider } from "./context/AuthContext";
+import Settings from "./pages/Settings";
 
 const queryClient = new QueryClient();
 
@@ -78,6 +79,7 @@ const App = () => (
               />
               <Route path="/dashboard/help" element={<Help />} />
               <Route path="*" element={<NotFound />} />
+              <Route path="/dashboard/settings" element={<Settings />} />
             </Routes>
           </BrowserRouter>
         </TooltipProvider>

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { motion } from "framer-motion";
 import { 
   TrendingUp, 
@@ -15,6 +15,7 @@ import {
   Filter
 } from "lucide-react";
 import { BacktestResult } from "@/lib/api";
+import { detectDirection, isEntryTrade, isExitTrade } from "@/lib/tradeUtils";
 import TradesTable from "./TradesTable";
 import {
   Select,
@@ -36,11 +37,6 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
     return [...new Set(results.trades.map(t => t.ticker))];
   }, [results.trades]);
 
-  // Reset ticker filter when results change
-  useEffect(() => {
-    setSelectedTicker("all");
-  }, [results]);
-
   // Filter trades by selected ticker
   const filteredTrades = useMemo(() => {
     if (selectedTicker === "all") return results.trades;
@@ -49,19 +45,21 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
 
   // Calculate detailed win/loss analytics
   const detailedMetrics = useMemo(() => {
-    const completedTrades: { entryPrice: number; exitPrice: number; shares: number }[] = [];
+    const completedTrades: { entryPrice: number; exitPrice: number; shares: number; direction: "long" | "short" }[] = [];
     const openPositions: Map<string, { price: number; shares: number }[]> = new Map();
+    const directions = detectDirection(filteredTrades);
     
     let entries = 0;
     let exits = 0;
 
     for (const trade of filteredTrades) {
-      if (trade.type === "BUY" || trade.type === "RECURRING_BUY") {
+      const dir = directions.get(trade.ticker) || "long";
+      if (isEntryTrade(trade, dir)) {
         entries++;
         const positions = openPositions.get(trade.ticker) || [];
         positions.push({ price: trade.price, shares: trade.shares });
         openPositions.set(trade.ticker, positions);
-      } else if (trade.type === "SELL") {
+      } else if (isExitTrade(trade, dir)) {
         exits++;
         const positions = openPositions.get(trade.ticker) || [];
         if (positions.length > 0) {
@@ -70,6 +68,7 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
             entryPrice: entry.price,
             exitPrice: trade.price,
             shares: Math.min(entry.shares, trade.shares),
+            direction: dir,
           });
           openPositions.set(trade.ticker, positions);
         }
@@ -82,8 +81,12 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
       openCount += positions.length;
     });
 
-    const wins = completedTrades.filter(t => t.exitPrice > t.entryPrice);
-    const losses = completedTrades.filter(t => t.exitPrice <= t.entryPrice);
+    const wins = completedTrades.filter(t => 
+      t.direction === "long" ? t.exitPrice > t.entryPrice : t.exitPrice < t.entryPrice
+    );
+    const losses = completedTrades.filter(t => 
+      t.direction === "long" ? t.exitPrice <= t.entryPrice : t.exitPrice >= t.entryPrice
+    );
 
     const winRate = completedTrades.length > 0 
       ? (wins.length / completedTrades.length) * 100 

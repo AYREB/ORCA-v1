@@ -55,12 +55,7 @@
           "type": "float",
           "default": 0.4,
           "description": "Optional take-profit percentage above the execution price."
-        },
-        "spread": {
-          "type": "float",
-          "default": 0.0,
-          "description": "Spread"
-       }
+        }
      },
      "CLOSE": {
         "test": {
@@ -71,6 +66,69 @@
       }
     },
     "SHORT": {
+      "OPEN": {
+        "initialOpenPositionInvestType": {
+          "options": ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"],
+          "default": "percentCashBalance",
+          "description": "Specifies how the initial investment amount is calculated."
+        },
+        "initialOpenPositionInvestAmount": {
+          "type": "float",
+          "default": 0.2,
+          "description": "Defines the numeric value used when the investment type requires a fixed or percent-based amount."
+        },
+        "recurring": {
+          "type": "bool",
+          "default": false,
+          "description": "Enable/disable recurring trades for this position."
+        },
+        "recurringPeriod": {
+          "type": "int",
+          "default": 5,
+          "description": "Minimum number of bars/periods between additional investments.",
+          "parent": "recurring"
+        },
+        "recurringInvestType": {
+          "options": ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"],
+          "default": "percentCashBalance",
+          "description": "Investment type for recurring trades.",
+          "parent": "recurring"
+        },
+        "recurringInvestAmount": {
+          "type": "float",
+          "default": 0.1,
+          "description": "Amount to invest each recurring trade.",
+          "parent": "recurring"
+        },
+        "maxRecurringCount": {
+          "type": "int",
+          "default": 0,
+          "description": "Maximum number of recurring investments per position (0 = unlimited).",
+          "parent": "recurring"
+        },
+        "spread": {
+          "type": "float",
+          "default": 0.0,
+          "description": "Bid/ask spread percentage applied on entries and exits."
+        },
+        "stopLossPercent": {
+          "type": "float",
+          "default": 0.2,
+          "description": "Optional stop-loss percentage from the execution price."
+        },
+        "takeProfitPercent": {
+          "type": "float",
+          "default": 0.4,
+          "description": "Optional take-profit percentage from the execution price."
+        }
+      },
+      "CLOSE": {
+        "test": {
+          "type": "float",
+          "default": 0.5,
+          "description": "test"
+        }
+      }
     }
   }
 }

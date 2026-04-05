@@ -44,15 +44,31 @@ interface SimulationResults {
 // Extract returns from trade pairs
 const extractReturns = (trades: TradeEntry[]): number[] => {
   const returns: number[] = [];
-  let buyPrice: number | null = null;
+  // Detect direction from first trade
+  const dirMap = new Map<string, "long" | "short">();
+  for (const t of trades) {
+    if (!dirMap.has(t.ticker)) {
+      dirMap.set(t.ticker, t.type === "BUY" ? "long" : "short");
+    }
+  }
+
+  let entryPrice: number | null = null;
+  let currentDir: "long" | "short" = "long";
 
   for (const trade of trades) {
-    if (trade.type === 'BUY' || trade.type === 'RECURRING_BUY') {
-      buyPrice = trade.price;
-    } else if (trade.type === 'SELL' && buyPrice !== null) {
-      const returnPct = ((trade.price - buyPrice) / buyPrice) * 100;
+    const dir = dirMap.get(trade.ticker) || "long";
+    const isEntry = dir === "long" ? trade.type === "BUY" : trade.type === "SELL";
+    const isExit = dir === "long" ? trade.type === "SELL" : trade.type === "BUY";
+
+    if (isEntry) {
+      entryPrice = trade.price;
+      currentDir = dir;
+    } else if (isExit && entryPrice !== null) {
+      const returnPct = currentDir === "long"
+        ? ((trade.price - entryPrice) / entryPrice) * 100
+        : ((entryPrice - trade.price) / entryPrice) * 100;
       returns.push(returnPct);
-      buyPrice = null;
+      entryPrice = null;
     }
   }
 

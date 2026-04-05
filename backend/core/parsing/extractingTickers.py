@@ -1,48 +1,87 @@
+# ---------------- INTERNAL HELPER ---------------- #
+
+def _get_strategy(parsed_dsl):
+    """
+    Normalises DSL input to always return the inner strategy block.
+    Supports:
+    - { "LONG": {...} }
+    - { "SHORT": {...} }
+    - { ... } (already inner)
+    """
+    if not isinstance(parsed_dsl, dict):
+        return {}
+
+    if "LONG" in parsed_dsl:
+        return parsed_dsl["LONG"]
+    if "SHORT" in parsed_dsl:
+        return parsed_dsl["SHORT"]
+
+    return parsed_dsl  # already inner
+
+
+# ---------------- EXTRACTORS ---------------- #
+
 def extract_tickers(parsed_dsl):
-   tickers = set()
-   for cmd_data in parsed_dsl.values():
-       if not isinstance(cmd_data, dict):
-           continue  # skip top-level string/list keys
-       context = cmd_data.get("context", {})
-       tickers.update(context.get("tickers", []))
-   return list(tickers)
+    """
+    Returns list of tickers from strategy context.
+    """
+    strategy = _get_strategy(parsed_dsl)
+    context = strategy.get("context", {})
+    return list(set(context.get("tickers", [])))
 
 
+def extract_execution_timeframe(parsed_dsl):
+    """
+    Returns execution timeframe (string).
+    Defaults to '1h' if missing.
+    """
+    strategy = _get_strategy(parsed_dsl)
+    context = strategy.get("context", {})
+
+    return context.get("execution_timeframe", "1h")
 
 
 def extract_data_timeframes(parsed_dsl):
-   """
-   Extracts all unique data timeframe values from the parsed DSL output.
-   """
-   # First, check if the DSL explicitly defines DATA_TIMEFRAMES
-   if "DATA_TIMEFRAMES" in parsed_dsl:
-       tfs = parsed_dsl["DATA_TIMEFRAMES"]
-       if isinstance(tfs, str):
-           tfs = [tf.strip() for tf in tfs.split(",")]
-       elif isinstance(tfs, list):
-           tfs = list(tfs)
-       return tfs
-   timeframes = set()
-   for cmd_data in parsed_dsl.values():
-       if not isinstance(cmd_data, dict):
-           continue  # skip top-level string/list
-       context = cmd_data.get("context", {})
-       for tf in context.get("data_timeframes", []):
-           timeframes.add(tf)
-   return list(timeframes)
+    """
+    Returns list of data timeframes used in strategy context.
+    """
+    strategy = _get_strategy(parsed_dsl)
+    context = strategy.get("context", {})
 
-def collect_timeframes_from_dsl(dsl: dict, execution_tf: str) -> set:
-    timeframes = set([execution_tf])
+    return list(set(context.get("data_timeframes", [])))
+
+
+def extract_dateframe(parsed_dsl):
+    """
+    Returns dateframe dict:
+    { "start": ..., "end": ... }
+    or None if missing.
+    """
+    strategy = _get_strategy(parsed_dsl)
+    context = strategy.get("context", {})
+
+    return context.get("dateframe", None)
+
+
+def collect_timeframes_from_dsl(parsed_dsl, execution_tf: str) -> set:
+    """
+    Walks the DSL tree and extracts all timeframes used in indicator args.
+    Includes execution timeframe by default.
+    """
+    strategy = _get_strategy(parsed_dsl)
+
+    timeframes = set()
+    if execution_tf:
+        timeframes.add(execution_tf)
 
     def walk(node):
         if isinstance(node, dict):
-            # If this is a function node with args
+            # Check for indicator args
             if "arg" in node and isinstance(node["arg"], dict):
                 tf = node["arg"].get("timeframe")
                 if tf:
                     timeframes.add(tf)
 
-            # Recurse
             for v in node.values():
                 walk(v)
 
@@ -50,60 +89,8 @@ def collect_timeframes_from_dsl(dsl: dict, execution_tf: str) -> set:
             for item in node:
                 walk(item)
 
-    walk(dsl)
+    walk(strategy)
     return timeframes
-
-
-
-def extract_execution_timeframe(parsed_dsl):
-    """
-    Returns the execution timeframe string from the DSL.
-    """
-
-    # Find the root trade block (LONG or SHORT)
-    trade_block = parsed_dsl.get("LONG") or parsed_dsl.get("SHORT")
-    if not trade_block:
-        print("No LONG or SHORT block found in DSL")
-        return "1h"
-
-    context = trade_block.get("context", {})
-
-    if "execution_timeframe" in context:
-        print(f"Execution timeframe is {context['execution_timeframe']}")
-        return context["execution_timeframe"]
-
-    print("No execution_timeframe found in context, defaulting to 1h")
-    return "1h"
-
-
-
-
-
-
-def extract_dateframe(parsed_dsl):
-   """
-   Extracts the global DATEFRAME (start/end dates) from the parsed DSL.
-   Returns a dict: {'start': ..., 'end': ...} or None if missing.
-   """
-   # First, check the top-level DATA_TIMEFRAMES / EXECUTION_TIMEFRAME entries if any contain context
-   for block_name, block_content in parsed_dsl.items():
-       if isinstance(block_content, dict):  # safe check
-           context = block_content.get("context", {})
-           if "dateframe" in context:
-               return context["dateframe"]
-
-
-   # Then check top-level DATEFRAME key if it exists
-   if "DATEFRAME" in parsed_dsl:
-       df = parsed_dsl["DATEFRAME"]
-       if isinstance(df, dict):
-           return df
-       elif isinstance(df, list) and len(df) == 2: 
-           return {"start": df[0], "end": df[1]}
-
-
-   return None
-
 
 
 

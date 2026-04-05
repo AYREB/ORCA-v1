@@ -4,7 +4,7 @@ const API_BASE_URL = import.meta.env.VITE_DJANGO_API_URL || 'http://127.0.0.1:80
 
 // Backend response types matching Django backend
 export interface TradeEntry {
-  type: 'BUY' | 'SELL' | 'RECURRING_BUY';
+  type: 'BUY' | 'SELL' | 'Recurring_Entry';
   ticker: string;
   price: number;
   shares: number;

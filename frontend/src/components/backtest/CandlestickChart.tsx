@@ -18,6 +18,7 @@ import type {
 } from "lightweight-charts";
 import { OHLCData, TradeEntry } from "@/lib/api";
 import { Maximize2, Minimize2 } from "lucide-react";
+import { useSettings } from "@/hooks/useSettings";
 
 interface CandlestickChartProps {
   data: OHLCData[];
@@ -43,18 +44,25 @@ interface CandlestickChartProps {
   seekToIndex?: number;
 }
 
-const INDICATOR_COLORS: Record<string, string> = {
-  SMA: "#f59e0b",
-  SMA_14: "#f59e0b",
-  SMA_50: "#fb923c",
-  EMA: "#8b5cf6",
-  EMA_12: "#8b5cf6",
-  EMA_26: "#a78bfa",
-  RSI: "#ec4899",
-  MACD: "#06b6d4",
-  BB_upper: "#22c55e",
-  BB_middle: "#22c55e",
-  BB_lower: "#22c55e",
+const COLOR_SCHEMES: Record<string, Record<string, string>> = {
+  classic: {
+    SMA: "#f59e0b", SMA_14: "#f59e0b", SMA_50: "#fb923c",
+    EMA: "#8b5cf6", EMA_12: "#8b5cf6", EMA_26: "#a78bfa",
+    RSI: "#ec4899", MACD: "#06b6d4",
+    BB_upper: "#22c55e", BB_middle: "#22c55e", BB_lower: "#22c55e",
+  },
+  neon: {
+    SMA: "#00ff87", SMA_14: "#00ff87", SMA_50: "#00e5ff",
+    EMA: "#ff00e5", EMA_12: "#ff00e5", EMA_26: "#e040fb",
+    RSI: "#ffea00", MACD: "#00e5ff",
+    BB_upper: "#76ff03", BB_middle: "#76ff03", BB_lower: "#76ff03",
+  },
+  muted: {
+    SMA: "#a8a29e", SMA_14: "#a8a29e", SMA_50: "#d6d3d1",
+    EMA: "#7c8594", EMA_12: "#7c8594", EMA_26: "#9ca3af",
+    RSI: "#c4a882", MACD: "#6b9dad",
+    BB_upper: "#81a88a", BB_middle: "#81a88a", BB_lower: "#81a88a",
+  },
 };
 
 // Convert datetime string to UTC timestamp (seconds since epoch) for Lightweight Charts
@@ -179,6 +187,8 @@ const CandlestickChart = ({
   onReplayEnd,
   seekToIndex,
 }: CandlestickChartProps) => {
+  const { settings } = useSettings();
+  const INDICATOR_COLORS = COLOR_SCHEMES[settings.appearance.chartColorScheme] || COLOR_SCHEMES.classic;
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   
@@ -307,35 +317,31 @@ const CandlestickChart = ({
     if (!showMarkers) return [];
 
     const filteredTrades = trades.filter((t) => t.ticker === ticker);
+    
+    // Detect direction for this ticker
+    const dir = filteredTrades.length > 0 && filteredTrades[0].type === "SELL" ? "short" : "long";
 
     return filteredTrades
       .map((t) => {
-        const isBuy = t.type === "BUY" || t.type === "RECURRING_BUY";
+        const isEntry = dir === "long" ? t.type === "BUY" : t.type === "SELL";
         const time = toUtcTimestamp(t.timestamp);
         
         // Skip invalid timestamps
         if (isNaN(time)) return null;
         
-        let label: string;
-        if (t.type === "RECURRING_BUY") {
-          label = `REC ${t.shares.toFixed(1)}`;
-        } else if (isBuy) {
-          label = `BUY ${t.shares.toFixed(1)}`;
-        } else {
-          label = `SELL ${t.shares.toFixed(1)}${t.close_reason ? ` (${t.close_reason})` : ""}`;
-        }
+        const label = `${t.type} ${t.shares.toFixed(1)}${!isEntry && t.close_reason ? ` (${t.close_reason})` : ""}`;
 
         return {
           time: time as Time,
-          position: isBuy ? "belowBar" : "aboveBar",
-          color: isBuy ? "#22c55e" : "#ef4444",
-          shape: isBuy ? "arrowUp" : "arrowDown",
+          position: isEntry ? "belowBar" : "aboveBar",
+          color: isEntry ? "#22c55e" : "#ef4444",
+          shape: isEntry ? "arrowUp" : "arrowDown",
           text: label,
           size: 1,
           originalTimestamp: t.timestamp,
         } as SeriesMarker<Time> & { originalTimestamp: string };
       })
-      .filter((m): m is NonNullable<typeof m> => m !== null) // Remove nulls
+      .filter((m): m is NonNullable<typeof m> => m !== null)
       .sort((a, b) => (a.time as number) - (b.time as number));
   }, [trades, ticker, showMarkers]);
 
@@ -354,23 +360,24 @@ const CandlestickChart = ({
     }[] = [];
     
     const tickerTrades = trades.filter((t) => t.ticker === ticker);
-    const buyTrades = tickerTrades.filter((t) => t.type === "BUY" || t.type === "RECURRING_BUY");
-    const sellTrades = tickerTrades.filter((t) => t.type === "SELL");
+    const dir = tickerTrades.length > 0 && tickerTrades[0].type === "SELL" ? "short" : "long";
+    const entryTrades = tickerTrades.filter((t) => dir === "long" ? t.type === "BUY" : t.type === "SELL");
+    const closeTrades = tickerTrades.filter((t) => dir === "long" ? t.type === "SELL" : t.type === "BUY");
     
-    buyTrades.forEach((buyTrade) => {
+    entryTrades.forEach((entryTrade) => {
       // Robust timestamp parsing (handles "YYYY-MM-DD HH:mm:ss+00:00" from CSV and avoids NaN)
-      const entryTimeSec = toUtcTimestamp(buyTrade.timestamp);
+      const entryTimeSec = toUtcTimestamp(entryTrade.timestamp);
       if (isNaN(entryTimeSec)) return; // Skip if we can't place the box in time
 
       const entryTimeMs = entryTimeSec * 1000;
 
-      // Find the corresponding sell trade (next sell after this buy) using numeric timestamps
-      const correspondingSell = sellTrades
+      // Find the corresponding close trade (next close after this entry) using numeric timestamps
+      const correspondingSell = closeTrades
         .map((s) => ({ s, ms: toUtcTimestamp(s.timestamp) * 1000 }))
         .filter((x) => !isNaN(x.ms) && x.ms > entryTimeMs)
         .sort((a, b) => a.ms - b.ms)[0]?.s;
       
-      const entryPrice = buyTrade.price;
+      const entryPrice = entryTrade.price;
       
       // Calculate TP/SL based on mode
       let tpPrice: number | null = null;
@@ -382,8 +389,8 @@ const CandlestickChart = ({
         slPrice = entryPrice * (1 - customSLPercent / 100);
       } else {
         // Use actual values from trade
-        tpPrice = buyTrade.tp_price && buyTrade.tp_price > 0 ? buyTrade.tp_price : null;
-        slPrice = buyTrade.sl_price && buyTrade.sl_price > 0 ? buyTrade.sl_price : null;
+        tpPrice = entryTrade.tp_price && entryTrade.tp_price > 0 ? entryTrade.tp_price : null;
+        slPrice = entryTrade.sl_price && entryTrade.sl_price > 0 ? entryTrade.sl_price : null;
       }
       
       // Skip if no TP/SL to show (in actual mode only)
@@ -393,7 +400,7 @@ const CandlestickChart = ({
         entryPrice,
         tpPrice,
         slPrice,
-        entryTime: buyTrade.timestamp,
+        entryTime: entryTrade.timestamp,
         exitTime: correspondingSell?.timestamp || null,
         entryTimeMs,
         exitTimeMs: correspondingSell ? toUtcTimestamp(correspondingSell.timestamp) * 1000 : null,
@@ -943,7 +950,7 @@ const CandlestickChart = ({
     }
   }, [isReplaying]);
 
-  const buyCount = trades.filter((t) => t.ticker === ticker && (t.type === "BUY" || t.type === "RECURRING_BUY")).length;
+  const buyCount = trades.filter((t) => t.ticker === ticker && t.type === "BUY").length;
   const sellCount = trades.filter((t) => t.ticker === ticker && t.type === "SELL").length;
 
   return (
@@ -961,11 +968,11 @@ const CandlestickChart = ({
         <div className="flex items-center gap-4 text-sm">
           <div className="flex items-center gap-2">
             <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-b-[10px] border-l-transparent border-r-transparent border-b-success" />
-            <span className="text-muted-foreground">Buy ({buyCount})</span>
+            <span className="text-muted-foreground">Entry ({buyCount})</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[10px] border-l-transparent border-r-transparent border-t-destructive" />
-            <span className="text-muted-foreground">Sell ({sellCount})</span>
+            <span className="text-muted-foreground">Exit ({sellCount})</span>
           </div>
           {indicators.length > 0 && (
             <div className="flex items-center gap-2 pl-2 border-l border-border">

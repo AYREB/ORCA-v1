@@ -580,7 +580,7 @@ const ChartView = ({ results }: ChartViewProps) => {
     }
   }, [selectedData, displayIndex]);
 
-  const buyCount = tickerTrades.filter((t) => t.type === "BUY" || t.type === "RECURRING_BUY").length;
+  const buyCount = tickerTrades.filter((t) => t.type === "BUY").length;
   const sellCount = tickerTrades.filter((t) => t.type === "SELL").length;
 
   // Shared props for ChartContent

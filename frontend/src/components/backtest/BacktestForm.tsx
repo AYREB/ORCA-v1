@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useSettings } from "@/hooks/useSettings";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  Play,
+import {Play,
   Settings2,
   Calendar,
   Clock,
@@ -70,6 +70,8 @@ const WIZARD_STEPS: Array<{ id: WizardStep; label: string }> = [
 ];
 
 const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
+  const { settings } = useSettings();
+  const btDefaults = settings.backtestDefaults;
   const [loading, setLoading] = useState(false);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -92,10 +94,13 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
   });
 
   const [tickers, setTickers] = useState<string[]>(["AAPL"]);
-  const [executionTF, setExecutionTF] = useState("1h");
-  const [dateStart, setDateStart] = useState("2024-01-01");
-  const [dateEnd, setDateEnd] = useState("2025-01-01");
-  const [initialBalance, setInitialBalance] = useState(10000);
+  const [executionTF, setExecutionTF] = useState(btDefaults.timeframe);
+  const [dateStart, setDateStart] = useState("2025-01-01");
+  const [dateEnd, setDateEnd] = useState("2026-01-01");
+  const [initialBalance, setInitialBalance] = useState(btDefaults.initialBalance);
+  const [takeProfitPercent, setTakeProfitPercent] = useState(btDefaults.takeProfitPercent);
+  const [stopLossPercent, setStopLossPercent] = useState(btDefaults.stopLossPercent);
+  const [spread, setSpread] = useState(btDefaults.spread);
 
   useEffect(() => {
     const fetchRegistry = async () => {
