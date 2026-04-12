@@ -17,6 +17,11 @@ export interface AppSettings {
     stopLossPercent: number;
     timeframe: string;
   };
+  notifications: {
+    backtestComplete: boolean;
+    optimizationComplete: boolean;
+    soundEnabled: boolean;
+  };
 }
 
 const STORAGE_KEY = "orca-settings";
@@ -37,6 +42,11 @@ const DEFAULT_SETTINGS: AppSettings = {
     takeProfitPercent: 10,
     stopLossPercent: 6,
     timeframe: "1h",
+  },
+  notifications: {
+    backtestComplete: true,
+    optimizationComplete: true,
+    soundEnabled: true,
   },
 };
 
@@ -99,6 +109,7 @@ export function useSettings() {
       if (partial.profile) next.profile = { ...prev.profile, ...partial.profile };
       if (partial.appearance) next.appearance = { ...prev.appearance, ...partial.appearance };
       if (partial.backtestDefaults) next.backtestDefaults = { ...prev.backtestDefaults, ...partial.backtestDefaults };
+      if (partial.notifications) next.notifications = { ...prev.notifications, ...partial.notifications };
       return next;
     });
   }, []);

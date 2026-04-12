@@ -26,11 +26,7 @@ export function isEntryTrade(trade: TradeEntry, direction: "long" | "short"): bo
 export function isExitTrade(trade: TradeEntry, direction: "long" | "short"): boolean {
   return direction === "long" ? trade.type === "SELL" : trade.type === "BUY";
 }
-/**
- * Calculate P&L for a round trip given direction.
- * Long: profit = (exitPrice - entryPrice) * shares
- * Short: profit = (entryPrice - exitPrice) * shares
- */
+
 export function calculatePnl(
   avgEntryPrice: number,
   exitPrice: number,

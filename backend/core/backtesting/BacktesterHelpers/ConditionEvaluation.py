@@ -1,232 +1,204 @@
 import operator
 import json
-import pandas as pd
-import numpy as np
-from core.fetcher_calculators import indicatorCalculators
 import os
 
-# Operator mapping (kept as callables)
+import numpy as np
+import pandas as pd
+
+from core.fetcher_calculators import indicatorCalculators
+
+# ---------------- OPERATORS ---------------- #
+
 OPS = {
-    ">": operator.gt,
-    "<": operator.lt,
+    ">":  operator.gt,
+    "<":  operator.lt,
     ">=": operator.ge,
     "<=": operator.le,
     "==": operator.eq,
     "!=": operator.ne,
 }
 
-current_dir = os.path.dirname(__file__)  # directory of this file
-registry_path = os.path.join(current_dir, "../../registries/indicatorRegistry.json")
+# ---------------- INDICATOR REGISTRY ---------------- #
 
-# load registry once (optional)
-with open(registry_path) as f:
-    _INDICATOR_REGISTRY = json.load(f).get("INDICATORS", {})
+_registry_path = os.path.join(os.path.dirname(__file__), "../../registries/indicatorRegistry.json")
+with open(_registry_path) as _f:
+    _INDICATOR_REGISTRY = json.load(_f).get("INDICATORS", {})
 
+# ---------------- INTERNAL HELPERS ---------------- #
+
+def _default_tf(allowed_timeframes):
+    return allowed_timeframes[0] if allowed_timeframes else "1h"
+
+
+def _eval_price(func_args, merged_args, current_ticker, context_index, data_dict, execution_tf):
+    if current_ticker not in data_dict or execution_tf not in data_dict[current_ticker]:
+        return None, None
+    try:
+        val = indicatorCalculators.get_price(
+            data_dict[current_ticker][execution_tf],
+            field=merged_args.get("OHLC", "close"),
+            offset=merged_args.get("offset", 0),
+            context={"i": context_index}
+        )
+        return val, None
+    except Exception:
+        return None, None
+
+
+def _eval_volume(merged_args, current_ticker, timeframe, context_index, data_dict):
+    if current_ticker not in data_dict or timeframe not in data_dict[current_ticker]:
+        return None, None
+    try:
+        val = indicatorCalculators.get_volume(
+            data_dict[current_ticker][timeframe],
+            offset=merged_args.get("offset", 0),
+            context={"i": context_index}
+        )
+        return val, None
+    except Exception:
+        return None, None
+
+
+# ---------------- OPERAND EVALUATOR ---------------- #
 
 def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
                  context_index=None, global_timeframe="1h", allowed_timeframes=None,
                  execution_tf=None):
     """
-    Evaluate an operand and return (value, timeframe).
-    - Literals/idents/arithmetic -> returns (scalar, None)
-    - Function/indicator -> returns (scalar, timeframe_used)
-    If operand cannot be evaluated -> returns (None, None).
+    Evaluate a DSL operand node and return (value, timeframe).
+    Returns (None, None) if the operand cannot be evaluated.
     """
-    # Literal value
+    # Literal
     if "value" in op:
         return op["value"], None
 
     # Column reference
     if "ident" in op:
         try:
-            val = row[op["ident"]]
-            return val, None
+            return row[op["ident"]], None
         except Exception:
             return None, None
 
-    # Arithmetic operation
+    # Arithmetic
     if "op" in op:
-        left_val, _ = eval_operand(op["left"], row, indicator_functions, data_dict, ticker,
-                                   context_index, global_timeframe, allowed_timeframes, execution_tf)
-        right_val, _ = eval_operand(op["right"], row, indicator_functions, data_dict, ticker,
-                                    context_index, global_timeframe, allowed_timeframes, execution_tf)
-        if left_val is None or right_val is None:
+        lv, _ = eval_operand(op["left"],  row, indicator_functions, data_dict, ticker,
+                              context_index, global_timeframe, allowed_timeframes, execution_tf)
+        rv, _ = eval_operand(op["right"], row, indicator_functions, data_dict, ticker,
+                              context_index, global_timeframe, allowed_timeframes, execution_tf)
+        if lv is None or rv is None:
             return None, None
         try:
-            result = {
-                "*": left_val * right_val,
-                "/": left_val / right_val,
-                "+": left_val + right_val,
-                "-": left_val - right_val
-            }[op["op"]]
+            return {"*": lv * rv, "/": lv / rv, "+": lv + rv, "-": lv - rv}[op["op"]], None
         except Exception:
             return None, None
-        return result, None
 
-    # Function / indicator
+    # Indicator / function
     if "func" in op:
         func_name = op["func"]
-
-        # Arguments expected as dict
         func_args = op.get("arg", {})
+
+        # Normalise args to dict
         if not isinstance(func_args, dict):
-            # defensive: if list with single dict, convert; otherwise error
             if isinstance(func_args, list) and func_args and isinstance(func_args[0], dict):
                 func_args = func_args[0]
             else:
-                raise TypeError(f"Indicator arguments for {func_name} must be dict, got {type(func_args)}")
+                raise TypeError(f"Indicator args for '{func_name}' must be a dict, got {type(func_args)}")
 
-        current_ticker = ticker
-        # optional ticker override inside args
-        if "ticker" in func_args:
-            current_ticker = func_args.pop("ticker")
+        current_ticker = func_args.pop("ticker", ticker)
 
-        # merge with registry defaults
-        registry_info = _INDICATOR_REGISTRY.get(func_name, {})
-        merged_args = {**registry_info.get("defaults", {}), **func_args}
+        merged_args = {**_INDICATOR_REGISTRY.get(func_name, {}).get("defaults", {}), **func_args}
+        timeframe    = merged_args.pop("timeframe", global_timeframe)
+        offset       = merged_args.pop("offset", 0)
 
-        # pop timeframe once only
-        timeframe = merged_args.pop("timeframe", global_timeframe)
+        upper = func_name.upper()
 
-        # pop offset
-        offset = merged_args.pop("offset", 0)
+        if upper == "PRICE":
+            return _eval_price(func_args, merged_args, current_ticker, context_index, data_dict, execution_tf)
 
-        # PRICE special case
-        if func_name.upper() == "PRICE":
-            field = merged_args.get("OHLC", "close")
-            offset = merged_args.get("offset", 0)
-            # Make sure we select the correct timeframe
-            if current_ticker not in data_dict or execution_tf not in data_dict[current_ticker]:
-                return None, None
-            df = data_dict[current_ticker][execution_tf]
-            try:
-                val = indicatorCalculators.get_price(
-                    df,
-                    field=field,
-                    offset=offset,
-                    context={"i": context_index}
-                )
-            except Exception:
-                return None, None
-            return val, None
-        
-        # VOLUME special case (needs full DataFrame / Volume column)
-        if func_name.upper() == "VOLUME":
-            offset = merged_args.get("offset", 0)
-            if current_ticker not in data_dict or timeframe not in data_dict[current_ticker]:
-                return None, None
-            try:
-                val = indicatorCalculators.get_volume(
-                    data_dict[current_ticker][timeframe],
-                    offset=offset,
-                    context={"i": context_index}
-                )
-            except Exception:
-                return None, None
-            return val, None
+        if upper == "VOLUME":
+            return _eval_volume(merged_args, current_ticker, timeframe, context_index, data_dict)
 
-        # timeframe choice: prefer arg.timeframe, else global_timeframe
-        timeframe = merged_args.pop("timeframe", global_timeframe)
+        # Remove duplicate timeframe pop that existed in original
         if allowed_timeframes and timeframe not in allowed_timeframes:
-            # invalid timeframe requested
             raise ValueError(f"Invalid timeframe '{timeframe}'. Must be one of {allowed_timeframes}")
 
-        # ensure ticker/timeframe exist
         if current_ticker not in data_dict or timeframe not in data_dict[current_ticker]:
             return None, None
 
         func = indicator_functions.get(func_name)
         if func is None:
-            raise ValueError(f"Unknown function: {func_name}")
+            raise ValueError(f"Unknown indicator function: '{func_name}'")
 
         indicator_df = data_dict[current_ticker][timeframe]
-        exec_time = row.name
-
-        # Find the last timestamp in indicator_df that is <= exec_time
-        last_idx = indicator_df.index.asof(exec_time)
+        last_idx = indicator_df.index.asof(row.name)
         if pd.isna(last_idx):
             return None, None
 
-        series_to_use = indicator_df.loc[:last_idx]["Close"]
+        series = indicator_df.loc[:last_idx]["Close"]
 
-        # compute indicator (pass merged_args)
         try:
-            current_value = func(series_to_use, **merged_args)
+            value = func(series, **merged_args)
         except Exception:
             return None, None
 
-        # handle offset for indicators returning Series
-        if isinstance(current_value, pd.Series):
-            if offset == 0:
-                current_value = current_value.iloc[-1]
-            else:
-                if len(current_value) > offset:
-                    current_value = current_value.iloc[-1 - offset]
-                else:
-                    return None, timeframe
+        if isinstance(value, pd.Series):
+            if len(value) <= offset:
+                return None, timeframe
+            value = value.iloc[-1] if offset == 0 else value.iloc[-1 - offset]
 
-        # ensure scalar numeric or None
-        if current_value is None or (isinstance(current_value, float) and np.isnan(current_value)):
+        if value is None or (isinstance(value, float) and np.isnan(value)):
             return None, timeframe
 
-        return current_value, timeframe
+        return value, timeframe
 
-    # unknown operand type
     return None, None
 
+
+# ---------------- CONDITION EVALUATORS ---------------- #
 
 def evaluate_condition(cond, row, indicator_functions, data_dict=None, ticker=None,
                        context_index=None, allowed_timeframes=None, execution_tf=None,
                        debug=False):
     """
-    Evaluate cond and return a boolean.
+    Evaluate a DSL condition node and return a boolean.
+    Supports AND / OR recursion and leaf comparisons.
     """
-    # AND / OR recursion
     if "AND" in cond:
-        for c in cond["AND"]:
-            if not evaluate_condition(c, row, indicator_functions, data_dict, ticker,
-                                      context_index, allowed_timeframes, execution_tf, debug=debug):
-                return False
-        return True
+        return all(
+            evaluate_condition(c, row, indicator_functions, data_dict, ticker,
+                               context_index, allowed_timeframes, execution_tf, debug=debug)
+            for c in cond["AND"]
+        )
 
     if "OR" in cond:
-        for c in cond["OR"]:
-            if evaluate_condition(c, row, indicator_functions, data_dict, ticker,
-                                  context_index, allowed_timeframes, execution_tf, debug=debug):
-                return True
-        return False
+        return any(
+            evaluate_condition(c, row, indicator_functions, data_dict, ticker,
+                               context_index, allowed_timeframes, execution_tf, debug=debug)
+            for c in cond["OR"]
+        )
 
-    # Leaf comparison
-    default_tf = allowed_timeframes[0] if allowed_timeframes else "1h"
+    # Leaf
+    tf = _default_tf(allowed_timeframes)
+    shared = dict(indicator_functions=indicator_functions, data_dict=data_dict, ticker=ticker,
+                  context_index=context_index, global_timeframe=tf,
+                  allowed_timeframes=allowed_timeframes, execution_tf=execution_tf)
 
-    left_val, left_tf = eval_operand(
-        cond["left"], row, indicator_functions, data_dict, ticker,
-        context_index=context_index, global_timeframe=default_tf,
-        allowed_timeframes=allowed_timeframes, execution_tf=execution_tf
-    )
+    lv, ltf = eval_operand(cond["left"],  row, **shared)
+    rv, _   = eval_operand(cond["right"], row, **shared)
 
-    right_val, right_tf = eval_operand(
-        cond["right"], row, indicator_functions, data_dict, ticker,
-        context_index=context_index, global_timeframe=default_tf,
-        allowed_timeframes=allowed_timeframes, execution_tf=execution_tf
-    )
-
-    # If either side couldn't be evaluated -> false (safe default)
-    if left_val is None or right_val is None:
+    if lv is None or rv is None:
         if debug:
-            print(f"[DEBUG CONDITION] unable to evaluate values L={left_val} R={right_val}")
+            print(f"[CONDITION] Could not evaluate — L={lv} R={rv}")
         return False
 
     op_str = cond["operator"]
     if op_str not in OPS:
-        raise ValueError(f"Unsupported operator {op_str}")
+        raise ValueError(f"Unsupported operator: '{op_str}'")
 
-    result = OPS[op_str](left_val, right_val)
+    result = OPS[op_str](lv, rv)
 
     if debug:
-        print(f"[DEBUG CONDITION CHECK] LEFT={left_val} OP='{op_str}' RIGHT={right_val} "
-              f"TYPE_L={type(left_val)} TYPE_R={type(right_val)} TF_L={left_tf} TF_R={right_tf}")
-        print(f"[DEBUG CONDITION RESULT] {left_val} {op_str} {right_val} -> {result}")
+        print(f"[CONDITION] {lv} {op_str} {rv} -> {result}  (tf={ltf})")
 
     return bool(result)
 
@@ -234,49 +206,37 @@ def evaluate_condition(cond, row, indicator_functions, data_dict=None, ticker=No
 def evaluate_condition_capture(cond, row, indicator_functions, data_dict, ticker,
                                context_index, allowed_timeframes, execution_tf):
     """
-    Recursively evaluate AND/OR conditions and return (bool_result, left_val, right_val, timeframe)
+    Evaluate a DSL condition and return (result, left_val, right_val, timeframe).
+    Useful for trade logging and debugging.
     """
     if "AND" in cond:
-        results = [evaluate_condition_capture(c, row, indicator_functions, data_dict, ticker,
-                                              context_index, allowed_timeframes, execution_tf)
-                   for c in cond["AND"]]
-        # AND: all must be True
-        res = all(r[0] for r in results)
-        # return first sub-condition values for debug
-        left_val = results[0][1] if results else None
-        right_val = results[0][2] if results else None
-        tf = results[0][3] if results else None
-        return res, left_val, right_val, tf
+        results = [
+            evaluate_condition_capture(c, row, indicator_functions, data_dict, ticker,
+                                       context_index, allowed_timeframes, execution_tf)
+            for c in cond["AND"]
+        ]
+        first = results[0] if results else (None, None, None, None)
+        return all(r[0] for r in results), first[1], first[2], first[3]
 
     if "OR" in cond:
-        results = [evaluate_condition_capture(c, row, indicator_functions, data_dict, ticker,
-                                              context_index, allowed_timeframes, execution_tf)
-                   for c in cond["OR"]]
-        # OR: any must be True
-        res = any(r[0] for r in results)
-        left_val = results[0][1] if results else None
-        right_val = results[0][2] if results else None
-        tf = results[0][3] if results else None
-        return res, left_val, right_val, tf
+        results = [
+            evaluate_condition_capture(c, row, indicator_functions, data_dict, ticker,
+                                       context_index, allowed_timeframes, execution_tf)
+            for c in cond["OR"]
+        ]
+        first = results[0] if results else (None, None, None, None)
+        return any(r[0] for r in results), first[1], first[2], first[3]
 
-    # Leaf node
-    left_val, left_tf = eval_operand(
-        cond["left"], row, indicator_functions, data_dict, ticker,
-        context_index=context_index,
-        global_timeframe=allowed_timeframes[0] if allowed_timeframes else "1h",
-        allowed_timeframes=allowed_timeframes,
-        execution_tf=execution_tf
-    )
-    right_val, right_tf = eval_operand(
-        cond["right"], row, indicator_functions, data_dict, ticker,
-        context_index=context_index,
-        global_timeframe=allowed_timeframes[0] if allowed_timeframes else "1h",
-        allowed_timeframes=allowed_timeframes,
-        execution_tf=execution_tf
-    )
+    # Leaf
+    tf = _default_tf(allowed_timeframes)
+    shared = dict(indicator_functions=indicator_functions, data_dict=data_dict, ticker=ticker,
+                  context_index=context_index, global_timeframe=tf,
+                  allowed_timeframes=allowed_timeframes, execution_tf=execution_tf)
 
-    if left_val is None or right_val is None:
-        return False, left_val, right_val, left_tf
+    lv, ltf = eval_operand(cond["left"],  row, **shared)
+    rv, _   = eval_operand(cond["right"], row, **shared)
 
-    result = OPS[cond["operator"]](left_val, right_val)
-    return bool(result), left_val, right_val, left_tf
+    if lv is None or rv is None:
+        return False, lv, rv, ltf
+
+    return bool(OPS[cond["operator"]](lv, rv)), lv, rv, ltf

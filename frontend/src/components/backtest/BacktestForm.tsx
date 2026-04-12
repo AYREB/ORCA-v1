@@ -54,8 +54,16 @@ import {
   FALLBACK_REGISTRY,
 } from "./backtest-types";
 
-interface BacktestFormProps {
-  onRunBacktest: (results: any) => void;
+export interface BacktestFormProps {
+
+  onRunBacktest: (results: any ) => void;
+
+  onDslChange: (json: any, text: any) => void;
+
+  showActions?: boolean;
+
+  initialDslJson?: Record<string, any>; // Add this property
+
 }
 
 type WizardStep = 1 | 2 | 3 | 4 | 5;
