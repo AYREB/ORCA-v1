@@ -120,7 +120,7 @@ const faqItems = [
   },
   {
     q: "How do I set a stop loss or take profit?",
-    a: "In Easy Mode, expand the Arguments section under your entry conditions and set stopLossPercent and takeProfitPercent. In DSL, add them inside the ARGUMENTS{} block (e.g. stopLossPercent=6).",
+    a: "In Easy Mode, use the Risk Management controls in Open Setup to set Stop Loss % and Take Profit %. In DSL, add stopLossPercent and takeProfitPercent inside the ARGUMENTS{} block.",
   },
   {
     q: "Can I test on multiple tickers at once?",

@@ -68,6 +68,9 @@ export interface BacktestFormProps {
 
 type WizardStep = 1 | 2 | 3 | 4 | 5;
 type BlockState = Record<string, Record<string, { ARGUMENTS: Record<string, any> }>>;
+type RiskArgument = "takeProfitPercent" | "stopLossPercent" | "spread";
+
+const RISK_ARGUMENTS: RiskArgument[] = ["takeProfitPercent", "stopLossPercent", "spread"];
 
 const WIZARD_STEPS: Array<{ id: WizardStep; label: string }> = [
   { id: 1, label: "Strategy" },
@@ -76,6 +79,16 @@ const WIZARD_STEPS: Array<{ id: WizardStep; label: string }> = [
   { id: 4, label: "Markets & Timing" },
   { id: 5, label: "Account" },
 ];
+
+const stripRiskArguments = (args: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(args).filter(([key]) => !RISK_ARGUMENTS.includes(key as RiskArgument)));
+
+const numericArg = (value: unknown, fallback: number) => {
+  const numericValue = typeof value === "string" ? Number(value) : value;
+  return typeof numericValue === "number" && Number.isFinite(numericValue) ? numericValue : fallback;
+};
+
+const numberInputValue = (value: number) => (Number.isFinite(value) ? value : 0);
 
 const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
   const { settings } = useSettings();
@@ -250,8 +263,13 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
         SHORT: {},
       };
 
+      const loadedOpenArgs = sideData.OPEN?.ARGUMENTS || {};
+      setTakeProfitPercent(numericArg(loadedOpenArgs.takeProfitPercent, btDefaults.takeProfitPercent));
+      setStopLossPercent(numericArg(loadedOpenArgs.stopLossPercent, btDefaults.stopLossPercent));
+      setSpread(numericArg(loadedOpenArgs.spread, btDefaults.spread));
+
       if (sideData.OPEN?.ARGUMENTS) {
-        nextBlocks[detectedSide].OPEN = { ARGUMENTS: sideData.OPEN.ARGUMENTS };
+        nextBlocks[detectedSide].OPEN = { ARGUMENTS: stripRiskArguments(sideData.OPEN.ARGUMENTS) };
       }
       if (sideData.CLOSE?.ARGUMENTS) {
         nextBlocks[detectedSide].CLOSE = { ARGUMENTS: sideData.CLOSE.ARGUMENTS };
@@ -401,7 +419,12 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
       },
     };
 
-    const openArgs = blocks[side]?.OPEN?.ARGUMENTS || {};
+    const openArgs = {
+      ...stripRiskArguments(blocks[side]?.OPEN?.ARGUMENTS || {}),
+      takeProfitPercent,
+      stopLossPercent,
+      spread,
+    };
     const closeArgs = blocks[side]?.CLOSE?.ARGUMENTS || {};
     const openConditions = conditionGroups.OPEN || { conditions: [] };
     const closeConditions = conditionGroups.CLOSE || { conditions: [] };
@@ -497,7 +520,7 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
   }
 
   const allowedArgs = registry.arguments?.ARGUMENTS?.[side] || {};
-  const openArgs = blocks[side]?.OPEN?.ARGUMENTS || {};
+  const openArgs = stripRiskArguments(blocks[side]?.OPEN?.ARGUMENTS || {});
   const closeArgs = blocks[side]?.CLOSE?.ARGUMENTS || {};
 
   return (
@@ -697,6 +720,53 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
                     setConditionGroup={(group) => setConditionGroups((prev) => ({ ...prev, OPEN: group }))}
                     registry={registry}
                   />
+                  <div className="space-y-3 pt-3 border-t border-border/30">
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">Risk Management</Label>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="space-y-2">
+                        <Label htmlFor="takeProfitPercent" className="text-xs text-muted-foreground">
+                          Take Profit %
+                        </Label>
+                        <Input
+                          id="takeProfitPercent"
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={takeProfitPercent}
+                          onChange={(e) => setTakeProfitPercent(numberInputValue(e.currentTarget.valueAsNumber))}
+                          className="bg-secondary/50 border-border/50 h-9"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="stopLossPercent" className="text-xs text-muted-foreground">
+                          Stop Loss %
+                        </Label>
+                        <Input
+                          id="stopLossPercent"
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={stopLossPercent}
+                          onChange={(e) => setStopLossPercent(numberInputValue(e.currentTarget.valueAsNumber))}
+                          className="bg-secondary/50 border-border/50 h-9"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="spread" className="text-xs text-muted-foreground">
+                          Spread %
+                        </Label>
+                        <Input
+                          id="spread"
+                          type="number"
+                          min="0"
+                          step="0.001"
+                          value={spread}
+                          onChange={(e) => setSpread(numberInputValue(e.currentTarget.valueAsNumber))}
+                          className="bg-secondary/50 border-border/50 h-9"
+                        />
+                      </div>
+                    </div>
+                  </div>
                   {Object.keys(allowedArgs.OPEN || {}).length > 0 && (
                     <div className="space-y-3 pt-3 border-t border-border/30">
                       <Label className="text-xs uppercase tracking-wider text-muted-foreground">Open Parameters</Label>

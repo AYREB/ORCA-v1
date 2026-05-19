@@ -56,7 +56,7 @@ export function ArgumentSelector({
     return currentArgs[parentArg] === true;
   };
 
-  // Filter out trade settings args from OPEN block since they're managed in Trade Settings
+  // Filter out trade settings args from OPEN block since they're managed by Risk Management.
   const hiddenArgs = [
     "takeProfitPercent", 
     "stopLossPercent", 
