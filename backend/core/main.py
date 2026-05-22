@@ -4,6 +4,7 @@ import numpy as np
 import os
 import subprocess
 import sys
+from datetime import timedelta
 from .data_pulling import datapull
 from .parsing import parser, validateParsedDSL
 from .fetcher_calculators import indicatorEvaluator
@@ -93,6 +94,89 @@ def apply_default_arguments(parsed_dsl, registry_path="Core/Registries/arguments
     return parsed_dsl
 
 
+def dataframe_to_response_records(df):
+    if df is None or df.empty:
+        return []
+
+    records_df = df.reset_index()
+    datetime_column = next(
+        (column for column in ("Datetime", "Date", "index") if column in records_df.columns),
+        None,
+    )
+
+    if datetime_column:
+        records_df = records_df.rename(columns={datetime_column: "Datetime"})
+    else:
+        records_df.insert(0, "Datetime", records_df.index)
+
+    records_df["Datetime"] = records_df["Datetime"].astype(str)
+    return records_df.to_dict(orient="records")
+
+
+def is_date_only_bound(value):
+    return (
+        isinstance(value, str)
+        and len(value) == 10
+        and value[4] == "-"
+        and value[7] == "-"
+    )
+
+
+def parse_datetime_bound(value):
+    if not value:
+        return None
+
+    parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return None
+
+    return parsed.tz_convert(None)
+
+
+def get_fetch_date_bound(value, *, is_end=False):
+    parsed = parse_datetime_bound(value)
+    if parsed is None:
+        return value
+
+    if is_end and not is_date_only_bound(value):
+        parsed = parsed + timedelta(days=1)
+
+    return parsed.date().isoformat()
+
+
+def normalize_datetime_index(df):
+    if df is None or df.empty:
+        return df
+
+    normalized = df.copy()
+    try:
+        normalized.index = pd.to_datetime(normalized.index, utc=True, errors="coerce").tz_convert(None)
+    except (TypeError, ValueError):
+        return df
+
+    return normalized
+
+
+def clip_dataframe_to_dateframe(df, start_value, end_value, *, clip_start=True):
+    if df is None or df.empty:
+        return df
+
+    clipped = normalize_datetime_index(df)
+    start_dt = parse_datetime_bound(start_value)
+    end_dt = parse_datetime_bound(end_value)
+
+    if clip_start and start_dt is not None:
+        clipped = clipped[clipped.index >= start_dt]
+
+    if end_dt is not None:
+        if is_date_only_bound(end_value):
+            clipped = clipped[clipped.index < end_dt]
+        else:
+            clipped = clipped[clipped.index <= end_dt]
+
+    return clipped
+
+
 def dslTextToJsonBacktest(dsl_text, initial_balance=10000):
     print("dsl_GO")
     print(dsl_text)
@@ -150,6 +234,8 @@ def main(parsed_dsl, initial_balance=10000):
         start_date = "2024-01-01"
         end_date = "2025-01-01"
 
+    fetch_start_date = get_fetch_date_bound(start_date)
+    fetch_end_date = get_fetch_date_bound(end_date, is_end=True)
 
     data_dict = {}
 
@@ -163,10 +249,11 @@ def main(parsed_dsl, initial_balance=10000):
                 # online mode
                 df = datapull.get_data_with_indicator(
                     ticker=t,
-                    start=start_date,
-                    end=end_date,
+                    start=fetch_start_date,
+                    end=fetch_end_date,
                     interval=tf
                 )
+                df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=False)
                 x=1
             else:
                 # offline mode
@@ -180,7 +267,7 @@ def main(parsed_dsl, initial_balance=10000):
                 df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True).dt.tz_localize(None)
                 df = df.set_index("Datetime")
                 df = df.sort_index()
-                df = df.loc[start_date:end_date]
+                df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=False)
                 x=1
 
                 # ⭐ Make offline identical to online: add indicators
@@ -235,9 +322,7 @@ def main(parsed_dsl, initial_balance=10000):
         "trades": trade_log,
         "data": {
             ticker: {
-                tf: df.reset_index()
-                    .assign(Datetime=lambda x: x["Datetime"].astype(str))
-                    .to_dict(orient="records")
+                tf: dataframe_to_response_records(df)
                 for tf, df in data_dict[ticker].items()
             }
             for ticker in data_dict

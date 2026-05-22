@@ -278,6 +278,10 @@ API_RATE_LIMITS = {
         "max_requests": env_int("RATE_LIMIT_COMPUTE_MAX_REQUESTS", 10, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_COMPUTE_WINDOW_SECONDS", 60, minimum=1),
     },
+    "backtest": {
+        "max_requests": env_int("RATE_LIMIT_BACKTEST_MAX_REQUESTS", 60, minimum=1),
+        "window_seconds": env_int("RATE_LIMIT_BACKTEST_WINDOW_SECONDS", 60, minimum=1),
+    },
     "status": {
         "max_requests": env_int("RATE_LIMIT_STATUS_MAX_REQUESTS", 120, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_STATUS_WINDOW_SECONDS", 60, minimum=1),

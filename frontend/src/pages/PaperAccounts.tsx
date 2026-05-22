@@ -61,17 +61,36 @@ import { useAuth } from "@/context/AuthContext";
 
 interface PaperStrategyRun {
   id: string;
+  appliedStrategyId?: string;
   strategyId: number;
   strategyName: string;
   executedAt: string;
   mode: "manual" | "live";
+  startDate?: string;
   windowEnd?: string;
   result?: BacktestResult;
   pctChange: number;
+  startingEquity?: number;
+  endingValue?: number;
+  pnl?: number;
   tradeCount: number;
   wins: number;
   losses: number;
   winRate: number;
+}
+
+interface AppliedPaperStrategy {
+  id: string;
+  strategyId: number;
+  strategyName: string;
+  appliedAt: string;
+  startDate: string;
+  startingEquity: number;
+  currentValue: number;
+  active: boolean;
+  stoppedAt?: string;
+  lastUpdatedAt?: string;
+  lastWindowEnd?: string;
 }
 
 interface PaperEquityPoint {
@@ -87,7 +106,7 @@ interface PaperAccount {
   currentBalance: number;
   createdAt: string;
   updatedAt: string;
-  appliedStrategyIds: number[];
+  appliedStrategies: AppliedPaperStrategy[];
   runs: PaperStrategyRun[];
   performanceHistory: PaperEquityPoint[];
 }
@@ -125,12 +144,6 @@ const formatLocalDate = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
-const addDays = (date: Date, days: number) => {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-};
-
 const isSameLocalDate = (timestamp: string, dateKey: string) => {
   const date = new Date(timestamp);
   return Number.isFinite(date.getTime()) && formatLocalDate(date) === dateKey;
@@ -139,12 +152,65 @@ const isSameLocalDate = (timestamp: string, dateKey: string) => {
 const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-const withJsonDateframeEnd = (
+const getDateKeyFromTimestamp = (timestamp: string, fallback = formatLocalDate(new Date())) => {
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? formatLocalDate(date) : fallback;
+};
+
+const getDateframeTimestamp = (timestamp: string, fallback = new Date().toISOString()) => {
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : fallback;
+};
+
+const formatWindowLabel = (timestamp?: string) => {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : timestamp;
+};
+
+const getAppliedStrategyDelta = (strategy: AppliedPaperStrategy) =>
+  strategy.currentValue - strategy.startingEquity;
+
+const getActiveAppliedStrategies = (account: PaperAccount) =>
+  account.appliedStrategies.filter((strategy) => strategy.active);
+
+const getAppliedStrategyWindowStart = (strategy: AppliedPaperStrategy) =>
+  strategy.lastUpdatedAt ?? strategy.appliedAt;
+
+const getBalanceAfterStrategyValueChanges = (
+  account: PaperAccount,
+  nextAppliedStrategies: AppliedPaperStrategy[],
+) => {
+  const nextById = new Map(nextAppliedStrategies.map((strategy) => [strategy.id, strategy]));
+  return account.appliedStrategies.reduce((balance, previousStrategy) => {
+    const nextStrategy = nextById.get(previousStrategy.id);
+    if (!nextStrategy) return balance;
+    return balance - getAppliedStrategyDelta(previousStrategy) + getAppliedStrategyDelta(nextStrategy);
+  }, account.currentBalance);
+};
+
+const createAppliedStrategyRecord = (
+  strategy: SavedStrategy,
+  account: PaperAccount,
+  appliedAt = new Date().toISOString(),
+): AppliedPaperStrategy => ({
+  id: createId(),
+  strategyId: strategy.id,
+  strategyName: strategy.name,
+  appliedAt,
+  startDate: getDateKeyFromTimestamp(appliedAt),
+  startingEquity: account.currentBalance,
+  currentValue: account.currentBalance,
+  active: true,
+});
+
+const withJsonDateframeWindow = (
   dslJson: Record<string, unknown>,
+  startDate: string,
   payloadEndDate: string,
-  fallbackStartDate: string,
 ) => {
   const cloned = JSON.parse(JSON.stringify(dslJson)) as Record<string, unknown>;
+  let touchedContext = false;
 
   STRATEGY_SIDES.forEach((side) => {
     const sideValue = cloned[side];
@@ -157,21 +223,44 @@ const withJsonDateframeEnd = (
       ...context,
       dateframe: {
         ...dateframe,
-        start: typeof dateframe.start === "string" && dateframe.start ? dateframe.start : fallbackStartDate,
+        start: startDate,
         end: payloadEndDate,
       },
     };
+    touchedContext = true;
   });
+
+  if (!touchedContext && isObjectRecord(cloned.context)) {
+    const context = cloned.context;
+    const dateframe = isObjectRecord(context.dateframe) ? context.dateframe : {};
+    cloned.context = {
+      ...context,
+      dateframe: {
+        ...dateframe,
+        start: startDate,
+        end: payloadEndDate,
+      },
+    };
+  }
+
+  const topLevelDateframe = cloned.DATEFRAME;
+  if (isObjectRecord(topLevelDateframe)) {
+    cloned.DATEFRAME = {
+      ...topLevelDateframe,
+      start: startDate,
+      end: payloadEndDate,
+    };
+  }
 
   return cloned;
 };
 
-const withTextDateframeEnd = (dslText: string, payloadEndDate: string, fallbackStartDate: string) => {
+const withTextDateframeWindow = (dslText: string, startDate: string, payloadEndDate: string) => {
   const nextDsl = dslText.replace(
-    /:DATEFRAME\(\s*([^,)]+)\s*,\s*([^)]+)\)/i,
-    `:DATEFRAME($1, ${payloadEndDate})`,
+    /:DATEFRAME\(\s*[^,)]+\s*,\s*[^)]+\)/i,
+    `:DATEFRAME(${startDate}, ${payloadEndDate})`,
   );
-  return nextDsl === dslText ? `:DATEFRAME(${fallbackStartDate}, ${payloadEndDate})\n${dslText}` : nextDsl;
+  return nextDsl === dslText ? `:DATEFRAME(${startDate}, ${payloadEndDate})\n${dslText}` : nextDsl;
 };
 
 const serializeAccountsForStorage = (accounts: PaperAccount[]) =>
@@ -182,24 +271,69 @@ const serializeAccountsForStorage = (accounts: PaperAccount[]) =>
 
 const normalizeRun = (value: unknown): PaperStrategyRun | null => {
   if (!isObjectRecord(value)) return null;
-  const result = isObjectRecord(value.result) ? (value.result as BacktestResult) : undefined;
+  const result = isObjectRecord(value.result) ? (value.result as unknown as BacktestResult) : undefined;
 
   return {
     id:
       typeof value.id === "string"
         ? value.id
         : createId(),
+    appliedStrategyId: typeof value.appliedStrategyId === "string" ? value.appliedStrategyId : undefined,
     strategyId: typeof value.strategyId === "number" ? value.strategyId : 0,
     strategyName: typeof value.strategyName === "string" ? value.strategyName : "Strategy",
     executedAt: typeof value.executedAt === "string" ? value.executedAt : new Date().toISOString(),
     mode: value.mode === "live" ? "live" : "manual",
+    startDate: typeof value.startDate === "string" ? value.startDate : undefined,
     windowEnd: typeof value.windowEnd === "string" ? value.windowEnd : undefined,
     result,
     pctChange: typeof value.pctChange === "number" ? value.pctChange : 0,
+    startingEquity: typeof value.startingEquity === "number" ? value.startingEquity : undefined,
+    endingValue: typeof value.endingValue === "number" ? value.endingValue : undefined,
+    pnl: typeof value.pnl === "number" ? value.pnl : undefined,
     tradeCount: typeof value.tradeCount === "number" ? value.tradeCount : 0,
     wins: typeof value.wins === "number" ? value.wins : 0,
     losses: typeof value.losses === "number" ? value.losses : 0,
     winRate: typeof value.winRate === "number" ? value.winRate : 0,
+  };
+};
+
+const normalizeAppliedStrategy = (
+  value: unknown,
+  fallbackCurrentBalance: number,
+  fallbackAppliedAt: string,
+): AppliedPaperStrategy | null => {
+  if (!isObjectRecord(value)) return null;
+  const strategyId = typeof value.strategyId === "number" ? value.strategyId : null;
+  if (strategyId === null) return null;
+
+  const appliedAt = typeof value.appliedAt === "string" ? value.appliedAt : fallbackAppliedAt;
+  const startingEquity =
+    typeof value.startingEquity === "number" && Number.isFinite(value.startingEquity) && value.startingEquity > 0
+      ? value.startingEquity
+      : fallbackCurrentBalance;
+  const currentValue =
+    typeof value.currentValue === "number" && Number.isFinite(value.currentValue) && value.currentValue >= 0
+      ? value.currentValue
+      : startingEquity;
+
+  return {
+    id: typeof value.id === "string" ? value.id : createId(),
+    strategyId,
+    strategyName:
+      typeof value.strategyName === "string" && value.strategyName.trim()
+        ? value.strategyName
+        : `Strategy ${strategyId}`,
+    appliedAt,
+    startDate:
+      typeof value.startDate === "string" && value.startDate.trim()
+        ? value.startDate
+        : getDateKeyFromTimestamp(appliedAt),
+    startingEquity,
+    currentValue,
+    active: typeof value.active === "boolean" ? value.active : typeof value.stoppedAt !== "string",
+    stoppedAt: typeof value.stoppedAt === "string" ? value.stoppedAt : undefined,
+    lastUpdatedAt: typeof value.lastUpdatedAt === "string" ? value.lastUpdatedAt : undefined,
+    lastWindowEnd: typeof value.lastWindowEnd === "string" ? value.lastWindowEnd : undefined,
   };
 };
 
@@ -233,6 +367,30 @@ const normalizeAccount = (raw: unknown): PaperAccount => {
   const normalizedRuns: PaperStrategyRun[] = Array.isArray(source.runs)
     ? source.runs.map((run) => normalizeRun(run)).filter((run): run is PaperStrategyRun => run !== null)
     : [];
+  const fallbackAppliedAt = typeof source.updatedAt === "string" ? source.updatedAt : createdAt;
+  const appliedStrategies: AppliedPaperStrategy[] = Array.isArray(source.appliedStrategies)
+    ? source.appliedStrategies
+        .map((strategy) => normalizeAppliedStrategy(strategy, currentBalance, fallbackAppliedAt))
+        .filter((strategy): strategy is AppliedPaperStrategy => strategy !== null)
+    : Array.isArray(source.appliedStrategyIds)
+      ? source.appliedStrategyIds
+          .filter((id): id is number => typeof id === "number")
+          .map((strategyId) => {
+            const lastRunForStrategy = normalizedRuns.find((run) => run.strategyId === strategyId);
+            return {
+              id: createId(),
+              strategyId,
+              strategyName: lastRunForStrategy?.strategyName ?? `Strategy ${strategyId}`,
+              appliedAt: fallbackAppliedAt,
+              startDate: getDateKeyFromTimestamp(fallbackAppliedAt),
+              startingEquity: currentBalance,
+              currentValue: currentBalance,
+              active: true,
+              lastUpdatedAt: lastRunForStrategy?.executedAt,
+              lastWindowEnd: lastRunForStrategy?.windowEnd,
+            };
+          })
+      : [];
 
   return {
     id:
@@ -245,9 +403,7 @@ const normalizeAccount = (raw: unknown): PaperAccount => {
     currentBalance,
     createdAt,
     updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : createdAt,
-    appliedStrategyIds: Array.isArray(source.appliedStrategyIds)
-      ? source.appliedStrategyIds.filter((id): id is number => typeof id === "number")
-      : [],
+    appliedStrategies,
     runs: normalizedRuns,
     performanceHistory,
   };
@@ -311,19 +467,29 @@ const createPaperRun = (
   result: BacktestResult,
   mode: PaperStrategyRun["mode"],
   executedAt: string,
+  appliedStrategy?: AppliedPaperStrategy,
+  windowStartAt?: string,
+  windowStartingEquity?: number,
   windowEnd?: string,
 ): PaperStrategyRun => {
   const outcomes = summarizeTradeOutcomes(result.trades);
+  const startingEquity = windowStartingEquity ?? appliedStrategy?.startingEquity;
+  const endingValue = result.total_portfolio;
 
   return {
     id: createId(),
+    appliedStrategyId: appliedStrategy?.id,
     strategyId: strategy.id,
     strategyName: strategy.name,
     executedAt,
     mode,
+    startDate: windowStartAt ? getDateKeyFromTimestamp(windowStartAt) : appliedStrategy?.startDate,
     windowEnd,
     result,
     pctChange: result.pct_change,
+    startingEquity,
+    endingValue,
+    pnl: typeof startingEquity === "number" ? endingValue - startingEquity : undefined,
     tradeCount: result.trades.length,
     wins: outcomes.wins,
     losses: outcomes.losses,
@@ -453,12 +619,19 @@ const PaperAccounts = () => {
 
   const selectedAccountStrategies = useMemo(() => {
     if (!selectedAccount) return [];
-    return strategies.filter((strategy) => selectedAccount.appliedStrategyIds.includes(strategy.id));
+    const strategyById = new Map(strategies.map((strategy) => [strategy.id, strategy]));
+    return getActiveAppliedStrategies(selectedAccount).map((appliedStrategy) => ({
+      appliedStrategy,
+      strategy: strategyById.get(appliedStrategy.strategyId) ?? null,
+    }));
   }, [selectedAccount, strategies]);
 
   const availableStrategiesToApply = useMemo(() => {
     if (!selectedAccount) return [];
-    return strategies.filter((strategy) => !selectedAccount.appliedStrategyIds.includes(strategy.id));
+    const activeStrategyIds = new Set(
+      getActiveAppliedStrategies(selectedAccount).map((strategy) => strategy.strategyId),
+    );
+    return strategies.filter((strategy) => !activeStrategyIds.has(strategy.id));
   }, [selectedAccount, strategies]);
 
   const selectedAccountMetrics = useMemo(() => {
@@ -595,7 +768,7 @@ const PaperAccounts = () => {
         currentBalance: startingBalance,
         createdAt: now,
         updatedAt: now,
-        appliedStrategyIds: [],
+        appliedStrategies: [],
         runs: [],
         performanceHistory: [{ timestamp: now, equity: startingBalance }],
       };
@@ -616,6 +789,11 @@ const PaperAccounts = () => {
             description: accountDescription.trim(),
             startingBalance,
             currentBalance: account.currentBalance * scale,
+            appliedStrategies: account.appliedStrategies.map((strategy) => ({
+              ...strategy,
+              startingEquity: strategy.startingEquity * scale,
+              currentValue: strategy.currentValue * scale,
+            })),
             performanceHistory: account.performanceHistory.map((point, idx) => ({
               ...point,
               equity: idx === 0 ? startingBalance : point.equity * scale,
@@ -649,36 +827,48 @@ const PaperAccounts = () => {
     if (!selectedAccount || !selectedApplyStrategyId) return;
     const strategyId = Number(selectedApplyStrategyId);
     if (!Number.isFinite(strategyId)) return;
+    const strategy = strategies.find((item) => item.id === strategyId);
+    if (!strategy) return;
+    const appliedStrategy = createAppliedStrategyRecord(strategy, selectedAccount);
 
     updateAccounts((previous) =>
       previous.map((account) =>
         account.id === selectedAccount.id
           ? {
               ...account,
-              appliedStrategyIds: Array.from(new Set([...account.appliedStrategyIds, strategyId])),
+              appliedStrategies: [appliedStrategy, ...account.appliedStrategies],
               updatedAt: new Date().toISOString(),
             }
           : account,
       ),
     );
     setSelectedApplyStrategyId("");
-    toast.success("Strategy applied to account");
+    toast.success("Strategy added from today");
   };
 
-  const handleRemoveAppliedStrategy = (strategyId: number) => {
+  const handleRemoveAppliedStrategy = (appliedStrategyId: string) => {
     if (!selectedAccount) return;
+    const now = new Date().toISOString();
     updateAccounts((previous) =>
       previous.map((account) =>
         account.id === selectedAccount.id
           ? {
               ...account,
-              appliedStrategyIds: account.appliedStrategyIds.filter((id) => id !== strategyId),
-              updatedAt: new Date().toISOString(),
+              appliedStrategies: account.appliedStrategies.map((strategy) =>
+                strategy.id === appliedStrategyId
+                  ? {
+                      ...strategy,
+                      active: false,
+                      stoppedAt: now,
+                    }
+                  : strategy,
+              ),
+              updatedAt: now,
             }
           : account,
       ),
     );
-    toast.success("Strategy removed from account");
+    toast.success("Strategy stopped for future updates");
   };
 
   const handleDeleteStrategyEverywhere = async (strategyId: number) => {
@@ -691,10 +881,22 @@ const PaperAccounts = () => {
       await api.deleteStrategy(strategyId);
       setStrategies((previous) => previous.filter((item) => item.id !== strategyId));
       updateAccounts((previous) =>
-        previous.map((account) => ({
-          ...account,
-          appliedStrategyIds: account.appliedStrategyIds.filter((id) => id !== strategyId),
-        })),
+        previous.map((account) => {
+          const now = new Date().toISOString();
+          return {
+            ...account,
+            appliedStrategies: account.appliedStrategies.map((appliedStrategy) =>
+              appliedStrategy.strategyId === strategyId
+                ? {
+                    ...appliedStrategy,
+                    active: false,
+                    stoppedAt: appliedStrategy.stoppedAt ?? now,
+                  }
+                : appliedStrategy,
+            ),
+            updatedAt: now,
+          };
+        }),
       );
       toast.success("Strategy deleted");
     } catch (error) {
@@ -741,7 +943,7 @@ const PaperAccounts = () => {
           account.id === selectedAccount.id
             ? {
                 ...account,
-                appliedStrategyIds: Array.from(new Set([...account.appliedStrategyIds, created.id])),
+                appliedStrategies: [createAppliedStrategyRecord(created, account), ...account.appliedStrategies],
                 updatedAt: new Date().toISOString(),
               }
             : account,
@@ -772,12 +974,15 @@ const PaperAccounts = () => {
   }, []);
 
   const runStrategyBacktest = useCallback(
-    async (strategy: SavedStrategy, initialBalance: number, liveToToday: boolean) => {
-      const now = new Date();
-      const windowEnd = liveToToday ? formatLocalDate(now) : undefined;
-      // Yahoo Finance treats the end date as exclusive, so tomorrow includes today's candles.
-      const payloadEndDate = liveToToday ? formatLocalDate(addDays(now, 1)) : undefined;
-      const fallbackStartDate = formatLocalDate(addDays(now, -365));
+    async (
+      strategy: SavedStrategy,
+      initialBalance: number,
+      windowStartAt: string,
+      windowEndAt: string,
+      liveToToday: boolean,
+    ) => {
+      const windowStart = getDateframeTimestamp(windowStartAt);
+      const windowEnd = liveToToday ? getDateframeTimestamp(windowEndAt) : undefined;
       const requestOptions = {
         strategyId: liveToToday ? undefined : strategy.id,
         strategyName: strategy.name,
@@ -788,12 +993,12 @@ const PaperAccounts = () => {
 
       if (dslJson && Object.keys(dslJson).length > 0) {
         result = await api.backtestDSLJSON(
-          payloadEndDate ? withJsonDateframeEnd(dslJson, payloadEndDate, fallbackStartDate) : dslJson,
+          windowEnd ? withJsonDateframeWindow(dslJson, windowStart, windowEnd) : dslJson,
           requestOptions,
         );
       } else if (strategy.dsl?.trim()) {
         result = await api.backtestDSLText(
-          payloadEndDate ? withTextDateframeEnd(strategy.dsl, payloadEndDate, fallbackStartDate) : strategy.dsl,
+          windowEnd ? withTextDateframeWindow(strategy.dsl, windowStart, windowEnd) : strategy.dsl,
           requestOptions,
         );
       } else {
@@ -806,37 +1011,64 @@ const PaperAccounts = () => {
     [persistStrategyResult],
   );
 
-  const handleRunStrategy = async (accountId: string, strategyId: number, liveToToday = true) => {
+  const handleRunStrategy = async (accountId: string, appliedStrategyId: string) => {
     const account = accounts.find((item) => item.id === accountId);
-    const strategy = strategies.find((item) => item.id === strategyId);
-    if (!account || !strategy) return;
+    const appliedStrategy = account?.appliedStrategies.find((item) => item.id === appliedStrategyId && item.active);
+    const strategy = appliedStrategy ? strategies.find((item) => item.id === appliedStrategy.strategyId) : null;
+    if (!account || !appliedStrategy || !strategy) return;
 
-    const runKey = `${accountId}:${strategyId}`;
+    const runKey = `${accountId}:${appliedStrategyId}`;
     setRunningKey(runKey);
 
     try {
       const now = new Date().toISOString();
-      const { result, windowEnd } = await runStrategyBacktest(strategy, account.currentBalance, liveToToday);
-      const run = createPaperRun(strategy, result, liveToToday ? "live" : "manual", now, windowEnd);
+      const windowStartAt = getAppliedStrategyWindowStart(appliedStrategy);
+      const windowStartingEquity = appliedStrategy.currentValue;
+      const { result, windowEnd } = await runStrategyBacktest(
+        strategy,
+        windowStartingEquity,
+        windowStartAt,
+        now,
+        true,
+      );
+      const updatedAppliedStrategy: AppliedPaperStrategy = {
+        ...appliedStrategy,
+        strategyName: strategy.name,
+        currentValue: result.total_portfolio,
+        lastUpdatedAt: now,
+        lastWindowEnd: windowEnd,
+      };
+      const run = createPaperRun(
+        strategy,
+        result,
+        "live",
+        now,
+        updatedAppliedStrategy,
+        windowStartAt,
+        windowStartingEquity,
+        windowEnd,
+      );
 
       updateAccounts((previous) =>
-        previous.map((item) =>
-          item.id === accountId
-            ? {
-                ...item,
-                currentBalance: result.total_portfolio,
-                updatedAt: now,
-                runs: [run, ...item.runs],
-                performanceHistory: [...item.performanceHistory, { timestamp: now, equity: result.total_portfolio }],
-              }
-            : item,
-        ),
+        previous.map((item) => {
+          if (item.id !== accountId) return item;
+          const appliedStrategies = item.appliedStrategies.map((strategyItem) =>
+            strategyItem.id === appliedStrategyId ? updatedAppliedStrategy : strategyItem,
+          );
+          const currentBalance = getBalanceAfterStrategyValueChanges(item, appliedStrategies);
+          return {
+            ...item,
+            appliedStrategies,
+            currentBalance,
+            updatedAt: now,
+            runs: [run, ...item.runs],
+            performanceHistory: [...item.performanceHistory, { timestamp: now, equity: currentBalance }],
+          };
+        }),
       );
       setSelectedRunId(run.id);
       toast.success(
-        liveToToday && windowEnd
-          ? `Updated "${strategy.name}" through ${windowEnd}`
-          : `Executed "${strategy.name}" on ${account.name}`,
+        `Updated "${strategy.name}" from ${formatWindowLabel(windowStartAt)} through ${formatWindowLabel(windowEnd) || "now"}`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to execute strategy";
@@ -850,8 +1082,19 @@ const PaperAccounts = () => {
     const account = accounts.find((item) => item.id === accountId);
     if (!account) return;
 
-    const appliedStrategies = strategies.filter((strategy) => account.appliedStrategyIds.includes(strategy.id));
-    if (appliedStrategies.length === 0) {
+    const strategyById = new Map(strategies.map((strategy) => [strategy.id, strategy]));
+    const appliedStrategies = getActiveAppliedStrategies(account);
+    const runnableStrategies = appliedStrategies
+      .map((appliedStrategy) => ({
+        appliedStrategy,
+        strategy: strategyById.get(appliedStrategy.strategyId) ?? null,
+      }))
+      .filter(
+        (item): item is { appliedStrategy: AppliedPaperStrategy; strategy: SavedStrategy } =>
+          item.strategy !== null,
+      );
+
+    if (runnableStrategies.length === 0) {
       toast.error("Apply at least one strategy before updating live.");
       return;
     }
@@ -860,35 +1103,62 @@ const PaperAccounts = () => {
     setRunningKey(runKey);
 
     try {
-      let runningBalance = account.currentBalance;
+      let nextAppliedStrategies = account.appliedStrategies;
       const newRuns: PaperStrategyRun[] = [];
-      const newHistory: PaperEquityPoint[] = [];
 
-      for (const strategy of appliedStrategies) {
+      for (const { appliedStrategy, strategy } of runnableStrategies) {
         const executedAt = new Date().toISOString();
-        const { result, windowEnd } = await runStrategyBacktest(strategy, runningBalance, true);
-        const run = createPaperRun(strategy, result, "live", executedAt, windowEnd);
-        runningBalance = result.total_portfolio;
+        const windowStartAt = getAppliedStrategyWindowStart(appliedStrategy);
+        const windowStartingEquity = appliedStrategy.currentValue;
+        const { result, windowEnd } = await runStrategyBacktest(
+          strategy,
+          windowStartingEquity,
+          windowStartAt,
+          executedAt,
+          true,
+        );
+        const updatedAppliedStrategy: AppliedPaperStrategy = {
+          ...appliedStrategy,
+          strategyName: strategy.name,
+          currentValue: result.total_portfolio,
+          lastUpdatedAt: executedAt,
+          lastWindowEnd: windowEnd,
+        };
+        const run = createPaperRun(
+          strategy,
+          result,
+          "live",
+          executedAt,
+          updatedAppliedStrategy,
+          windowStartAt,
+          windowStartingEquity,
+          windowEnd,
+        );
+        nextAppliedStrategies = nextAppliedStrategies.map((strategyItem) =>
+          strategyItem.id === appliedStrategy.id ? updatedAppliedStrategy : strategyItem,
+        );
         newRuns.push(run);
-        newHistory.push({ timestamp: executedAt, equity: runningBalance });
       }
 
       const updatedAt = new Date().toISOString();
       updateAccounts((previous) =>
-        previous.map((item) =>
-          item.id === accountId
-            ? {
-                ...item,
-                currentBalance: runningBalance,
-                updatedAt,
-                runs: [...newRuns].reverse().concat(item.runs),
-                performanceHistory: item.performanceHistory.concat(newHistory),
-              }
-            : item,
-        ),
+        previous.map((item) => {
+          if (item.id !== accountId) return item;
+          const currentBalance = getBalanceAfterStrategyValueChanges(item, nextAppliedStrategies);
+          return {
+            ...item,
+            appliedStrategies: nextAppliedStrategies,
+            currentBalance,
+            updatedAt,
+            runs: [...newRuns].reverse().concat(item.runs),
+            performanceHistory: item.performanceHistory.concat({ timestamp: updatedAt, equity: currentBalance }),
+          };
+        }),
       );
       setSelectedRunId(newRuns[newRuns.length - 1]?.id ?? null);
-      toast.success(`Updated ${appliedStrategies.length} ${appliedStrategies.length === 1 ? "strategy" : "strategies"} to today.`);
+      toast.success(
+        `Updated ${runnableStrategies.length} ${runnableStrategies.length === 1 ? "strategy" : "strategies"} to today.`,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to update paper account";
       toast.error(message);
@@ -931,7 +1201,7 @@ const PaperAccounts = () => {
                   </div>
                   <h1 className="text-3xl font-semibold">Paper Accounts</h1>
                   <p className="text-sm text-muted-foreground">
-                    Build isolated portfolios, run strategies at current simulated equity, and audit performance over time.
+                    Add strategies to a paper account from now on, update manually to current market data, and keep the equity trail.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1052,7 +1322,7 @@ const PaperAccounts = () => {
                                 </div>
                               </div>
                               <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-                                <span>{account.appliedStrategyIds.length} strategies</span>
+                                <span>{getActiveAppliedStrategies(account).length} live strategies</span>
                                 <span>{account.runs.length} runs</span>
                               </div>
                             </div>
@@ -1260,7 +1530,7 @@ const PaperAccounts = () => {
                         <Card className="border-border bg-card/60">
                           <CardHeader>
                             <CardTitle className="text-lg">Equity Trajectory</CardTitle>
-                            <CardDescription>Account value after each run, normalized by execution order.</CardDescription>
+                            <CardDescription>Account value captured each time you manually update live progress.</CardDescription>
                           </CardHeader>
                           <CardContent className="h-[340px]">
                             <ResponsiveContainer width="100%" height="100%">
@@ -1307,7 +1577,7 @@ const PaperAccounts = () => {
                         <Card className="border-border bg-card/60">
                           <CardHeader>
                             <CardTitle className="text-lg">Run Return Ladder</CardTitle>
-                            <CardDescription>Recent run outcomes to spot consistency and volatility quickly.</CardDescription>
+                            <CardDescription>Recent live strategy updates with each attachment's return from its own start date.</CardDescription>
                           </CardHeader>
                           <CardContent className="h-[340px]">
                             <ResponsiveContainer width="100%" height="100%">
@@ -1386,7 +1656,7 @@ const PaperAccounts = () => {
                                       </Badge>
                                       {run.mode === "live" && (
                                         <Badge variant="secondary" className="text-xs">
-                                          Live {run.windowEnd ?? ""}
+                                          Live {formatWindowLabel(run.windowEnd)}
                                         </Badge>
                                       )}
                                       <span className="text-muted-foreground">{run.tradeCount} trades</span>
@@ -1406,7 +1676,7 @@ const PaperAccounts = () => {
                         <Card className="border-border bg-card/60">
                           <CardHeader>
                             <CardTitle className="text-lg">Apply Saved Strategy</CardTitle>
-                            <CardDescription>Attach from your global strategy library to this account.</CardDescription>
+                            <CardDescription>Add a saved strategy to this account from today onward.</CardDescription>
                           </CardHeader>
                           <CardContent className="space-y-3">
                             <Select value={selectedApplyStrategyId} onValueChange={setSelectedApplyStrategyId}>
@@ -1440,7 +1710,7 @@ const PaperAccounts = () => {
                         <Card className="border-border bg-card/60">
                           <CardHeader>
                             <CardTitle className="text-lg">Create Strategy Here</CardTitle>
-                            <CardDescription>Draft a strategy, save it, and apply in one workflow.</CardDescription>
+                            <CardDescription>Draft a strategy, save it, and start tracking it from today.</CardDescription>
                           </CardHeader>
                           <CardContent className="space-y-3">
                             <Input
@@ -1474,7 +1744,7 @@ const PaperAccounts = () => {
                       <Card className="border-border bg-card/60">
                         <CardHeader>
                           <CardTitle className="text-lg">Applied Strategy Deck</CardTitle>
-                          <CardDescription>Run, detach, or permanently delete strategies from this account context.</CardDescription>
+                          <CardDescription>Each active strategy tracks its own live P&L from the day it was added.</CardDescription>
                         </CardHeader>
                         <CardContent>
                           {selectedAccountStrategies.length === 0 ? (
@@ -1483,19 +1753,31 @@ const PaperAccounts = () => {
                             </div>
                           ) : (
                             <div className="space-y-3">
-                              {selectedAccountStrategies.map((strategy) => {
-                                const key = `${selectedAccount.id}:${strategy.id}`;
+                              {selectedAccountStrategies.map(({ appliedStrategy, strategy }) => {
+                                const key = `${selectedAccount.id}:${appliedStrategy.id}`;
                                 const isRunning = runningKey === key;
-                                const lastResult = strategy.lastResult;
+                                const lastResult = strategy?.lastResult;
+                                const strategyName = strategy?.name ?? appliedStrategy.strategyName;
+                                const sleevePnl = getAppliedStrategyDelta(appliedStrategy);
+                                const sleeveReturn =
+                                  appliedStrategy.startingEquity > 0
+                                    ? (sleevePnl / appliedStrategy.startingEquity) * 100
+                                    : 0;
 
                                 return (
                                   <div
-                                    key={strategy.id}
+                                    key={appliedStrategy.id}
                                     className="flex flex-col gap-4 rounded-xl border border-border bg-background/50 p-4 lg:flex-row lg:items-center lg:justify-between"
                                   >
-                                    <div className="space-y-1">
+                                    <div className="min-w-0 flex-1 space-y-3">
                                       <div className="flex flex-wrap items-center gap-2">
-                                        <p className="font-semibold">{strategy.name}</p>
+                                        <p className="font-semibold">{strategyName}</p>
+                                        <Badge variant="secondary" className="text-xs">
+                                          Live
+                                        </Badge>
+                                        <Badge variant="outline" className="text-xs">
+                                          From {new Date(appliedStrategy.appliedAt).toLocaleDateString()}
+                                        </Badge>
                                         {lastResult?.pct_change !== undefined && (
                                           <Badge
                                             variant="outline"
@@ -1510,16 +1792,49 @@ const PaperAccounts = () => {
                                           </Badge>
                                         )}
                                       </div>
+                                      <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
+                                        <div className="rounded-md border border-border bg-background/70 p-2">
+                                          <p className="text-muted-foreground">Baseline</p>
+                                          <p className="font-mono font-semibold">
+                                            {formatMoney(appliedStrategy.startingEquity)}
+                                          </p>
+                                        </div>
+                                        <div className="rounded-md border border-border bg-background/70 p-2">
+                                          <p className="text-muted-foreground">Live Value</p>
+                                          <p className="font-mono font-semibold">
+                                            {formatMoney(appliedStrategy.currentValue)}
+                                          </p>
+                                        </div>
+                                        <div className="rounded-md border border-border bg-background/70 p-2">
+                                          <p className="text-muted-foreground">P&L</p>
+                                          <p
+                                            className={`font-mono font-semibold ${
+                                              sleevePnl >= 0 ? "text-success" : "text-destructive"
+                                            }`}
+                                          >
+                                            {formatSignedMoney(sleevePnl)} ({sleeveReturn >= 0 ? "+" : ""}
+                                            {sleeveReturn.toFixed(2)}%)
+                                          </p>
+                                        </div>
+                                      </div>
                                       <p className="line-clamp-2 text-xs text-muted-foreground">
-                                        {strategy.dsl || "No DSL text"}
+                                        {strategy?.dsl || "Saved strategy is no longer available."}
                                       </p>
+                                      {appliedStrategy.lastUpdatedAt && (
+                                        <p className="text-xs text-muted-foreground">
+                                          Last updated {new Date(appliedStrategy.lastUpdatedAt).toLocaleString()}
+                                          {appliedStrategy.lastWindowEnd
+                                            ? ` through ${formatWindowLabel(appliedStrategy.lastWindowEnd)}`
+                                            : ""}
+                                        </p>
+                                      )}
                                     </div>
 
                                     <div className="flex flex-wrap items-center gap-2">
                                       <Button
                                         size="sm"
-                                        onClick={() => handleRunStrategy(selectedAccount.id, strategy.id)}
-                                        disabled={runningKey !== null}
+                                        onClick={() => handleRunStrategy(selectedAccount.id, appliedStrategy.id)}
+                                        disabled={runningKey !== null || !strategy}
                                       >
                                         {isRunning ? (
                                           <>
@@ -1536,19 +1851,21 @@ const PaperAccounts = () => {
                                       <Button
                                         size="sm"
                                         variant="outline"
-                                        onClick={() => handleRemoveAppliedStrategy(strategy.id)}
+                                        onClick={() => handleRemoveAppliedStrategy(appliedStrategy.id)}
                                       >
-                                        Remove
+                                        Stop
                                       </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="text-destructive hover:text-destructive"
-                                        onClick={() => handleDeleteStrategyEverywhere(strategy.id)}
-                                      >
-                                        <Trash2 className="mr-2 h-4 w-4" />
-                                        Delete
-                                      </Button>
+                                      {strategy && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="text-destructive hover:text-destructive"
+                                          onClick={() => handleDeleteStrategyEverywhere(strategy.id)}
+                                        >
+                                          <Trash2 className="mr-2 h-4 w-4" />
+                                          Delete
+                                        </Button>
+                                      )}
                                     </div>
                                   </div>
                                 );
@@ -1584,7 +1901,9 @@ const PaperAccounts = () => {
                                       {selectedAccount.runs.map((run) => (
                                         <SelectItem key={run.id} value={run.id}>
                                           {new Date(run.executedAt).toLocaleString()} - {run.strategyName}
-                                          {run.mode === "live" && run.windowEnd ? ` (live ${run.windowEnd})` : ""}
+                                          {run.mode === "live" && run.windowEnd
+                                            ? ` (live ${formatWindowLabel(run.windowEnd)})`
+                                            : ""}
                                         </SelectItem>
                                       ))}
                                     </SelectContent>

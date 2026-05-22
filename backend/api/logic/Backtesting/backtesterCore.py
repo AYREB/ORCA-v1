@@ -26,21 +26,31 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
    # Precompute max rows per ticker for execution timeframe
     print(data_dict.keys())
     exec_dfs = {t: data_dict[t].get(execution_tf, None) for t in data_dict.keys()}
+    exec_dfs = {
+        ticker: df
+        for ticker, df in exec_dfs.items()
+        if df is not None and not df.empty
+    }
+
+    if not exec_dfs:
+        return [], initial_balance, {}, 0
+
+    positions = {ticker: positions.get(ticker, 0) for ticker in exec_dfs.keys()}
     max_rows = max(len(df) for df in exec_dfs.values())
  
     open_cond, close_cond = get_long_short_conditions(parsed_dsl)
     open_args = get_open_args(parsed_dsl)
     close_args = get_close_args(parsed_dsl)
 
-    last_recurring_index = {ticker: -float('inf') for ticker in data_dict.keys()}
-    recurring_count = {ticker: 0 for ticker in data_dict.keys()}
+    last_recurring_index = {ticker: -float('inf') for ticker in exec_dfs.keys()}
+    recurring_count = {ticker: 0 for ticker in exec_dfs.keys()}
 
     # Loop over execution timeframe
     for i in range(max_rows):
-        current_prices = {t: data_dict[t][execution_tf].iloc[min(i, len(data_dict[t][execution_tf])-1)]["Close"]
-                          for t in data_dict.keys()}
+        current_prices = {t: exec_dfs[t].iloc[min(i, len(exec_dfs[t])-1)]["Close"]
+                          for t in exec_dfs.keys()}
 
-        for ticker in data_dict.keys():
+        for ticker in exec_dfs.keys():
             exec_df = exec_dfs[ticker]
             row = exec_df.iloc[min(i, len(exec_df)-1)]
             timestamp_str = row.name.isoformat()

@@ -34,6 +34,7 @@ MAX_STRATEGY_NAME_LENGTH = 255
 
 DEFAULT_RATE_LIMITS = {
     "auth": {"max_requests": 20, "window_seconds": 300},
+    "backtest": {"max_requests": 60, "window_seconds": 60},
     "compute": {"max_requests": 10, "window_seconds": 60},
     "status": {"max_requests": 120, "window_seconds": 60},
     "general": {"max_requests": 180, "window_seconds": 60},
@@ -593,7 +594,7 @@ def strategy_detail(request, strategy_id: int):
 @api_error_boundary
 @require_methods("POST")
 @token_required
-@rate_limit("compute")
+@rate_limit("backtest")
 def backtestDSLText(request):
     user = get_authenticated_user(request)
     body = parse_body(request)
@@ -624,7 +625,7 @@ def backtestDSLText(request):
 @api_error_boundary
 @require_methods("POST")
 @token_required
-@rate_limit("compute")
+@rate_limit("backtest")
 def backtestDSLJSON(request):
     user = get_authenticated_user(request)
     body = parse_body(request)

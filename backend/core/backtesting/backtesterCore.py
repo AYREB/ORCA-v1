@@ -2,7 +2,7 @@ import pandas as pd
 from .BacktesterHelpers.ConditionEvaluation import evaluate_condition_capture
 from .BacktesterHelpers.DSLArgumentParser import get_long_short_conditions, get_open_args, get_close_args
 from .BacktesterHelpers.CalculateShares import calculate_shares
-from core.parsing.extractingTickers import extract_execution_timeframe, extract_data_timeframes
+from core.parsing.extractingTickers import extract_execution_timeframe, extract_data_timeframes, extract_dateframe
 
 # ---------------- SPREAD HELPERS ---------------- #
 
@@ -15,6 +15,35 @@ def apply_sell_spread(price, half_spread):
 # ---------------- ENTRY TYPE CONSTANTS ---------------- #
 
 ENTRY_TYPES = ("BUY", "SELL", "Recurring_Entry")
+
+
+def parse_datetime_bound(value):
+    if not value:
+        return None
+
+    parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return None
+
+    return parsed.tz_convert(None)
+
+
+def is_date_only_bound(value):
+    return (
+        isinstance(value, str)
+        and len(value) == 10
+        and value[4] == "-"
+        and value[7] == "-"
+    )
+
+
+def normalize_row_timestamp(value):
+    parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return None
+
+    return parsed.tz_convert(None)
+
 
 # ---------------- BACKTESTER ---------------- #
 
@@ -33,6 +62,10 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
 
     open_cond, close_cond = get_long_short_conditions(parsed_dsl, strategy_type)
     open_args = get_open_args(parsed_dsl, strategy_type)
+    dateframe = extract_dateframe(parsed_dsl) or {}
+    trade_start_at = parse_datetime_bound(dateframe.get("start"))
+    trade_end_at = parse_datetime_bound(dateframe.get("end"))
+    trade_end_is_exclusive = is_date_only_bound(dateframe.get("end"))
 
     half_spread = open_args.get("spread", 0) / 200.0  # divide by 100 for pct, then by 2 for half
 
@@ -55,6 +88,15 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
 
     if not exec_dfs:
         raise ValueError(f"No data found for execution timeframe '{execution_tf}'")
+
+    exec_dfs = {
+        ticker: df
+        for ticker, df in exec_dfs.items()
+        if df is not None and not df.empty
+    }
+
+    if not exec_dfs:
+        return [], initial_balance, {}, 0
 
     max_rows = max(len(df) for df in exec_dfs.values())
 
@@ -87,6 +129,16 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                 continue
 
             row = exec_df.iloc[i]
+            row_timestamp = normalize_row_timestamp(row.name)
+            if row_timestamp is not None:
+                if trade_start_at is not None and row_timestamp < trade_start_at:
+                    continue
+                if trade_end_at is not None:
+                    if trade_end_is_exclusive and row_timestamp >= trade_end_at:
+                        continue
+                    if not trade_end_is_exclusive and row_timestamp > trade_end_at:
+                        continue
+
             position = positions[ticker]
             in_position = (is_long and position > 0) or (not is_long and position < 0)
 
