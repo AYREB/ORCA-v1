@@ -42,9 +42,10 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { api, SavedStrategy } from "@/lib/api";
+import { api, SavedStrategy, StrategyAssistantContext } from "@/lib/api";
 import { MultiConditionBuilder } from "./ConditionBuilder";
 import { ArgumentSelector } from "./ArgumentSelector";
+import StrategyAssistantDrawer from "./StrategyAssistantDrawer";
 import {
   Registry,
   ConditionGroup,
@@ -522,6 +523,32 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
   const allowedArgs = registry.arguments?.ARGUMENTS?.[side] || {};
   const openArgs = stripRiskArguments(blocks[side]?.OPEN?.ARGUMENTS || {});
   const closeArgs = blocks[side]?.CLOSE?.ARGUMENTS || {};
+  const assistantContext: StrategyAssistantContext = {
+    currentStep: step,
+    currentStage: WIZARD_STEPS.find((wizardStep) => wizardStep.id === step)?.label ?? "Strategy",
+    strategyName: strategyName.trim() || "Unnamed Strategy",
+    side,
+    openConditions: conditionGroups.OPEN?.conditions ?? [],
+    closeConditions: conditionGroups.CLOSE?.conditions ?? [],
+    openArguments: openArgs,
+    closeArguments: closeArgs,
+    riskManagement: {
+      takeProfitPercent,
+      stopLossPercent,
+      spread,
+    },
+    markets: {
+      tickers: tickers.filter(Boolean),
+      executionTimeframe: executionTF,
+      dateStart,
+      dateEnd,
+    },
+    account: {
+      initialBalance,
+    },
+    jsonDsl: buildJsonDsl(),
+    readOnly: true,
+  };
 
   return (
     <motion.div
@@ -530,7 +557,7 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
       transition={{ duration: 0.5 }}
       className="space-y-6"
     >
-      <div className="flex items-center gap-3 p-4 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+      <div className="flex flex-col gap-3 p-4 rounded-xl border border-border bg-card/50 backdrop-blur-sm sm:flex-row sm:items-center">
         <div className="p-2.5 rounded-lg bg-primary/10 border border-primary/20">
           <Settings2 className="h-5 w-5 text-primary" />
         </div>
@@ -538,6 +565,7 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
           <h3 className="text-lg font-semibold">Strategy Builder</h3>
           <p className="text-sm text-muted-foreground">Create and run your backtest in 5 guided stages</p>
         </div>
+        <StrategyAssistantDrawer context={assistantContext} />
       </div>
 
       <div className="p-4 rounded-xl border border-border bg-card/30">

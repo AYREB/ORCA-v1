@@ -161,6 +161,46 @@ export interface SavedStrategy {
   lastResult?: BacktestResult | null;
 }
 
+export type StrategyAssistantRole = 'user' | 'assistant';
+
+export interface StrategyAssistantMessage {
+  role: StrategyAssistantRole;
+  content: string;
+}
+
+export interface StrategyAssistantContext {
+  currentStep: number;
+  currentStage: string;
+  strategyName: string;
+  side: string;
+  openConditions: unknown[];
+  closeConditions: unknown[];
+  openArguments: Record<string, unknown>;
+  closeArguments: Record<string, unknown>;
+  riskManagement: {
+    takeProfitPercent: number;
+    stopLossPercent: number;
+    spread: number;
+  };
+  markets: {
+    tickers: string[];
+    executionTimeframe: string;
+    dateStart: string;
+    dateEnd: string;
+  };
+  account: {
+    initialBalance: number;
+  };
+  jsonDsl: Record<string, unknown>;
+  readOnly: true;
+}
+
+export interface StrategyAssistantChatResponse {
+  answer: string;
+  model?: string;
+  provider?: string;
+}
+
 export interface AuthUser {
   id: number;
   email: string;
@@ -348,6 +388,19 @@ class DjangoAPI {
   // Get registry (commands, indicators, arguments)
   async getRegistry(): Promise<RegistryResponse> {
     return this.request<RegistryResponse>('/registry/');
+  }
+
+  async chatStrategyAssistant(
+    messages: StrategyAssistantMessage[],
+    strategyContext: StrategyAssistantContext
+  ): Promise<StrategyAssistantChatResponse> {
+    return this.request<StrategyAssistantChatResponse>('/strategy-assistant/chat/', {
+      method: 'POST',
+      body: JSON.stringify({
+        messages,
+        strategy_context: strategyContext,
+      }),
+    });
   }
 
   // Run Monte Carlo simulation

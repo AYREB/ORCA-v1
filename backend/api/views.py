@@ -21,6 +21,7 @@ from rest_framework.authtoken.models import Token
 
 from core.analysis.parameter_optimiser import build_param_grid, build_param_values, genetic_optimizer, optimizer
 from core.main import dslJSONBacktest, dslTextToJsonBacktest
+from .assistant import AssistantError, ask_strategy_assistant, normalize_assistant_messages, normalize_strategy_context
 from .models import BacktestRun, Strategy
 
 User = get_user_model()
@@ -37,6 +38,7 @@ DEFAULT_RATE_LIMITS = {
     "backtest": {"max_requests": 60, "window_seconds": 60},
     "compute": {"max_requests": 10, "window_seconds": 60},
     "status": {"max_requests": 120, "window_seconds": 60},
+    "assistant": {"max_requests": 30, "window_seconds": 60},
     "general": {"max_requests": 180, "window_seconds": 60},
 }
 
@@ -404,6 +406,24 @@ def serialize_backtest_run(run: BacktestRun):
         "final_balance": run.final_balance,
         "created_at": run.created_at.isoformat(),
     }
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("assistant")
+def strategy_assistant_chat(request):
+    payload = parse_body(request)
+    messages = normalize_assistant_messages(payload.get("messages"))
+    strategy_context = normalize_strategy_context(payload.get("strategy_context"))
+
+    try:
+        response = ask_strategy_assistant(messages, strategy_context)
+    except AssistantError as exc:
+        raise APIError(exc.message, status_code=exc.status_code)
+
+    return no_store(JsonResponse(response))
 
 
 @csrf_exempt

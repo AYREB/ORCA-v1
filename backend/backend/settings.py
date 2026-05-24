@@ -286,11 +286,32 @@ API_RATE_LIMITS = {
         "max_requests": env_int("RATE_LIMIT_STATUS_MAX_REQUESTS", 120, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_STATUS_WINDOW_SECONDS", 60, minimum=1),
     },
+    "assistant": {
+        "max_requests": env_int("RATE_LIMIT_ASSISTANT_MAX_REQUESTS", 30, minimum=1),
+        "window_seconds": env_int("RATE_LIMIT_ASSISTANT_WINDOW_SECONDS", 60, minimum=1),
+    },
     "general": {
         "max_requests": env_int("RATE_LIMIT_GENERAL_MAX_REQUESTS", 180, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_GENERAL_WINDOW_SECONDS", 60, minimum=1),
     },
 }
+
+# Strategy assistant provider. Use local Ollama by default during development.
+# Set ORCA_ASSISTANT_PROVIDER=openai and ORCA_ASSISTANT_MODEL to a fine-tuned
+# model id when the proprietary hosted model is ready.
+ORCA_ASSISTANT_PROVIDER = os.getenv("ORCA_ASSISTANT_PROVIDER", "ollama")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_BASE_URL = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
+ORCA_ASSISTANT_MODEL = os.getenv("ORCA_ASSISTANT_MODEL", "gpt-5.1")
+ORCA_ASSISTANT_OLLAMA_BASE_URL = os.getenv("ORCA_ASSISTANT_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+ORCA_ASSISTANT_OLLAMA_MODEL = os.getenv("ORCA_ASSISTANT_OLLAMA_MODEL", "gemma3:4b")
+ORCA_ASSISTANT_TIMEOUT_SECONDS = env_float("ORCA_ASSISTANT_TIMEOUT_SECONDS", 30.0, minimum=1.0)
+ORCA_ASSISTANT_TEMPERATURE = env_float("ORCA_ASSISTANT_TEMPERATURE", 0.2, minimum=0.0)
+ORCA_ASSISTANT_MAX_OUTPUT_TOKENS = env_int("ORCA_ASSISTANT_MAX_OUTPUT_TOKENS", 900, minimum=100)
+ORCA_ASSISTANT_MAX_MESSAGE_CHARS = env_int("ORCA_ASSISTANT_MAX_MESSAGE_CHARS", 4000, minimum=200)
+ORCA_ASSISTANT_MAX_CONTEXT_CHARS = env_int("ORCA_ASSISTANT_MAX_CONTEXT_CHARS", 20000, minimum=1000)
+ORCA_ASSISTANT_MAX_HISTORY_MESSAGES = env_int("ORCA_ASSISTANT_MAX_HISTORY_MESSAGES", 16, minimum=1)
+ORCA_ASSISTANT_STORE_RESPONSES = env_bool("ORCA_ASSISTANT_STORE_RESPONSES", False)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
