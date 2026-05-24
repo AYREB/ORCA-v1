@@ -48,26 +48,30 @@ const formatCurrency = (value: number) =>
 
 const formatPercent = (value: number) => `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
-const normalizeCurve = (points: Array<{ timestamp: string; equity: number }>): CurvePoint[] => {
-  const parsed = points
-    .map((point) => {
-      const timestamp = new Date(point.timestamp).getTime();
-      return {
-        timestamp,
-        equity: Number(point.equity),
-      };
-    })
-    .filter((point) => Number.isFinite(point.timestamp) && Number.isFinite(point.equity))
-    .sort((a, b) => a.timestamp - b.timestamp);
+const formatLocalDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 
-  // Keep only the latest value for duplicate timestamps.
-  const deduped = new Map<number, number>();
-  for (const point of parsed) {
-    deduped.set(point.timestamp, point.equity);
+const normalizeCurve = (points: Array<{ timestamp: string; equity: number }>): CurvePoint[] => {
+  const latestByDay = new Map<string, { timestamp: number; equity: number }>();
+
+  for (const point of points) {
+    const timestamp = new Date(point.timestamp).getTime();
+    const equity = Number(point.equity);
+    if (!Number.isFinite(timestamp) || !Number.isFinite(equity)) continue;
+
+    const dayKey = formatLocalDate(new Date(timestamp));
+    const existing = latestByDay.get(dayKey);
+    if (!existing || timestamp >= existing.timestamp) {
+      latestByDay.set(dayKey, { timestamp, equity });
+    }
   }
 
-  return Array.from(deduped.entries())
-    .map(([timestamp, equity]) => {
+  return Array.from(latestByDay.values())
+    .map(({ timestamp, equity }) => {
       const date = new Date(timestamp);
       return {
         timestamp,
@@ -175,7 +179,7 @@ const Dashboard = () => {
     };
   }, [filteredCurve]);
 
-  const recentBacktests = summary?.recentBacktests ?? [];
+  const recentBacktests = useMemo(() => summary?.recentBacktests ?? [], [summary?.recentBacktests]);
 
   const bestBacktest = useMemo(() => {
     if (recentBacktests.length === 0) return null;

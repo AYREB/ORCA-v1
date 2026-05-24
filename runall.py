@@ -18,6 +18,7 @@ BACKEND_DIR = ROOT / "backend"
 FRONTEND_DIR = ROOT / "frontend"
 BACKEND_HOST = "127.0.0.1"
 BACKEND_PORT = 8000
+MAX_BACKEND_PORT_ATTEMPTS = 20
 
 
 def resolve_backend_python() -> str:
@@ -37,10 +38,17 @@ def resolve_npm() -> str:
     return npm_path
 
 
-def start_process(name: str, cmd: list[str], cwd: Path) -> subprocess.Popen[bytes]:
+def start_process(
+    name: str,
+    cmd: list[str],
+    cwd: Path,
+    env_overrides: dict[str, str] | None = None,
+) -> subprocess.Popen[bytes]:
     print(f"Starting {name}: {' '.join(cmd)} (cwd={cwd})", flush=True)
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
+    if env_overrides:
+        env.update(env_overrides)
     return subprocess.Popen(
         cmd,
         cwd=str(cwd),
@@ -82,6 +90,25 @@ def is_port_open(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
+def find_available_port(host: str, preferred_port: int, attempts: int) -> int | None:
+    for port in range(preferred_port, preferred_port + attempts):
+        if not is_port_open(host, port):
+            return port
+    return None
+
+
+def resolve_preferred_backend_port() -> int:
+    value = os.environ.get("BACKEND_PORT")
+    if value is None:
+        return BACKEND_PORT
+    try:
+        port = int(value)
+    except ValueError:
+        print(f"Ignoring invalid BACKEND_PORT={value!r}; using {BACKEND_PORT}.", flush=True)
+        return BACKEND_PORT
+    return port if 0 < port <= 65535 else BACKEND_PORT
+
+
 def wait_for_backend(
     proc: subprocess.Popen[bytes], host: str, port: int, timeout_s: float = 15.0
 ) -> bool:
@@ -105,33 +132,53 @@ def main() -> int:
 
     backend_python = resolve_backend_python()
     npm = resolve_npm()
+    preferred_backend_port = resolve_preferred_backend_port()
+    backend_port = find_available_port(
+        BACKEND_HOST,
+        preferred_backend_port,
+        MAX_BACKEND_PORT_ATTEMPTS,
+    )
+    if backend_port is None:
+        print(
+            f"No available backend port found from {preferred_backend_port} "
+            f"to {preferred_backend_port + MAX_BACKEND_PORT_ATTEMPTS - 1}.",
+            flush=True,
+        )
+        return 1
+    if backend_port != preferred_backend_port:
+        print(
+            f"Port {preferred_backend_port} is already in use. Using backend port {backend_port}.",
+            flush=True,
+        )
 
     backend = start_process(
         "backend (Django)",
-        [backend_python, "manage.py", "runserver"],
+        [backend_python, "manage.py", "runserver", f"{BACKEND_HOST}:{backend_port}"],
         BACKEND_DIR,
     )
-    backend_ready = wait_for_backend(backend, BACKEND_HOST, BACKEND_PORT)
+    backend_ready = wait_for_backend(backend, BACKEND_HOST, backend_port)
     if not backend_ready:
         rc = backend.poll()
         if rc is not None:
             print(f"Backend exited early with code {rc}.", flush=True)
             return rc
         print(
-            f"Backend did not confirm on http://{BACKEND_HOST}:{BACKEND_PORT} "
+            f"Backend did not confirm on http://{BACKEND_HOST}:{backend_port} "
             "within 15s. Starting frontend anyway...",
             flush=True,
         )
     else:
         print(
-            f"Backend is listening on http://{BACKEND_HOST}:{BACKEND_PORT}",
+            f"Backend is listening on http://{BACKEND_HOST}:{backend_port}",
             flush=True,
         )
 
+    backend_api_url = f"http://{BACKEND_HOST}:{backend_port}/api"
     frontend = start_process(
         "frontend",
         [npm, "run", "dev"],
         FRONTEND_DIR,
+        env_overrides={"VITE_DJANGO_API_URL": backend_api_url},
     )
     processes = [("backend", backend), ("frontend", frontend)]
 

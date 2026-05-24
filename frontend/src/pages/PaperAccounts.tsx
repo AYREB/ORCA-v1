@@ -30,6 +30,7 @@ import {
   XAxis,
   YAxis,
   BarChart,
+  ReferenceLine,
 } from "recharts";
 import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
 import { Button } from "@/components/ui/button";
@@ -144,6 +145,9 @@ const formatLocalDate = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
+const formatChartDayLabel = (date: Date) =>
+  date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
 const isSameLocalDate = (timestamp: string, dateKey: string) => {
   const date = new Date(timestamp);
   return Number.isFinite(date.getTime()) && formatLocalDate(date) === dateKey;
@@ -167,6 +171,39 @@ const formatWindowLabel = (timestamp?: string) => {
   const date = new Date(timestamp);
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : timestamp;
 };
+
+const getTimestampMs = (timestamp: string) => {
+  const value = new Date(timestamp).getTime();
+  return Number.isFinite(value) ? value : null;
+};
+
+const compactEquityHistoryByDay = (history: PaperEquityPoint[]) => {
+  const latestByDay = new Map<string, PaperEquityPoint & { timestampMs: number }>();
+
+  for (const point of history) {
+    const timestampMs = getTimestampMs(point.timestamp);
+    if (timestampMs === null || !Number.isFinite(point.equity)) continue;
+
+    const timestamp = new Date(timestampMs);
+    const dayKey = formatLocalDate(timestamp);
+    const existing = latestByDay.get(dayKey);
+
+    if (!existing || timestampMs >= existing.timestampMs) {
+      latestByDay.set(dayKey, {
+        timestamp: timestamp.toISOString(),
+        equity: point.equity,
+        timestampMs,
+      });
+    }
+  }
+
+  return Array.from(latestByDay.values())
+    .sort((a, b) => a.timestampMs - b.timestampMs)
+    .map(({ timestampMs: _timestampMs, ...point }) => point);
+};
+
+const upsertEquityPointForDay = (history: PaperEquityPoint[], point: PaperEquityPoint) =>
+  compactEquityHistoryByDay([...history, point]);
 
 const getAppliedStrategyDelta = (strategy: AppliedPaperStrategy) =>
   strategy.currentValue - strategy.startingEquity;
@@ -351,18 +388,22 @@ const normalizeAccount = (raw: unknown): PaperAccount => {
       ? source.currentBalance
       : startingBalance;
 
-  const performanceHistory: PaperEquityPoint[] =
+  const storedPerformanceHistory: PaperEquityPoint[] =
     Array.isArray(source.performanceHistory) && source.performanceHistory.length > 0
-      ? source.performanceHistory
-          .filter(
-            (point): point is PaperEquityPoint =>
-              isObjectRecord(point) &&
-              typeof point.timestamp === "string" &&
-              typeof point.equity === "number" &&
-              Number.isFinite(point.equity),
-          )
-          .map((point) => ({ timestamp: point.timestamp, equity: point.equity }))
-      : [{ timestamp: createdAt, equity: startingBalance }];
+      ? compactEquityHistoryByDay(
+          source.performanceHistory
+            .filter(
+              (point): point is PaperEquityPoint =>
+                isObjectRecord(point) &&
+                typeof point.timestamp === "string" &&
+                typeof point.equity === "number" &&
+                Number.isFinite(point.equity),
+            )
+            .map((point) => ({ timestamp: point.timestamp, equity: point.equity })),
+        )
+      : [];
+  const performanceHistory =
+    storedPerformanceHistory.length > 0 ? storedPerformanceHistory : [{ timestamp: createdAt, equity: startingBalance }];
 
   const normalizedRuns: PaperStrategyRun[] = Array.isArray(source.runs)
     ? source.runs.map((run) => normalizeRun(run)).filter((run): run is PaperStrategyRun => run !== null)
@@ -691,19 +732,13 @@ const PaperAccounts = () => {
 
   const equityChartData = useMemo(() => {
     if (!selectedAccount) return [];
-    const sorted = [...selectedAccount.performanceHistory]
-      .filter((point) => Number.isFinite(new Date(point.timestamp).getTime()) && Number.isFinite(point.equity))
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const sorted = compactEquityHistoryByDay(selectedAccount.performanceHistory);
 
     return sorted.map((point, index) => {
       const timestamp = new Date(point.timestamp);
-      const label =
-        sorted.length > 12
-          ? `${index + 1}`
-          : timestamp.toLocaleDateString(undefined, { month: "short", day: "numeric" });
       return {
         run: index + 1,
-        label,
+        label: formatChartDayLabel(timestamp),
         fullLabel: timestamp.toLocaleString(),
         equity: point.equity,
       };
@@ -711,18 +746,40 @@ const PaperAccounts = () => {
   }, [selectedAccount]);
 
   const runReturnsData = useMemo(() => {
-    if (!selectedAccount) return [];
-    return [...selectedAccount.runs]
-      .slice(0, 20)
-      .reverse()
-      .map((run, index) => ({
+    if (!selectedAccount || selectedAccount.runs.length === 0) return [];
+    const dailyHistory = compactEquityHistoryByDay(selectedAccount.performanceHistory);
+    const allDailyReturns = dailyHistory.map((point, index) => {
+      const previousEquity = index > 0 ? dailyHistory[index - 1].equity : selectedAccount.startingBalance;
+      const timestamp = new Date(point.timestamp);
+      const returnPct = previousEquity > 0 ? ((point.equity - previousEquity) / previousEquity) * 100 : 0;
+
+      return {
         run: index + 1,
-        label: `R${index + 1}`,
-        fullLabel: `${new Date(run.executedAt).toLocaleString()} - ${run.strategyName}`,
-        returnPct: run.pctChange,
-        strategy: run.strategyName,
-      }));
+        label: formatChartDayLabel(timestamp),
+        fullLabel: `${timestamp.toLocaleString()} - ${formatMoney(point.equity)} equity`,
+        returnPct,
+        equity: point.equity,
+      };
+    });
+
+    return allDailyReturns.slice(-20);
   }, [selectedAccount]);
+
+  const runReturnDomain = useMemo<[number, number]>(() => {
+    if (runReturnsData.length === 0) return [-1, 1];
+
+    const values = runReturnsData.map((point) => point.returnPct);
+    const min = Math.min(0, ...values);
+    const max = Math.max(0, ...values);
+
+    if (min === max) {
+      const padding = Math.max(1, Math.abs(min) * 0.2);
+      return [min - padding, max + padding];
+    }
+
+    const padding = Math.max(0.5, (max - min) * 0.15);
+    return [min - padding, max + padding];
+  }, [runReturnsData]);
 
   const recentRuns = useMemo(() => {
     if (!selectedAccount) return [];
@@ -1062,7 +1119,10 @@ const PaperAccounts = () => {
             currentBalance,
             updatedAt: now,
             runs: [run, ...item.runs],
-            performanceHistory: [...item.performanceHistory, { timestamp: now, equity: currentBalance }],
+            performanceHistory: upsertEquityPointForDay(item.performanceHistory, {
+              timestamp: now,
+              equity: currentBalance,
+            }),
           };
         }),
       );
@@ -1151,7 +1211,10 @@ const PaperAccounts = () => {
             currentBalance,
             updatedAt,
             runs: [...newRuns].reverse().concat(item.runs),
-            performanceHistory: item.performanceHistory.concat({ timestamp: updatedAt, equity: currentBalance }),
+            performanceHistory: upsertEquityPointForDay(item.performanceHistory, {
+              timestamp: updatedAt,
+              equity: currentBalance,
+            }),
           };
         }),
       );
@@ -1530,7 +1593,7 @@ const PaperAccounts = () => {
                         <Card className="border-border bg-card/60">
                           <CardHeader>
                             <CardTitle className="text-lg">Equity Trajectory</CardTitle>
-                            <CardDescription>Account value captured each time you manually update live progress.</CardDescription>
+                            <CardDescription>Account value from the latest saved update on each day.</CardDescription>
                           </CardHeader>
                           <CardContent className="h-[340px]">
                             <ResponsiveContainer width="100%" height="100%">
@@ -1577,40 +1640,49 @@ const PaperAccounts = () => {
                         <Card className="border-border bg-card/60">
                           <CardHeader>
                             <CardTitle className="text-lg">Run Return Ladder</CardTitle>
-                            <CardDescription>Recent live strategy updates with each attachment's return from its own start date.</CardDescription>
+                            <CardDescription>Daily account returns from the latest saved update on each day.</CardDescription>
                           </CardHeader>
                           <CardContent className="h-[340px]">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={runReturnsData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                                <XAxis
-                                  dataKey="label"
-                                  stroke="hsl(var(--muted-foreground))"
-                                  tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                                />
-                                <YAxis
-                                  stroke="hsl(var(--muted-foreground))"
-                                  tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                                  tickFormatter={(value) => `${value.toFixed(0)}%`}
-                                />
-                                <Tooltip
-                                  contentStyle={{
-                                    backgroundColor: "hsl(var(--card))",
-                                    border: "1px solid hsl(var(--border))",
-                                  }}
-                                  formatter={(value: number) => [`${value.toFixed(2)}%`, "Return"]}
-                                  labelFormatter={(_, payload) => payload?.[0]?.payload?.fullLabel ?? ""}
-                                />
-                                <Bar dataKey="returnPct" radius={[4, 4, 0, 0]}>
-                                  {runReturnsData.map((entry, index) => (
-                                    <Cell
-                                      key={`${entry.label}-${index}`}
-                                      fill={entry.returnPct >= 0 ? "hsl(var(--success))" : "hsl(var(--destructive))"}
-                                    />
-                                  ))}
-                                </Bar>
-                              </BarChart>
-                            </ResponsiveContainer>
+                            {runReturnsData.length === 0 ? (
+                              <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
+                                Run an applied strategy to populate daily returns.
+                              </div>
+                            ) : (
+                              <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={runReturnsData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                                  <XAxis
+                                    dataKey="label"
+                                    stroke="hsl(var(--muted-foreground))"
+                                    tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                                    minTickGap={16}
+                                  />
+                                  <YAxis
+                                    domain={runReturnDomain}
+                                    stroke="hsl(var(--muted-foreground))"
+                                    tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                                    tickFormatter={(value) => `${value.toFixed(0)}%`}
+                                  />
+                                  <Tooltip
+                                    contentStyle={{
+                                      backgroundColor: "hsl(var(--card))",
+                                      border: "1px solid hsl(var(--border))",
+                                    }}
+                                    formatter={(value: number) => [`${value.toFixed(2)}%`, "Return"]}
+                                    labelFormatter={(_, payload) => payload?.[0]?.payload?.fullLabel ?? ""}
+                                  />
+                                  <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.55} />
+                                  <Bar dataKey="returnPct" minPointSize={4} radius={[4, 4, 0, 0]}>
+                                    {runReturnsData.map((entry, index) => (
+                                      <Cell
+                                        key={`${entry.label}-${index}`}
+                                        fill={entry.returnPct >= 0 ? "hsl(var(--success))" : "hsl(var(--destructive))"}
+                                      />
+                                    ))}
+                                  </Bar>
+                                </BarChart>
+                              </ResponsiveContainer>
+                            )}
                           </CardContent>
                         </Card>
                       </div>
