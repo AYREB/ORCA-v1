@@ -1,5 +1,28 @@
 import { useState, useCallback, useEffect } from "react";
 
+export type ChartColorScheme = "classic" | "neon" | "muted";
+export type ChartType = "candles" | "line" | "area";
+
+export interface ChartColors {
+  candleUp: string;
+  candleDown: string;
+  wickUp: string;
+  wickDown: string;
+  line: string;
+  areaTop: string;
+  areaBottom: string;
+  background: string;
+  grid: string;
+  crosshair: string;
+}
+
+export interface ChartOptions {
+  showGrid: boolean;
+  defaultShowMarkers: boolean;
+  defaultShowTPSL: boolean;
+  replaySpeed: number;
+}
+
 export interface AppSettings {
   profile: {
     displayName: string;
@@ -7,7 +30,10 @@ export interface AppSettings {
   };
   appearance: {
     theme: "dark" | "light" | "system";
-    chartColorScheme: "classic" | "neon" | "muted";
+    chartColorScheme: ChartColorScheme;
+    chartType: ChartType;
+    chartColors: ChartColors;
+    chartOptions: ChartOptions;
     layoutDensity: "compact" | "comfortable";
   };
   backtestDefaults: {
@@ -26,6 +52,45 @@ export interface AppSettings {
 
 const STORAGE_KEY = "orca-settings";
 
+export const CHART_COLOR_PRESETS: Record<ChartColorScheme, ChartColors> = {
+  classic: {
+    candleUp: "#22c55e",
+    candleDown: "#ef4444",
+    wickUp: "#22c55e",
+    wickDown: "#ef4444",
+    line: "#38bdf8",
+    areaTop: "#38bdf8",
+    areaBottom: "#0f172a",
+    background: "#0a0a0a",
+    grid: "#1f2937",
+    crosshair: "#14b8a6",
+  },
+  neon: {
+    candleUp: "#00ff88",
+    candleDown: "#ff2bd6",
+    wickUp: "#72ffd2",
+    wickDown: "#ff7ae7",
+    line: "#00d5ff",
+    areaTop: "#00d5ff",
+    areaBottom: "#16052c",
+    background: "#08070f",
+    grid: "#30213f",
+    crosshair: "#facc15",
+  },
+  muted: {
+    candleUp: "#7fb685",
+    candleDown: "#c08457",
+    wickUp: "#a8c6ad",
+    wickDown: "#d2a17d",
+    line: "#7e9cc8",
+    areaTop: "#7e9cc8",
+    areaBottom: "#1b2430",
+    background: "#111318",
+    grid: "#303640",
+    crosshair: "#c8a96a",
+  },
+};
+
 const DEFAULT_SETTINGS: AppSettings = {
   profile: {
     displayName: "",
@@ -34,6 +99,14 @@ const DEFAULT_SETTINGS: AppSettings = {
   appearance: {
     theme: "dark",
     chartColorScheme: "classic",
+    chartType: "candles",
+    chartColors: CHART_COLOR_PRESETS.classic,
+    chartOptions: {
+      showGrid: true,
+      defaultShowMarkers: true,
+      defaultShowTPSL: false,
+      replaySpeed: 5,
+    },
     layoutDensity: "comfortable",
   },
   backtestDefaults: {
@@ -50,11 +123,53 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
 };
 
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const mergeSettings = (raw: unknown): AppSettings => {
+  if (!isRecord(raw)) return DEFAULT_SETTINGS;
+
+  const appearance = isRecord(raw.appearance) ? raw.appearance : {};
+  const chartColors = isRecord(appearance.chartColors) ? appearance.chartColors : {};
+  const chartOptions = isRecord(appearance.chartOptions) ? appearance.chartOptions : {};
+
+  return {
+    profile: {
+      ...DEFAULT_SETTINGS.profile,
+      ...(isRecord(raw.profile) ? (raw.profile as Partial<AppSettings["profile"]>) : {}),
+    },
+    appearance: {
+      ...DEFAULT_SETTINGS.appearance,
+      ...(appearance as Partial<AppSettings["appearance"]>),
+      chartColors: {
+        ...DEFAULT_SETTINGS.appearance.chartColors,
+        ...(chartColors as Partial<ChartColors>),
+      },
+      chartOptions: {
+        ...DEFAULT_SETTINGS.appearance.chartOptions,
+        ...(chartOptions as Partial<ChartOptions>),
+      },
+    } as AppSettings["appearance"],
+    backtestDefaults: {
+      ...DEFAULT_SETTINGS.backtestDefaults,
+      ...(isRecord(raw.backtestDefaults) ? (raw.backtestDefaults as Partial<AppSettings["backtestDefaults"]>) : {}),
+    },
+    notifications: {
+      ...DEFAULT_SETTINGS.notifications,
+      ...(isRecord(raw.notifications) ? (raw.notifications as Partial<AppSettings["notifications"]>) : {}),
+    },
+  };
+};
+
 function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+      return mergeSettings(JSON.parse(raw));
     }
   } catch {
     // ignore
@@ -103,11 +218,25 @@ export function useSettings() {
     }
   }, [settings.appearance.layoutDensity]);
 
-  const updateSettings = useCallback((partial: Partial<AppSettings>) => {
+  const updateSettings = useCallback((partial: DeepPartial<AppSettings>) => {
     setSettings((prev) => {
       const next = { ...prev };
       if (partial.profile) next.profile = { ...prev.profile, ...partial.profile };
-      if (partial.appearance) next.appearance = { ...prev.appearance, ...partial.appearance };
+      if (partial.appearance) {
+        const { chartColors, chartOptions, ...appearancePatch } = partial.appearance;
+        next.appearance = {
+          ...prev.appearance,
+          ...appearancePatch,
+          chartColors: {
+            ...prev.appearance.chartColors,
+            ...(chartColors || {}),
+          },
+          chartOptions: {
+            ...prev.appearance.chartOptions,
+            ...(chartOptions || {}),
+          },
+        };
+      }
       if (partial.backtestDefaults) next.backtestDefaults = { ...prev.backtestDefaults, ...partial.backtestDefaults };
       if (partial.notifications) next.notifications = { ...prev.notifications, ...partial.notifications };
       return next;

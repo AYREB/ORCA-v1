@@ -12,6 +12,7 @@ urlpatterns = [
     path("health/", health),
     path("register/", views.register),
     path("login/", views.login),
+    path("login/google/", views.google_login),
     path("logout/", views.logout),
     path("me/", views.me),
     path("strategies/", views.strategies),

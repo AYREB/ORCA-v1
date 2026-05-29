@@ -38,6 +38,13 @@ function formatDuration(seconds: number): string {
   return `${hours}h ${remMins}m`;
 }
 
+const BLOCKED_OPTIMIZER_PARAM_NAMES = new Set(["spread"]);
+
+function isOptimizableParameterPath(path: string): boolean {
+  const lastSegment = path.replace(/\]/g, "").split(".").pop()?.split("[").pop()?.toLowerCase();
+  return !!lastSegment && !BLOCKED_OPTIMIZER_PARAM_NAMES.has(lastSegment);
+}
+
 // shared helper from ParameterOptimizer (duplicated to keep component standalone)
 function extractOptimizableParameters(
   node: unknown,
@@ -47,7 +54,7 @@ function extractOptimizableParameters(
   const params: Record<string, { value: number; indicator: string | null }> = {};
 
   if (typeof node === "number" && Number.isFinite(node)) {
-    if (path) params[path] = { value: node, indicator: parentIndicator };
+    if (path && isOptimizableParameterPath(path)) params[path] = { value: node, indicator: parentIndicator };
     return params;
   }
 
@@ -480,6 +487,7 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
     try {
       const payload: Record<string, ParameterChoice> = {};
       Object.entries(paramChoices).forEach(([param, choice]) => {
+        if (!isOptimizableParameterPath(param)) return;
         const enabled = (choice as any).enabled !== false;
         if (!enabled) return;
         const hasRange = choice.start !== undefined && choice.end !== undefined && (choice.steps || 0) >= 2;

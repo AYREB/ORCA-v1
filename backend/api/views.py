@@ -1,7 +1,11 @@
 # backend/api/views.py
 import json
 import logging
+import ssl
 import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from functools import wraps
 from pathlib import Path
@@ -23,6 +27,11 @@ from core.analysis.parameter_optimiser import build_param_grid, build_param_valu
 from core.main import dslJSONBacktest, dslTextToJsonBacktest
 from .assistant import AssistantError, ask_strategy_assistant, normalize_assistant_messages, normalize_strategy_context
 from .models import BacktestRun, Strategy
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - certifi is present in the project venv, fallback is for portability.
+    certifi = None
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -57,6 +66,10 @@ def json_error(message: str, status: int = 400) -> JsonResponse:
 def no_store(response: JsonResponse) -> JsonResponse:
     response["Cache-Control"] = "no-store"
     return response
+
+
+def user_payload(user) -> dict[str, Any]:
+    return {"id": user.id, "email": user.email, "name": user.first_name or user.username}
 
 
 def error_response(exc: Exception) -> JsonResponse:
@@ -463,12 +476,7 @@ def register(request):
     )
     token, _ = Token.objects.get_or_create(user=user)
 
-    return no_store(
-        JsonResponse(
-            {"token": token.key, "user": {"id": user.id, "email": user.email, "name": user.first_name or user.username}},
-            status=201,
-        )
-    )
+    return no_store(JsonResponse({"token": token.key, "user": user_payload(user)}, status=201))
 
 
 @csrf_exempt
@@ -496,9 +504,80 @@ def login(request):
     Token.objects.filter(user=user).delete()
     token = Token.objects.create(user=user)
 
-    return no_store(
-        JsonResponse({"token": token.key, "user": {"id": user.id, "email": user.email, "name": user.first_name or user.username}})
-    )
+    return no_store(JsonResponse({"token": token.key, "user": user_payload(user)}))
+
+
+def google_ssl_context():
+    if certifi is None:
+        return None
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def verify_google_id_token(id_token: str) -> dict[str, Any]:
+    client_id = getattr(settings, "GOOGLE_CLIENT_ID", "")
+    if not client_id:
+        raise APIError("Google sign-in is not configured on the backend.", status_code=503)
+
+    query = urllib.parse.urlencode({"id_token": id_token})
+    request = urllib.request.Request(f"https://oauth2.googleapis.com/tokeninfo?{query}", method="GET")
+    ssl_context = google_ssl_context()
+
+    try:
+        urlopen_kwargs = {"timeout": 10}
+        if ssl_context is not None:
+            urlopen_kwargs["context"] = ssl_context
+        with urllib.request.urlopen(request, **urlopen_kwargs) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        logger.warning("Google token verification failed with status %s", exc.code)
+        raise APIError("Google sign-in token was rejected.")
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        logger.warning("Google token verification failed: %s", exc)
+        raise APIError("Unable to verify Google sign-in right now.", status_code=502)
+
+    if payload.get("aud") != client_id:
+        raise APIError("Google sign-in token is for a different app.")
+    if payload.get("iss") not in {"accounts.google.com", "https://accounts.google.com"}:
+        raise APIError("Google sign-in token has an invalid issuer.")
+    if payload.get("email_verified") not in {True, "true", "True", "1"}:
+        raise APIError("Google account email is not verified.")
+    if not payload.get("email"):
+        raise APIError("Google sign-in did not return an email address.")
+
+    return payload
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@rate_limit("auth")
+def google_login(request):
+    body = parse_body(request)
+    id_token = (body.get("id_token") or "").strip()
+    if not id_token:
+        raise APIError("Google sign-in token is required.")
+
+    payload = verify_google_id_token(id_token)
+    email = str(payload["email"]).strip().lower()
+    name = str(payload.get("name") or payload.get("given_name") or "").strip()
+
+    user = User.objects.filter(email__iexact=email).first()
+    if user is None:
+        user = User.objects.create_user(username=email, email=email, password=None, first_name=name[:150])
+    else:
+        update_fields = []
+        if name and not user.first_name:
+            user.first_name = name[:150]
+            update_fields.append("first_name")
+        if user.username != email:
+            user.username = email
+            update_fields.append("username")
+        if update_fields:
+            user.save(update_fields=update_fields)
+
+    Token.objects.filter(user=user).delete()
+    token = Token.objects.create(user=user)
+    return no_store(JsonResponse({"token": token.key, "user": user_payload(user)}))
 
 
 @csrf_exempt
@@ -519,7 +598,7 @@ def logout(request):
 @rate_limit("general")
 def me(request):
     user = get_authenticated_user(request)
-    return no_store(JsonResponse({"id": user.id, "email": user.email, "name": user.first_name or user.username}))
+    return no_store(JsonResponse(user_payload(user)))
 
 
 @csrf_exempt
@@ -691,6 +770,8 @@ def dslParameterOptimiser(request):
 
         job_id = str(uuid.uuid4())
         param_grid, _ = build_param_grid(dsl, parameter_choice)
+        if not param_grid:
+            raise APIError("No parameters selected for optimization")
         total_runs = 1
         for vals in param_grid.values():
             total_runs *= len(vals)

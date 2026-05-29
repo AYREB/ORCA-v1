@@ -42,6 +42,13 @@ interface ExtractedParameter {
   paramType: string;
 }
 
+const BLOCKED_OPTIMIZER_PARAM_NAMES = new Set(["spread"]);
+
+function isOptimizableParameterPath(path: string): boolean {
+  const lastSegment = path.replace(/\]/g, "").split(".").pop()?.split("[").pop()?.toLowerCase();
+  return !!lastSegment && !BLOCKED_OPTIMIZER_PARAM_NAMES.has(lastSegment);
+}
+
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "—";
   if (seconds < 60) return `${Math.ceil(seconds)}s`;
@@ -76,7 +83,11 @@ function extractOptimizableParameters(
     Object.entries(nodeObj).forEach(([key, value]) => {
       const newPath = path ? `${path}.${key}` : key;
 
-      if (typeof value === "number" && /period|percent|threshold|offset|value|amount/i.test(key)) {
+      if (
+        typeof value === "number" &&
+        isOptimizableParameterPath(newPath) &&
+        /period|percent|threshold|offset|value|amount/i.test(key)
+      ) {
         params[newPath] = { 
           value, 
           indicator: currentIndicator,
@@ -356,6 +367,7 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
     try {
       const payload: Record<string, ParameterChoice> = {};
       Object.entries(paramChoices).forEach(([param, choice]) => {
+        if (!isOptimizableParameterPath(param)) return;
         if (choice.mode !== "nochange") {
           payload[param] = choice;
         }

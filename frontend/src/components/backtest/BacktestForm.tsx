@@ -75,9 +75,9 @@ const RISK_ARGUMENTS: RiskArgument[] = ["takeProfitPercent", "stopLossPercent", 
 
 const WIZARD_STEPS: Array<{ id: WizardStep; label: string }> = [
   { id: 1, label: "Strategy" },
-  { id: 2, label: "Open Setup" },
-  { id: 3, label: "Close Setup" },
-  { id: 4, label: "Markets & Timing" },
+  { id: 2, label: "Markets & Timing" },
+  { id: 3, label: "Open Setup" },
+  { id: 4, label: "Close Setup" },
   { id: 5, label: "Account" },
 ];
 
@@ -91,7 +91,7 @@ const numericArg = (value: unknown, fallback: number) => {
 
 const numberInputValue = (value: number) => (Number.isFinite(value) ? value : 0);
 
-const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
+const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) => {
   const { settings } = useSettings();
   const btDefaults = settings.backtestDefaults;
   const [loading, setLoading] = useState(false);
@@ -490,10 +490,10 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
 
   const canGoNext = () => {
     if (step === 2) {
-      return (conditionGroups.OPEN?.conditions?.length || 0) > 0;
-    }
-    if (step === 4) {
       return tickers.filter(Boolean).length > 0;
+    }
+    if (step === 3) {
+      return (conditionGroups.OPEN?.conditions?.length || 0) > 0;
     }
     return true;
   };
@@ -629,15 +629,17 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
               className="space-y-4"
             >
               <div className="p-5 rounded-xl border border-border bg-card/30 space-y-4">
-                <div className="space-y-2">
-                  <Label className="text-xs uppercase tracking-wider text-muted-foreground">Strategy Name</Label>
-                  <Input
-                    value={strategyName}
-                    onChange={(e) => setStrategyName(e.target.value)}
-                    placeholder="My Mean Reversion Strategy"
-                    className="bg-secondary/50 border-border/50 h-9 max-w-sm"
-                  />
-                </div>
+                {showActions && (
+                  <div className="space-y-2">
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">Strategy Name</Label>
+                    <Input
+                      value={strategyName}
+                      onChange={(e) => setStrategyName(e.target.value)}
+                      placeholder="My Mean Reversion Strategy"
+                      className="bg-secondary/50 border-border/50 h-9 max-w-sm"
+                    />
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
@@ -727,9 +729,9 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
             </motion.div>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <motion.div
-              key="step2"
+              key="step3"
               initial={{ opacity: 0, x: 24 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 24 }}
@@ -811,9 +813,9 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
             </motion.div>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <motion.div
-              key="step3"
+              key="step4"
               initial={{ opacity: 0, x: 24 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 24 }}
@@ -848,9 +850,9 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
             </motion.div>
           )}
 
-          {step === 4 && (
+          {step === 2 && (
             <motion.div
-              key="step4"
+              key="step2"
               initial={{ opacity: 0, x: 24 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 24 }}
@@ -1045,7 +1047,7 @@ const BacktestForm = ({ onRunBacktest }: BacktestFormProps) => {
             </Button>
           )}
 
-          {step === 5 && (
+          {showActions && step === 5 && (
             <>
               <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
                 <DialogTrigger asChild>

@@ -106,7 +106,7 @@ export interface OptimizerJobStatus {
   error?: string;
 }
 
-export interface GeneticOptimizationResult extends OptimizationResult {}
+export type GeneticOptimizationResult = OptimizationResult;
 export interface GeneticJobStart {
   job_id: string;
   total_runs: number;
@@ -159,6 +159,37 @@ export interface SavedStrategy {
   updatedAt: string;
   lastRun?: string | null;
   lastResult?: BacktestResult | null;
+}
+
+interface RawSavedStrategy {
+  id: number;
+  name: string;
+  dsl?: string | null;
+  dsl_json?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+  last_run_at?: string | null;
+  last_result?: BacktestResult | null;
+}
+
+interface RawDashboardBacktest {
+  id: number;
+  strategy_id?: number | null;
+  strategy_name?: string;
+  pct_change?: number;
+  win_rate?: number;
+  trades?: number;
+  final_balance?: number;
+  created_at?: string;
+}
+
+interface RawDashboardSummary {
+  strategy_count?: number;
+  backtest_run_count?: number;
+  total_return_pct?: number;
+  win_rate?: number;
+  equity_curve?: Array<{ timestamp: string; equity: number }>;
+  recent_backtests?: RawDashboardBacktest[];
 }
 
 export type StrategyAssistantRole = 'user' | 'assistant';
@@ -244,7 +275,7 @@ class DjangoAPI {
     return response.json();
   }
 
-  private normalizeStrategy(raw: any): SavedStrategy {
+  private normalizeStrategy(raw: RawSavedStrategy): SavedStrategy {
     return {
       id: raw.id,
       name: raw.name,
@@ -269,6 +300,13 @@ class DjangoAPI {
     return this.request<AuthResponse>('/login/', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
+    });
+  }
+
+  async loginWithGoogle(idToken: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>('/login/google/', {
+      method: 'POST',
+      body: JSON.stringify({ id_token: idToken }),
     });
   }
 
@@ -423,7 +461,7 @@ class DjangoAPI {
 
   // Strategies (persisted per user)
   async fetchStrategies(): Promise<SavedStrategy[]> {
-    const data = await this.request<{ strategies: any[] }>('/strategies/');
+    const data = await this.request<{ strategies: RawSavedStrategy[] }>('/strategies/');
     return data.strategies.map((strategy) => this.normalizeStrategy(strategy));
   }
 
@@ -433,7 +471,7 @@ class DjangoAPI {
     dslJson?: Record<string, unknown> | null;
     lastResult?: BacktestResult | null;
   }): Promise<SavedStrategy> {
-    const data = await this.request<{ strategy: any }>('/strategies/', {
+    const data = await this.request<{ strategy: RawSavedStrategy }>('/strategies/', {
       method: 'POST',
       body: JSON.stringify({
         name: payload.name,
@@ -449,7 +487,7 @@ class DjangoAPI {
     id: number,
     payload: Partial<{ name: string; dsl: string; dslJson: Record<string, unknown> | null; lastResult: BacktestResult | null }>
   ): Promise<SavedStrategy> {
-    const data = await this.request<{ strategy: any }>(`/strategies/${id}/`, {
+    const data = await this.request<{ strategy: RawSavedStrategy }>(`/strategies/${id}/`, {
       method: 'PATCH',
       body: JSON.stringify({
         ...(payload.name !== undefined ? { name: payload.name } : {}),
@@ -466,19 +504,19 @@ class DjangoAPI {
   }
 
   async getStrategy(id: number): Promise<SavedStrategy> {
-    const data = await this.request<{ strategy: any }>(`/strategies/${id}/`);
+    const data = await this.request<{ strategy: RawSavedStrategy }>(`/strategies/${id}/`);
     return this.normalizeStrategy(data.strategy);
   }
 
   async getDashboardSummary(): Promise<DashboardSummary> {
-    const data = await this.request<any>('/dashboard/summary/');
+    const data = await this.request<RawDashboardSummary>('/dashboard/summary/');
     return {
       strategyCount: data.strategy_count ?? 0,
       backtestRunCount: data.backtest_run_count ?? 0,
       totalReturnPct: data.total_return_pct ?? 0,
       winRate: data.win_rate ?? 0,
       equityCurve: data.equity_curve ?? [],
-      recentBacktests: (data.recent_backtests ?? []).map((run: any) => ({
+      recentBacktests: (data.recent_backtests ?? []).map((run) => ({
         id: run.id,
         strategy_id: run.strategy_id ?? null,
         strategy_name: run.strategy_name ?? "Backtest",
@@ -486,7 +524,7 @@ class DjangoAPI {
         win_rate: run.win_rate ?? 0,
         trades: run.trades ?? 0,
         final_balance: run.final_balance ?? 0,
-        created_at: run.created_at,
+        created_at: run.created_at ?? "",
       })),
     };
   }

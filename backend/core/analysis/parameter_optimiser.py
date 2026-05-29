@@ -22,6 +22,18 @@ from core.parsing.validateParsedDSL import validate_parsed_dsl
 # ---------------- REGISTRY ---------------- #
  
 _REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "../registries/indicatorRegistry.json")
+BLOCKED_OPTIMIZER_PARAM_NAMES = {"spread"}
+
+
+def is_optimizable_parameter_path(path):
+    """Return False for numeric DSL fields that optimizers must never tune."""
+    normalized = path.replace("]", "")
+    last_segment = normalized.split(".")[-1].split("[")[-1].lower()
+    return last_segment not in BLOCKED_OPTIMIZER_PARAM_NAMES
+
+
+def filter_optimizable_parameter_map(param_map):
+    return {path: value for path, value in param_map.items() if is_optimizable_parameter_path(path)}
  
 def _load_indicator_functions():
     with open(_REGISTRY_PATH) as f:
@@ -76,13 +88,13 @@ def extract_optimizable_parameters(parsed_dsl):
         if isinstance(node, dict):
             for k, v in node.items():
                 new_path = f"{path}.{k}" if path else k
-                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and is_optimizable_parameter_path(new_path):
                     params[new_path] = v
                 walk(v, new_path)
         elif isinstance(node, list):
             for i, item in enumerate(node):
                 item_path = f"{path}[{i}]"
-                if isinstance(item, (int, float)) and not isinstance(item, bool):
+                if isinstance(item, (int, float)) and not isinstance(item, bool) and is_optimizable_parameter_path(item_path):
                     params[item_path] = item
                 walk(item, item_path)
  
@@ -121,6 +133,8 @@ def build_param_grid(parsed_dsl, param_choices=None):
  
     grid = {}
     for path, choice in param_choices.items():
+        if not is_optimizable_parameter_path(path):
+            continue
         values = _resolve_choice(path, base_params.get(path), choice)
         if values is not None:
             grid[path] = values
@@ -209,6 +223,10 @@ def _run_backtest(dsl, data_dict, indicator_functions, initial_balance):
 def run_param_grid_backtest(parsed_dsl, param_grid, data_dict, indicator_functions,
                             initial_balance=10000, progress_hook=None):
     """Run backtests for every combination in param_grid. Returns (results_df, errors, total)."""
+    param_grid = filter_optimizable_parameter_map(param_grid)
+    if not param_grid:
+        raise ValueError("No parameters selected for optimization")
+
     keys = list(param_grid.keys())
     combos = list(itertools.product(*[param_grid[k] for k in keys]))
     total = len(combos)
@@ -249,6 +267,9 @@ def optimizer(parsed_dsl, param_choices=None, initial_balance=10000,
         base_params = extract_optimizable_parameters(parsed_dsl)
     else:
         param_grid, base_params = build_param_grid(parsed_dsl, param_choices)
+
+    if not param_grid:
+        raise ValueError("No parameters selected for optimization")
  
     results_df, errors, total_runs = run_param_grid_backtest(
         parsed_dsl, param_grid, data_dict, indicator_functions, initial_balance, progress_hook

@@ -11,6 +11,7 @@ import {
 import type { 
   IChartApi, 
   CandlestickData, 
+  LineData,
   Time, 
   SeriesMarker, 
   ISeriesApi,
@@ -18,7 +19,7 @@ import type {
 } from "lightweight-charts";
 import { OHLCData, TradeEntry } from "@/lib/api";
 import { Maximize2, Minimize2 } from "lucide-react";
-import { useSettings } from "@/hooks/useSettings";
+import { useSettings, type ChartColors, type ChartType } from "@/hooks/useSettings";
 
 interface CandlestickChartProps {
   data: OHLCData[];
@@ -63,6 +64,96 @@ const COLOR_SCHEMES: Record<string, Record<string, string>> = {
     RSI: "#c4a882", MACD: "#6b9dad",
     BB_upper: "#81a88a", BB_middle: "#81a88a", BB_lower: "#81a88a",
   },
+};
+
+type NormalizedCandle = CandlestickData<Time> & { datetime: string };
+type PrimarySeriesApi = ISeriesApi<"Candlestick"> | ISeriesApi<"Line"> | ISeriesApi<"Area">;
+type AreaOptionsPatch = Parameters<ISeriesApi<"Area">["applyOptions"]>[0];
+
+const safeColor = (value: string | undefined, fallback: string) =>
+  /^#[0-9a-fA-F]{6}$/.test(value || "") ? value! : fallback;
+
+const colorWithAlpha = (value: string | undefined, alpha: number, fallback: string) => {
+  const hex = safeColor(value, fallback).replace("#", "");
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+const toCandleSeriesData = (rows: NormalizedCandle[]): CandlestickData<Time>[] =>
+  rows.map(({ datetime, ...rest }) => rest);
+
+const toLineSeriesData = (rows: NormalizedCandle[]): LineData<Time>[] =>
+  rows.map(({ time, close }) => ({ time, value: close }));
+
+const setPrimarySeriesData = (
+  series: PrimarySeriesApi,
+  chartType: ChartType,
+  rows: NormalizedCandle[],
+) => {
+  if (chartType === "candles") {
+    (series as ISeriesApi<"Candlestick">).setData(toCandleSeriesData(rows));
+  } else if (chartType === "line") {
+    (series as ISeriesApi<"Line">).setData(toLineSeriesData(rows));
+  } else {
+    (series as ISeriesApi<"Area">).setData(toLineSeriesData(rows));
+  }
+};
+
+const updatePrimarySeriesPoint = (
+  series: PrimarySeriesApi,
+  chartType: ChartType,
+  row: NormalizedCandle,
+) => {
+  if (chartType === "candles") {
+    const { datetime, ...rest } = row;
+    (series as ISeriesApi<"Candlestick">).update(rest);
+  } else {
+    const point = { time: row.time, value: row.close };
+    if (chartType === "line") {
+      (series as ISeriesApi<"Line">).update(point);
+    } else {
+      (series as ISeriesApi<"Area">).update(point);
+    }
+  }
+};
+
+const createPrimarySeries = (
+  chart: IChartApi,
+  chartType: ChartType,
+  colors: ChartColors,
+): PrimarySeriesApi => {
+  if (chartType === "line") {
+    return chart.addSeries(LineSeries, {
+      color: safeColor(colors.line, "#38bdf8"),
+      lineWidth: 2,
+      priceLineVisible: true,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    });
+  }
+
+  if (chartType === "area") {
+    return chart.addSeries(AreaSeries, {
+      topColor: colorWithAlpha(colors.areaTop, 0.35, "#38bdf8"),
+      bottomColor: colorWithAlpha(colors.areaBottom, 0.03, "#0f172a"),
+      lineColor: safeColor(colors.areaTop, "#38bdf8"),
+      lineWidth: 2,
+      priceLineVisible: true,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    });
+  }
+
+  return chart.addSeries(CandlestickSeries, {
+    upColor: safeColor(colors.candleUp, "#22c55e"),
+    downColor: safeColor(colors.candleDown, "#ef4444"),
+    borderUpColor: safeColor(colors.candleUp, "#22c55e"),
+    borderDownColor: safeColor(colors.candleDown, "#ef4444"),
+    wickUpColor: safeColor(colors.wickUp, "#22c55e"),
+    wickDownColor: safeColor(colors.wickDown, "#ef4444"),
+  });
 };
 
 // Convert datetime string to UTC timestamp (seconds since epoch) for Lightweight Charts
@@ -188,12 +279,15 @@ const CandlestickChart = ({
   seekToIndex,
 }: CandlestickChartProps) => {
   const { settings } = useSettings();
+  const chartType = settings.appearance.chartType;
+  const chartColors = settings.appearance.chartColors;
+  const chartOptions = settings.appearance.chartOptions;
   const INDICATOR_COLORS = COLOR_SCHEMES[settings.appearance.chartColorScheme] || COLOR_SCHEMES.classic;
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   
   // Persistent series references for incremental updates
-  const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const primarySeriesRef = useRef<PrimarySeriesApi | null>(null);
   const indicatorSeriesRefs = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
   
   // PERSISTENT MARKERS PLUGIN - created ONCE, updated via setMarkers()
@@ -214,7 +308,7 @@ const CandlestickChart = ({
   const lastSyncTimeRef = useRef<number>(0);
 
   // Prepare candlestick data (full dataset) - uses numeric timestamps to preserve intraday
-  const chartData = useMemo(() => {
+  const chartData = useMemo<NormalizedCandle[]>(() => {
     const normalized = data
       .map((item) => ({
         time: toUtcTimestamp(item.Datetime) as Time,
@@ -253,6 +347,23 @@ const CandlestickChart = ({
     return `${trades.length}|${first}|${last}`;
   }, [trades]);
 
+  const chartAppearanceKey = useMemo(() => {
+    return [
+      chartType,
+      chartOptions.showGrid ? "grid" : "no-grid",
+      chartColors.candleUp,
+      chartColors.candleDown,
+      chartColors.wickUp,
+      chartColors.wickDown,
+      chartColors.line,
+      chartColors.areaTop,
+      chartColors.areaBottom,
+      chartColors.background,
+      chartColors.grid,
+      chartColors.crosshair,
+    ].join("|");
+  }, [chartColors, chartOptions.showGrid, chartType]);
+
   // Build key for when we truly need to rebuild the underlying chart instance.
   // Critically, this EXCLUDES transient UI state so replay ticks don't tear down the chart.
   const buildKey = useMemo(() => {
@@ -266,6 +377,7 @@ const CandlestickChart = ({
       `c=${useCustomTPSL ? 1 : 0}`,
       `ctp=${customTPPercent}`,
       `csl=${customSLPercent}`,
+      `style=${chartAppearanceKey}`,
     ].join("::");
   }, [
     dataKey,
@@ -277,6 +389,7 @@ const CandlestickChart = ({
     useCustomTPSL,
     customTPPercent,
     customSLPercent,
+    chartAppearanceKey,
   ]);
 
   // Prepare indicator data (real or fake) - full dataset with numeric timestamps
@@ -487,7 +600,7 @@ const CandlestickChart = ({
     if (chartRef.current) {
       chartRef.current.remove();
       chartRef.current = null;
-      candlestickSeriesRef.current = null;
+      primarySeriesRef.current = null;
       indicatorSeriesRefs.current.clear();
       markersPluginRef.current = null;
       tpslVisualsRef.current = [];
@@ -496,19 +609,25 @@ const CandlestickChart = ({
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: "#0a0a0a" },
+        background: { type: ColorType.Solid, color: safeColor(chartColors.background, "#0a0a0a") },
         textColor: "hsl(215, 20%, 55%)",
         fontFamily: "JetBrains Mono, monospace",
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: "rgba(255, 255, 255, 0.04)" },
-        horzLines: { color: "rgba(255, 255, 255, 0.04)" },
+        vertLines: { color: chartOptions.showGrid ? colorWithAlpha(chartColors.grid, 0.45, "#1f2937") : "rgba(255, 255, 255, 0)" },
+        horzLines: { color: chartOptions.showGrid ? colorWithAlpha(chartColors.grid, 0.45, "#1f2937") : "rgba(255, 255, 255, 0)" },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: "hsl(175, 80%, 50%)", labelBackgroundColor: "#1a1a1a" },
-        horzLine: { color: "hsl(175, 80%, 50%)", labelBackgroundColor: "#1a1a1a" },
+        vertLine: {
+          color: safeColor(chartColors.crosshair, "#14b8a6"),
+          labelBackgroundColor: safeColor(chartColors.background, "#0a0a0a"),
+        },
+        horzLine: {
+          color: safeColor(chartColors.crosshair, "#14b8a6"),
+          labelBackgroundColor: safeColor(chartColors.background, "#0a0a0a"),
+        },
       },
       width: chartContainerRef.current.clientWidth,
       height: isFullscreen ? window.innerHeight - 120 : height,
@@ -518,16 +637,9 @@ const CandlestickChart = ({
 
     chartRef.current = chart;
 
-    // Create candlestick series and store reference
-    const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#22c55e",
-      downColor: "#ef4444",
-      borderDownColor: "#ef4444",
-      borderUpColor: "#22c55e",
-      wickDownColor: "#ef4444",
-      wickUpColor: "#22c55e",
-    });
-    candlestickSeriesRef.current = candlestickSeries;
+    // Create primary price series and store reference
+    const primarySeries = createPrimarySeries(chart, chartType, chartColors);
+    primarySeriesRef.current = primarySeries;
 
     // Create indicator series and store references
     indicatorSeriesRefs.current.clear();
@@ -547,7 +659,7 @@ const CandlestickChart = ({
 
     // CREATE PERSISTENT MARKERS PLUGIN (ONCE)
     // Initialize with empty markers - will be populated based on mode
-    markersPluginRef.current = createSeriesMarkers(candlestickSeries, []);
+    markersPluginRef.current = createSeriesMarkers(primarySeries, []);
 
     // CREATE PERSISTENT TP/SL SERIES (ONCE per box)
     tpslVisualsRef.current = [];
@@ -567,7 +679,7 @@ const CandlestickChart = ({
           });
           tpArea.applyOptions({
             baseValue: { type: "price", price: box.entryPrice },
-          } as any);
+          } as unknown as AreaOptionsPatch);
         }
 
         // Create SL area series (if SL exists)
@@ -584,7 +696,7 @@ const CandlestickChart = ({
           });
           slArea.applyOptions({
             baseValue: { type: "price", price: box.entryPrice },
-          } as any);
+          } as unknown as AreaOptionsPatch);
         }
 
         // Create entry line series
@@ -611,8 +723,7 @@ const CandlestickChart = ({
       // START EMPTY - show just the first candle
       const firstCandle = chartData[0];
       if (firstCandle) {
-        const { datetime, ...rest } = firstCandle;
-        candlestickSeries.setData([rest as CandlestickData<Time>]);
+        setPrimarySeriesData(primarySeries, chartType, [firstCandle]);
         
         // Clear indicators to first point (numeric comparison)
         const firstTime = firstCandle.time as number;
@@ -639,8 +750,7 @@ const CandlestickChart = ({
       }
     } else {
       // NORMAL MODE - set full data
-      const dataToShow = chartData.map(({ datetime, ...rest }) => rest) as CandlestickData<Time>[];
-      candlestickSeries.setData(dataToShow);
+      setPrimarySeriesData(primarySeries, chartType, chartData);
 
       // Set indicator data
       Object.entries(indicatorData).forEach(([indicator, indData]) => {
@@ -673,7 +783,7 @@ const CandlestickChart = ({
         chartRef.current.remove();
         chartRef.current = null;
       }
-      candlestickSeriesRef.current = null;
+      primarySeriesRef.current = null;
       indicatorSeriesRefs.current.clear();
       markersPluginRef.current = null;
       tpslVisualsRef.current = [];
@@ -702,10 +812,10 @@ const CandlestickChart = ({
   // ===== EFFECT 2: Replay Transition - runs BEFORE paint when replay mode changes =====
   // useLayoutEffect runs synchronously before browser paint - this prevents the flash
   useLayoutEffect(() => {
-    if (!chartRef.current || !candlestickSeriesRef.current) return;
+    if (!chartRef.current || !primarySeriesRef.current) return;
     
     const chart = chartRef.current;
-    const candlestickSeries = candlestickSeriesRef.current;
+    const primarySeries = primarySeriesRef.current;
     const currentChartData = chartDataRef.current;
     
     if (isReplaying) {
@@ -716,8 +826,7 @@ const CandlestickChart = ({
       // Show just the first candle (auto-start behavior)
       if (currentChartData.length > 0) {
         const firstCandle = currentChartData[0];
-        const { datetime, ...rest } = firstCandle;
-        candlestickSeries.setData([rest as CandlestickData<Time>]);
+        setPrimarySeriesData(primarySeries, chartType, [firstCandle]);
         
         // Clear indicators to first point (numeric comparison)
         const currentIndicatorData = indicatorDataRef.current;
@@ -747,8 +856,7 @@ const CandlestickChart = ({
       }
     } else {
       // EXITING REPLAY: Restore full data immediately (before paint)
-      const dataToShow = currentChartData.map(({ datetime, ...rest }) => rest) as CandlestickData<Time>[];
-      candlestickSeries.setData(dataToShow);
+      setPrimarySeriesData(primarySeries, chartType, currentChartData);
       
       // Restore indicators
       const currentIndicatorData = indicatorDataRef.current;
@@ -783,7 +891,7 @@ const CandlestickChart = ({
         pendingUpdateRef.current = null;
       }
     };
-  }, [isReplaying]);
+  }, [isReplaying, chartType]);
 
   // ===== REFS for tracking what's already rendered (prevents redundant setData calls) =====
   const lastMarkerCountRef = useRef(0);
@@ -791,7 +899,7 @@ const CandlestickChart = ({
 
   // ===== HELPER: Update chart to a specific index (no React state) =====
   const updateChartToIndex = (targetIndex: number) => {
-    if (!chartRef.current || !candlestickSeriesRef.current) return;
+    if (!chartRef.current || !primarySeriesRef.current) return;
     
     const currentChartData = chartDataRef.current;
     if (currentChartData.length === 0) return;
@@ -802,19 +910,17 @@ const CandlestickChart = ({
     // Skip if nothing changed
     if (clampedIndex === prevIndex) return;
 
-    const candlestickSeries = candlestickSeriesRef.current;
+    const primarySeries = primarySeriesRef.current;
 
-    // INCREMENTAL UPDATE OPTIMIZATION for candlesticks
+    // INCREMENTAL UPDATE OPTIMIZATION for price series
     if (clampedIndex === prevIndex + 1) {
       // Sequential tick - use fast update() method (no flicker)
       const nextCandle = currentChartData[clampedIndex];
-      const { datetime, ...rest } = nextCandle;
-      candlestickSeries.update(rest as CandlestickData<Time>);
+      updatePrimarySeriesPoint(primarySeries, chartType, nextCandle);
     } else {
       // Jump (scrub or reset or catch-up) - use setData()
       const visibleData = currentChartData.slice(0, clampedIndex + 1);
-      const dataToShow = visibleData.map(({ datetime, ...rest }) => rest) as CandlestickData<Time>[];
-      candlestickSeries.setData(dataToShow);
+      setPrimarySeriesData(primarySeries, chartType, visibleData);
     }
     
     lastRenderedIndexRef.current = clampedIndex;
@@ -822,7 +928,7 @@ const CandlestickChart = ({
     // Get current replay timestamp for filtering markers/TP-SL
     const lastCandle = currentChartData[clampedIndex];
     const lastVisibleTime = lastCandle.time as number;
-    const currentTimeMs = toUtcTimestamp((lastCandle as any).datetime) * 1000;
+    const currentTimeMs = toUtcTimestamp(lastCandle.datetime) * 1000;
 
     // INCREMENTAL UPDATE for indicators - only setData if count changed
     const currentIndicatorData = indicatorDataRef.current;
@@ -912,7 +1018,7 @@ const CandlestickChart = ({
     
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [isReplaying, isPaused, replaySpeed, onReplayTick, onReplayEnd]);
+  }, [isReplaying, isPaused, replaySpeed, onReplayTick, onReplayEnd, chartType]);
 
   // ===== EFFECT 3B: External Seek Handler - responds to slider scrub =====
   // Track last processed seekIndex to prevent re-applying the same seek
@@ -931,7 +1037,7 @@ const CandlestickChart = ({
     if (isPaused) {
       onReplayTick?.(seekToIndex, chartDataRef.current.length);
     }
-  }, [seekToIndex, isPaused, onReplayTick]);
+  }, [seekToIndex, isPaused, onReplayTick, chartType]);
   
   // Reset lastSeekIndex when exiting replay
   useEffect(() => {
@@ -955,10 +1061,13 @@ const CandlestickChart = ({
 
   return (
     <div
-      className={`rounded-xl border border-border overflow-hidden animate-chart-enter ${isFullscreen ? '' : 'bg-[#0a0a0a]'}`}
-      style={{ backgroundColor: '#0a0a0a' }}
+      className="rounded-xl border border-border overflow-hidden animate-chart-enter"
+      style={{ backgroundColor: safeColor(chartColors.background, "#0a0a0a") }}
     >
-      <div className="flex items-center justify-between p-4 border-b border-border/50 bg-[#0f0f0f]">
+      <div
+        className="flex items-center justify-between p-4 border-b border-border/50"
+        style={{ backgroundColor: colorWithAlpha(chartColors.background, 0.88, "#0a0a0a") }}
+      >
         <div className="flex items-center gap-4">
           <h3 className="text-lg font-semibold font-mono text-foreground">{ticker}</h3>
           <span className="text-sm text-muted-foreground">

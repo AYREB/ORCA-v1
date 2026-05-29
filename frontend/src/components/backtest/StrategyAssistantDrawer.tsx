@@ -24,17 +24,20 @@ const quickPrompts = [
   {
     label: "Review",
     icon: Sparkles,
-    prompt: "Review my current strategy. Focus on the thesis, risk, and what I should test next.",
+    prompt:
+      "Give me a professional strategy review: thesis, entry quality, exit logic, risk/reward math, and what I should test next.",
   },
   {
     label: "Risks",
     icon: ShieldCheck,
-    prompt: "Find the biggest weaknesses or overfitting risks in the strategy I have entered so far.",
+    prompt:
+      "Identify the main trading risks: overfitting, market regime, volatility, spread/slippage, position sizing, and missing assumptions.",
   },
   {
     label: "Improve",
     icon: Lightbulb,
-    prompt: "Suggest practical improvements to the current strategy without rewriting it for me.",
+    prompt:
+      "Suggest specific builder-level improvements, including sensible TP/SL, RSI, and moving-average values to test from the selected ticker data, without giving live buy/sell advice.",
   },
 ];
 
@@ -42,7 +45,7 @@ const initialMessages: StrategyAssistantMessage[] = [
   {
     role: "assistant",
     content:
-      "I can read your current builder fields and help critique the setup, explain conditions, and suggest tests. I will not edit the strategy for you.",
+      "I can read your builder fields, inspect cached ticker data, infer the trade thesis, check risk/reward, and suggest practical numeric values to test. I will not edit the strategy or give live buy/sell advice.",
   },
 ];
 

@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { X, Maximize2, TrendingUp, TrendingDown, Play } from "lucide-react";
+import { useSettings } from "@/hooks/useSettings";
 
 // ===== TYPES =====
 interface ChartContentProps {
@@ -393,19 +394,30 @@ interface ChartViewProps {
   results: BacktestResult;
 }
 
+type StrategyLegDsl = {
+  OPEN?: {
+    ARGUMENTS?: {
+      takeProfitPercent?: number;
+      stopLossPercent?: number;
+    };
+  };
+};
+
 const ChartView = ({ results }: ChartViewProps) => {
+  const { settings } = useSettings();
+  const chartDefaults = settings.appearance.chartOptions;
   const tickers = useMemo(() => Object.keys(results.data), [results.data]);
   const [selectedTicker, setSelectedTicker] = useState(tickers[0] || "");
   const [selectedTimeframe, setSelectedTimeframe] = useState("");
-  const [showMarkers, setShowMarkers] = useState(true);
-  const [showTPSL, setShowTPSL] = useState(false);
+  const [showMarkers, setShowMarkers] = useState(chartDefaults.defaultShowMarkers);
+  const [showTPSL, setShowTPSL] = useState(chartDefaults.defaultShowTPSL);
   const [enabledIndicators, setEnabledIndicators] = useState<string[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Replay mode state
   const [isReplaying, setIsReplaying] = useState(false);
   const [isPaused, setIsPaused] = useState(true);
-  const [replaySpeed, setReplaySpeed] = useState(5);
+  const [replaySpeed, setReplaySpeed] = useState(chartDefaults.replaySpeed);
   
   // UI display state - throttled updates from chart (10fps during playback)
   const [displayIndex, setDisplayIndex] = useState(0);
@@ -414,7 +426,7 @@ const ChartView = ({ results }: ChartViewProps) => {
 
   // Extract TP/SL percentages from DSL
   const dslTPSL = useMemo(() => {
-    const dsl = results.json_dsl as Record<string, any> | undefined;
+    const dsl = results.json_dsl as { LONG?: StrategyLegDsl; SHORT?: StrategyLegDsl } | undefined;
     const strategy = dsl?.LONG || dsl?.SHORT;
     const openArgs = strategy?.OPEN?.ARGUMENTS;
     return {
@@ -643,7 +655,8 @@ const ChartView = ({ results }: ChartViewProps) => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-[#0a0a0a]"
+            className="fixed inset-0 z-50"
+            style={{ backgroundColor: settings.appearance.chartColors.background }}
           >
             {/* Close Button */}
             <button
