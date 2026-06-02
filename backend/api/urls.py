@@ -25,5 +25,6 @@ urlpatterns = [
     path("dslGeneticOptimiser/status/<str:job_id>/", views.dslGeneticOptimiserStatus),
     path("registry/", views.registry),
     path("strategy-assistant/chat/", views.strategy_assistant_chat),
+    path("strategy-assistant/market-data/", views.strategy_assistant_market_data),
     path("dashboard/summary/", views.dashboard_summary),
 ]

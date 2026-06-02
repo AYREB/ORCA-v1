@@ -43,7 +43,8 @@ Response style:
 - Use the strategy brief and market statistics as background evidence, but do not dump every available metric.
 - If the user asks a narrow question, answer narrowly in plain language and include only the numbers that matter.
 - If the user asks for values to try, give concrete starting ranges and say why they are reasonable for the selected ticker/timeframe.
-- If the user asks for a broad review, you may organize the response as: Snapshot, Trade read, Risk, Suggestions, Next tests.
+- Use markdown naturally when it improves readability: short paragraphs, bullets, and bold labels are fine.
+- Do not use canned section headings such as Snapshot, Risk, Suggestions, or Next tests unless the user explicitly asks for a full structured review.
 - Be conversational, concise, specific, and practical. Avoid robotic sectioning unless it improves the answer.
 - Mention which part of the current strategy you are referencing when that helps.
 - Ask at most one clarifying question only if the context is missing a critical detail; otherwise make a reasonable assumption from the Orca context.
@@ -424,7 +425,7 @@ def _summarize_market_csv(ticker: str, timeframe: str, markets: dict[str, Any]) 
         return {
             **base_summary,
             "status": "unavailable",
-            "reason": "No cached CSV found for the selected ticker and timeframe. Run a backtest for this ticker/timeframe first to populate cached market statistics.",
+            "reason": "No cached CSV found for the selected ticker and timeframe.",
         }
 
     try:
@@ -530,6 +531,107 @@ def build_market_data_summary(markets: dict[str, Any]) -> list[dict[str, Any]]:
     timeframe = _safe_text(markets.get("executionTimeframe"), "1h")
     max_tickers = int(getattr(settings, "ORCA_ASSISTANT_MARKET_DATA_MAX_TICKERS", 3))
     return [_summarize_market_csv(ticker, timeframe, markets) for ticker in tickers[:max_tickers]]
+
+
+def _cached_market_data_is_usable(ticker: str, timeframe: str, markets: dict[str, Any]) -> bool:
+    path = _market_csv_path(ticker, timeframe)
+    if path is None:
+        return False
+
+    try:
+        raw_df = _load_market_csv(path)
+    except (OSError, ValueError, pd.errors.ParserError):
+        return False
+
+    if raw_df.empty or "Close" not in raw_df.columns:
+        return False
+
+    return not _clip_market_data(raw_df, markets.get("dateStart"), markets.get("dateEnd")).empty
+
+
+def _fetch_market_data_to_cache(ticker: str, timeframe: str, markets: dict[str, Any]) -> dict[str, Any]:
+    start = _safe_text(markets.get("dateStart"), "")
+    end = _safe_text(markets.get("dateEnd"), "")
+    if not start or not end:
+        return {
+            "ticker": ticker,
+            "timeframe": timeframe,
+            "status": "unavailable",
+            "reason": "A start and end date are required before Orca can prepare market-data cache.",
+        }
+
+    data_dir = _market_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from core.data_pulling import datapull
+
+        df = datapull.get_data_with_indicator(
+            ticker=ticker,
+            start=start,
+            end=end,
+            interval=timeframe,
+            save_path=str(data_dir),
+        )
+    except Exception as exc:  # pragma: no cover - exact yfinance failures vary by environment
+        logger.info("Unable to prepare assistant market data for %s %s: %s", ticker, timeframe, exc)
+        return {
+            "ticker": ticker,
+            "timeframe": timeframe,
+            "status": "unavailable",
+            "reason": f"Unable to prepare cached market data: {exc}",
+        }
+
+    path = _market_csv_path(ticker, timeframe)
+    if (df is None or df.empty) and path is None:
+        return {
+            "ticker": ticker,
+            "timeframe": timeframe,
+            "status": "unavailable",
+            "reason": "Market-data provider returned no rows for the selected range.",
+        }
+
+    if not _cached_market_data_is_usable(ticker, timeframe, markets):
+        return {
+            "ticker": ticker,
+            "timeframe": timeframe,
+            "status": "unavailable",
+            "source_file": path.name if path else None,
+            "reason": "Market-data provider returned no usable rows for the selected range.",
+        }
+
+    return {
+        "ticker": ticker,
+        "timeframe": timeframe,
+        "status": "cache_warmed",
+        "source_file": path.name if path else f"{ticker}_{timeframe}.csv",
+        "rows": int(len(df)) if df is not None else None,
+    }
+
+
+def prepare_strategy_market_data(markets: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(markets, dict):
+        raise AssistantError("markets must be a JSON object.")
+
+    tickers = [str(ticker).strip() for ticker in _as_list(markets.get("tickers")) if str(ticker).strip()]
+    timeframe = _safe_text(markets.get("executionTimeframe"), "1h")
+    max_tickers = int(getattr(settings, "ORCA_ASSISTANT_MARKET_DATA_MAX_TICKERS", 3))
+
+    results: list[dict[str, Any]] = []
+    for ticker in tickers[:max_tickers]:
+        base = {"ticker": ticker, "timeframe": timeframe}
+        if not _is_safe_filename_part(ticker) or not _is_safe_filename_part(timeframe):
+            results.append({**base, "status": "unavailable", "reason": "Ticker or timeframe is not safe for cache filenames."})
+            continue
+
+        if _cached_market_data_is_usable(ticker, timeframe, markets):
+            path = _market_csv_path(ticker, timeframe)
+            results.append({**base, "status": "already_cached", "source_file": path.name if path else None})
+            continue
+
+        results.append(_fetch_market_data_to_cache(ticker, timeframe, markets))
+
+    return results
 
 
 def _compact_json(value: Any, max_chars: int = 160) -> str:
@@ -1045,6 +1147,10 @@ def _ask_ollama(messages: list[dict[str, str]], strategy_context: dict[str, Any]
 
 
 def ask_strategy_assistant(messages: list[dict[str, str]], strategy_context: dict[str, Any]) -> dict[str, Any]:
+    markets = _as_dict(strategy_context.get("markets"))
+    if markets:
+        prepare_strategy_market_data(markets)
+
     provider = str(getattr(settings, "ORCA_ASSISTANT_PROVIDER", "ollama")).strip().lower()
     if provider == "openai":
         return _ask_openai(messages, strategy_context)

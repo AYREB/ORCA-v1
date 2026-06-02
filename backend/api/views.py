@@ -25,7 +25,13 @@ from rest_framework.authtoken.models import Token
 
 from core.analysis.parameter_optimiser import build_param_grid, build_param_values, genetic_optimizer, optimizer
 from core.main import dslJSONBacktest, dslTextToJsonBacktest
-from .assistant import AssistantError, ask_strategy_assistant, normalize_assistant_messages, normalize_strategy_context
+from .assistant import (
+    AssistantError,
+    ask_strategy_assistant,
+    normalize_assistant_messages,
+    normalize_strategy_context,
+    prepare_strategy_market_data,
+)
 from .models import BacktestRun, Strategy
 
 try:
@@ -437,6 +443,27 @@ def strategy_assistant_chat(request):
         raise APIError(exc.message, status_code=exc.status_code)
 
     return no_store(JsonResponse(response))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("assistant")
+def strategy_assistant_market_data(request):
+    payload = parse_body(request)
+    markets = payload.get("markets")
+
+    if markets is None:
+        strategy_context = normalize_strategy_context(payload.get("strategy_context"))
+        markets = strategy_context.get("markets")
+
+    try:
+        market_data = prepare_strategy_market_data(markets)
+    except AssistantError as exc:
+        raise APIError(exc.message, status_code=exc.status_code)
+
+    return no_store(JsonResponse({"market_data": market_data}))
 
 
 @csrf_exempt

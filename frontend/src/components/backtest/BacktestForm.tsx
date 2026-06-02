@@ -150,6 +150,32 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
     fetchStrategies();
   }, [user]);
 
+  useEffect(() => {
+    const selectedTickers = tickers.map((ticker) => ticker.trim()).filter(Boolean);
+    if (!user || step !== 2 || selectedTickers.length === 0 || !executionTF || !dateStart || !dateEnd) return;
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      api
+        .prepareStrategyMarketData({
+          tickers: selectedTickers,
+          executionTimeframe: executionTF,
+          dateStart,
+          dateEnd,
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            console.debug("Strategy assistant market-data cache preparation failed:", error);
+          }
+        });
+    }, 800);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [dateEnd, dateStart, executionTF, step, tickers, user]);
+
   const parseSideObj = (sideObj: any): ConditionSide => {
     if (sideObj.op) {
       const base = sideObj.left;
@@ -523,6 +549,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
   const allowedArgs = registry.arguments?.ARGUMENTS?.[side] || {};
   const openArgs = stripRiskArguments(blocks[side]?.OPEN?.ARGUMENTS || {});
   const closeArgs = blocks[side]?.CLOSE?.ARGUMENTS || {};
+  const selectedTickers = tickers.map((ticker) => ticker.trim()).filter(Boolean);
   const assistantContext: StrategyAssistantContext = {
     currentStep: step,
     currentStage: WIZARD_STEPS.find((wizardStep) => wizardStep.id === step)?.label ?? "Strategy",
@@ -538,7 +565,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
       spread,
     },
     markets: {
-      tickers: tickers.filter(Boolean),
+      tickers: selectedTickers,
       executionTimeframe: executionTF,
       dateStart,
       dateEnd,

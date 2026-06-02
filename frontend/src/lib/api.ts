@@ -232,6 +232,19 @@ export interface StrategyAssistantChatResponse {
   provider?: string;
 }
 
+export interface StrategyAssistantMarketDataStatus {
+  ticker: string;
+  timeframe: string;
+  status: 'already_cached' | 'cache_warmed' | 'unavailable';
+  reason?: string;
+  source_file?: string | null;
+  rows?: number | null;
+}
+
+export interface StrategyAssistantMarketDataResponse {
+  market_data: StrategyAssistantMarketDataStatus[];
+}
+
 export interface AuthUser {
   id: number;
   email: string;
@@ -438,6 +451,15 @@ class DjangoAPI {
         messages,
         strategy_context: strategyContext,
       }),
+    });
+  }
+
+  async prepareStrategyMarketData(
+    markets: StrategyAssistantContext['markets']
+  ): Promise<StrategyAssistantMarketDataResponse> {
+    return this.request<StrategyAssistantMarketDataResponse>('/strategy-assistant/market-data/', {
+      method: 'POST',
+      body: JSON.stringify({ markets }),
     });
   }
 

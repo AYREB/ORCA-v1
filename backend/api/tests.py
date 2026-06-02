@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
@@ -11,7 +12,7 @@ from rest_framework.authtoken.models import Token
 
 from core.analysis.parameter_optimiser import build_param_grid, build_param_values, extract_optimizable_parameters
 
-from .assistant import _context_text, build_strategy_brief
+from .assistant import _context_text, build_strategy_brief, prepare_strategy_market_data
 
 
 User = get_user_model()
@@ -212,6 +213,41 @@ class StrategyAssistantDiagnosticsTests(TestCase):
 
         self.assertEqual(market_data["status"], "unavailable")
         self.assertIn("No cached CSV", market_data["reason"])
+
+    def test_strategy_market_data_preparation_warms_missing_cache(self):
+        context = self._sample_context()
+        context["markets"]["executionTimeframe"] = "15m"
+        context["markets"]["dateStart"] = "2025-01-01"
+        context["markets"]["dateEnd"] = "2025-01-03"
+
+        def fake_download(ticker, start, end, interval, save_path, **kwargs):
+            rows = []
+            start_at = datetime(2025, 1, 1)
+            for index in range(20):
+                rows.append(
+                    {
+                        "Datetime": start_at + timedelta(minutes=15 * index),
+                        "Open": 100 + index,
+                        "High": 101 + index,
+                        "Low": 99 + index,
+                        "Close": 100.5 + index,
+                        "Volume": 1000 + index,
+                    }
+                )
+            df = pd.DataFrame(rows).set_index("Datetime")
+            Path(save_path).mkdir(parents=True, exist_ok=True)
+            df.to_csv(Path(save_path) / f"{ticker}_{interval}.csv")
+            return df
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with override_settings(ORCA_ASSISTANT_MARKET_DATA_DIR=tmpdir):
+                with patch("core.data_pulling.datapull.get_data_with_indicator", side_effect=fake_download):
+                    prepared = prepare_strategy_market_data(context["markets"])
+                brief = build_strategy_brief(context)
+
+        self.assertEqual(prepared[0]["status"], "cache_warmed")
+        self.assertEqual(prepared[0]["source_file"], "AAPL_15m.csv")
+        self.assertEqual(brief["market_data"][0]["status"], "available")
 
     @override_settings(ORCA_ASSISTANT_MAX_CONTEXT_CHARS=5000)
     def test_context_text_prioritises_derived_brief(self):
