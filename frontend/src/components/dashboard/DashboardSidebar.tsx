@@ -14,7 +14,7 @@ import {
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
-import orcaLogo from "@/assets/orca-logo.png";
+import orcaLogo from "orcaLogo.png";
 import { useAuth } from "@/context/AuthContext";
 
 interface DashboardSidebarProps {

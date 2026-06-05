@@ -79,3 +79,15 @@ backend/db.sqlite3
 *.map
 .vite/
 all-files.txt
+# ML/LLM artifacts
+adapters/
+backend/adapters/
+data/
+backend/data/
+training_data.jsonl
+backend/LLM/training_data.jsonl
+*.jsonl
+*.bin
+*.gguf
+mlx_model/
+backend/LLM/__pycache__/
