@@ -1383,10 +1383,9 @@ def strategy_chat(request):
 @csrf_exempt
 @api_error_boundary
 @require_methods("GET")
-@token_required
 @rate_limit("general")
 def registry(request):
-    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
+    base = Path(__file__).resolve().parent.parent / "core/registries"
 
     with open(base / "commandRegistry.json", encoding="utf-8") as f:
         commands = json.load(f)
@@ -1397,13 +1396,34 @@ def registry(request):
     with open(base / "argumentsRegistry.json", encoding="utf-8") as f:
         arguments = json.load(f)
 
-    return JsonResponse(
-        {
-            "commands": commands,
-            "indicators": indicators,
-            "arguments": arguments,
+    with open(base / "tickerRegistry.json", encoding="utf-8") as f:
+        ticker_data = json.load(f)
+
+    with open(base / "timeframeRegistry.json", encoding="utf-8") as f:
+        timeframe_data = json.load(f)
+
+    # Format tickers for frontend - just what UI needs
+    tickers = {
+        ticker: {
+            "name": data["name"],
+            "available_timeframes": data["available_timeframes"]
         }
-    )
+        for ticker, data in ticker_data.get("TICKERS", {}).items()
+    }
+
+    # Format timeframes for frontend
+    timeframes = {
+        tf: data["label"]
+        for tf, data in timeframe_data.get("TIMEFRAMES", {}).items()
+    }
+
+    return JsonResponse({
+        "commands": commands,
+        "indicators": indicators,
+        "arguments": arguments,
+        "tickers": tickers,
+        "timeframes": timeframes,
+    })
 
 
 @csrf_exempt

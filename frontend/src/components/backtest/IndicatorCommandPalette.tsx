@@ -13,6 +13,7 @@ interface IndicatorCommandPaletteProps {
   onSelect: (side: ConditionSide) => void;
   onCancel: () => void;
   placeholder?: string;
+  availableTimeframes?: string[];
 }
 
 export default function IndicatorCommandPalette({
@@ -20,6 +21,7 @@ export default function IndicatorCommandPalette({
   onSelect,
   onCancel,
   placeholder = "Search indicators or type a number...",
+  availableTimeframes,
 }: IndicatorCommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -176,7 +178,10 @@ export default function IndicatorCommandPalette({
                     onChange={(e) => setConfigArgs({ ...configArgs, [param]: e.target.value })}
                     className="bg-transparent text-[11px] font-mono outline-none w-10 text-foreground"
                   >
-                    {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
+                    {(availableTimeframes && availableTimeframes.length > 0
+                      ? availableTimeframes
+                      : ["1m", "5m", "15m", "1h", "4h", "1d"]
+                    ).map((tf) => (
                       <option key={tf} value={tf}>{tf}</option>
                     ))}
                   </select>

@@ -46,6 +46,8 @@ import { api, SavedStrategy, StrategyAssistantContext } from "@/lib/api";
 import { MultiConditionBuilder } from "./ConditionBuilder";
 import { ArgumentSelector } from "./ArgumentSelector";
 import StrategyAssistantDrawer from "./StrategyAssistantDrawer";
+import { TickerCombobox, TimeframeSelect } from "./MarketSelectors";
+import { useRegistry, availableTimeframesFor } from "@/context/RegistryContext";
 import {
   Registry,
   ConditionGroup,
@@ -94,6 +96,7 @@ const numberInputValue = (value: number) => (Number.isFinite(value) ? value : 0)
 const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) => {
   const { settings } = useSettings();
   const btDefaults = settings.backtestDefaults;
+  const { tickers: registryTickers, timeframes: registryTimeframes } = useRegistry();
   const [loading, setLoading] = useState(false);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -149,6 +152,17 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
     fetchRegistry();
     fetchStrategies();
   }, [user]);
+
+  useEffect(() => {
+    const valid = availableTimeframesFor(
+      tickers.filter(Boolean),
+      registryTickers,
+      registryTimeframes,
+    );
+    if (valid.length > 0 && !valid.includes(executionTF)) {
+      setExecutionTF(valid[0]);
+    }
+  }, [tickers, registryTickers, registryTimeframes, executionTF]);
 
   useEffect(() => {
     const selectedTickers = tickers.map((ticker) => ticker.trim()).filter(Boolean);
@@ -776,6 +790,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                     conditionGroup={conditionGroups.OPEN}
                     setConditionGroup={(group) => setConditionGroups((prev) => ({ ...prev, OPEN: group }))}
                     registry={registry}
+                    availableTimeframes={availableTimeframesFor(tickers.filter(Boolean), registryTickers, registryTimeframes)}
                   />
                   <div className="space-y-3 pt-3 border-t border-border/30">
                     <Label className="text-xs uppercase tracking-wider text-muted-foreground">Risk Management</Label>
@@ -908,11 +923,11 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                   <div className="flex flex-wrap gap-2">
                     {tickers.map((ticker, i) => (
                       <div key={i} className="flex items-center gap-1.5">
-                        <Input
+                        <TickerCombobox
                           value={ticker}
-                          onChange={(e) => updateTicker(i, e.target.value)}
-                          placeholder="AAPL"
-                          className="w-24 h-9 bg-secondary/50 border-border/50 uppercase font-mono"
+                          onChange={(v) => updateTicker(i, v)}
+                          exclude={tickers.filter((_, j) => j !== i)}
+                          className="w-44"
                         />
                         {tickers.length > 1 && (
                           <Button
@@ -943,20 +958,13 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
 
                 <div className="space-y-2">
                   <Label className="text-xs uppercase tracking-wider text-muted-foreground">Execution Timeframe</Label>
-                  <Select value={executionTF} onValueChange={setExecutionTF}>
-                    <SelectTrigger className="w-32 bg-secondary/50 border-border/50 h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
-                        <SelectItem key={tf} value={tf}>
-                          {tf}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <TimeframeSelect
+                    value={executionTF}
+                    onChange={setExecutionTF}
+                    tickers={tickers.filter(Boolean)}
+                    className="w-40"
+                  />
                 </div>
-
                 <div className="space-y-3">
                   <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
                     <Calendar className="h-3.5 w-3.5" />

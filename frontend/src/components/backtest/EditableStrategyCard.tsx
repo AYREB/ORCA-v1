@@ -1,17 +1,13 @@
-import { useMemo, useState } from "react";
-import { Play, Loader2, X, Plus, CheckCircle2, AlertCircle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Play, Loader2, X, CheckCircle2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { TickerCombobox, TimeframeSelect } from "./MarketSelectors";
+import { useRegistry, availableTimeframesFor } from "@/context/RegistryContext";
+
 interface Props {
   dsl: Record<string, unknown>;
   onChange: (next: Record<string, unknown>) => void;
@@ -20,7 +16,7 @@ interface Props {
   warnings?: string[];
   confidence?: number | null;
 }
-const TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1D"];
+
 // case-insensitive key lookup, returns the actual key name in the object
 const findKey = (obj: any, ...keys: string[]): string | undefined => {
   if (!obj || typeof obj !== "object") return undefined;
@@ -36,8 +32,10 @@ const pick = (obj: any, ...keys: string[]): any => {
   const k = findKey(obj, ...keys);
   return k === undefined ? undefined : obj[k];
 };
+
 // Deep-clone via JSON (DSL is plain JSON)
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
+
 const fmtSide = (side: any): string => {
   if (side == null) return "?";
   if (typeof side === "number" || typeof side === "string") return String(side);
@@ -53,6 +51,7 @@ const fmtSide = (side: any): string => {
   if (v !== undefined) return String(v);
   return JSON.stringify(side);
 };
+
 const conditionsToText = (conds: any): string => {
   if (!conds) return "";
   let list: any[];
@@ -72,19 +71,23 @@ const conditionsToText = (conds: any): string => {
     })
     .join("");
 };
+
 const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], confidence }: Props) => {
+  const { tickers: registryTickers, timeframes: registryTimeframes } = useRegistry();
   // Determine direction block
   const longKey = findKey(dsl, "LONG", "long");
   const shortKey = findKey(dsl, "SHORT", "short");
   const dirKey = longKey || shortKey;
   const direction: "LONG" | "SHORT" = longKey ? "LONG" : "SHORT";
   const block: any = dirKey ? (dsl as any)[dirKey] : null;
+
   // Locate context
   const ctxParent =
     findKey(block || {}, "CONTEXT", "context") ? block :
     findKey(dsl, "CONTEXT", "context") ? dsl : block || dsl;
   const ctxKey = findKey(ctxParent, "CONTEXT", "context");
   const ctx: any = ctxKey ? ctxParent[ctxKey] : ctxParent;
+
   const tickersKey = findKey(ctx, "tickers", "ticker", "symbols");
   const tickersRaw = tickersKey ? ctx[tickersKey] : [];
   const tickers: string[] = Array.isArray(tickersRaw)
@@ -92,19 +95,23 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
     : tickersRaw
     ? [String(tickersRaw)]
     : [];
+
   const tfKey = findKey(ctx, "execution_timeframe", "executionTimeframe");
   const timeframe: string = (tfKey ? ctx[tfKey] : "") || "1D";
+
   const dfKey = findKey(ctx, "dateframe", "dateRange");
   const dateframe = (dfKey ? ctx[dfKey] : {}) || {};
   const startKey = findKey(dateframe, "start", "from") || "start";
   const endKey = findKey(dateframe, "end", "to") || "end";
   const startDate: string = dateframe[startKey] || "";
   const endDate: string = dateframe[endKey] || "";
+
   // TP/SL — search in block, open, open.ARGUMENTS, or root
   const openKey = block ? findKey(block, "OPEN", "open", "entry") : undefined;
   const openBlock = openKey ? block[openKey] : undefined;
   const argsKey = openBlock ? findKey(openBlock, "ARGUMENTS", "arguments") : undefined;
   const argsObj = argsKey ? openBlock[argsKey] : undefined;
+
   const findTpSlContainer = (): { obj: any; tpKey?: string; slKey?: string } => {
     const candidates = [argsObj, openBlock, block, dsl].filter(Boolean);
     for (const c of candidates) {
@@ -119,6 +126,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
   const slKey = tpSl.slKey || "stopLossPercent";
   const tpVal = tpSl.obj?.[tpKey];
   const slVal = tpSl.obj?.[slKey];
+
   // Conditions (read-only)
   const closeKey = block ? findKey(block, "CLOSE", "close", "exit") : undefined;
   const closeBlock = closeKey ? block[closeKey] : undefined;
@@ -126,20 +134,47 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
   const closeCondsKey = closeBlock ? findKey(closeBlock, "CONDITIONS", "conditions") : undefined;
   const openCondsText = conditionsToText(openCondsKey ? openBlock[openCondsKey] : undefined);
   const closeCondsText = conditionsToText(closeCondsKey ? closeBlock[closeCondsKey] : undefined);
+
   // local state for new-ticker input & percent text inputs (so user can clear field)
-  const [newTicker, setNewTicker] = useState("");
   const [tpText, setTpText] = useState<string>(
     tpVal !== undefined && tpVal !== null ? String(Number(tpVal) * 100) : ""
   );
   const [slText, setSlText] = useState<string>(
     slVal !== undefined && slVal !== null ? String(Number(slVal) * 100) : ""
   );
+
+  const unknownTickers = useMemo(
+    () => tickers.filter((t) => !registryTickers[t]),
+    [tickers, registryTickers],
+  );
+  const availableTfs = useMemo(
+    () => availableTimeframesFor(tickers, registryTickers, registryTimeframes),
+    [tickers, registryTickers, registryTimeframes],
+  );
+  const [tfNote, setTfNote] = useState<string>("");
+
+  // Auto-switch timeframe if the parsed one isn't supported by the selected tickers
+  useEffect(() => {
+    if (availableTfs.length === 0) return;
+    if (!availableTfs.includes(timeframe)) {
+      const next = availableTfs[0];
+      setTfNote(
+        `Switched to ${registryTimeframes[next] || next} — ${timeframe} isn't available for the selected ticker(s).`,
+      );
+      setTimeframe(next);
+    } else {
+      setTfNote("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableTfs.join(","), timeframe]);
+
   // Mutators all clone -> mutate -> onChange
   const update = (mutator: (d: any) => void) => {
     const next = clone(dsl);
     mutator(next);
     onChange(next);
   };
+
   const getCtx = (root: any) => {
     const dKey = findKey(root, "LONG", "long", "SHORT", "short")!;
     const blk = root[dKey];
@@ -147,25 +182,23 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
     const cKey = findKey(cParent, "CONTEXT", "context");
     return cKey ? cParent[cKey] : cParent;
   };
+
   const setTickers = (next: string[]) =>
     update((d) => {
       const c = getCtx(d);
       const k = findKey(c, "tickers", "ticker", "symbols") || "tickers";
       c[k] = next;
     });
-  const addTicker = () => {
-    const t = newTicker.trim().toUpperCase();
-    if (!t || tickers.includes(t)) return;
-    setTickers([...tickers, t]);
-    setNewTicker("");
-  };
+
   const removeTicker = (t: string) => setTickers(tickers.filter((x) => x !== t));
+
   const setTimeframe = (tf: string) =>
     update((d) => {
       const c = getCtx(d);
       const k = findKey(c, "execution_timeframe", "executionTimeframe") || "execution_timeframe";
       c[k] = tf;
     });
+
   const setStart = (v: string) =>
     update((d) => {
       const c = getCtx(d);
@@ -174,6 +207,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
       const sk = findKey(c[dk], "start", "from") || "start";
       c[dk][sk] = v;
     });
+
   const setEnd = (v: string) =>
     update((d) => {
       const c = getCtx(d);
@@ -182,6 +216,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
       const ek = findKey(c[dk], "end", "to") || "end";
       c[dk][ek] = v;
     });
+
   const setTpSl = (which: "tp" | "sl", percent: number | null) =>
     update((d) => {
       const dKey = findKey(d, "LONG", "long", "SHORT", "short");
@@ -203,6 +238,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
       if (percent === null) delete target[key];
       else target[key] = percent / 100;
     });
+
   const setDirection = (dir: "LONG" | "SHORT") =>
     update((d) => {
       const curKey = findKey(d, "LONG", "long", "SHORT", "short");
@@ -212,6 +248,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
       delete d[curKey];
       d[dir] = blk;
     });
+
   return (
     <Card className="p-5 bg-card/50 border-border">
       <div className="flex items-center justify-between mb-4">
@@ -232,6 +269,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
           )}
         </Button>
       </div>
+
       {warnings.length > 0 && (
         <div className="mb-4 p-3 rounded border border-yellow-500/30 bg-yellow-500/5 text-xs space-y-1">
           <div className="font-medium text-yellow-500 flex items-center gap-1.5">
@@ -243,68 +281,69 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
           </ul>
         </div>
       )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Tickers */}
         <div className="md:col-span-2 space-y-1.5">
           <Label className="text-xs">Tickers</Label>
           <div className="flex flex-wrap items-center gap-1.5 p-2 rounded border border-border bg-background/40 min-h-[38px]">
-            {tickers.map((t) => (
-              <span
-                key={t}
-                className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-primary/15 border border-primary/30 text-foreground"
-              >
-                {t}
-                <button
-                  onClick={() => removeTicker(t)}
-                  className="hover:text-destructive"
-                  aria-label={`Remove ${t}`}
+            {tickers.map((t) => {
+              const known = !!registryTickers[t];
+              return (
+                <span
+                  key={t}
+                  className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border ${
+                    known
+                      ? "bg-primary/15 border-primary/30 text-foreground"
+                      : "bg-yellow-500/10 border-yellow-500/40 text-yellow-500"
+                  }`}
+                  title={known ? registryTickers[t].name : "Not in registry"}
                 >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-            <div className="flex items-center gap-1">
-              <Input
-                value={newTicker}
-                onChange={(e) => setNewTicker(e.target.value.toUpperCase())}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addTicker();
-                  }
-                }}
-                placeholder="Add ticker"
-                className="h-6 w-24 text-[11px] px-2 bg-background/60"
-              />
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                onClick={addTicker}
-                className="h-6 w-6"
-                disabled={!newTicker.trim()}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </Button>
-            </div>
+                  {t}
+                  {known && (
+                    <span className="text-muted-foreground font-normal">
+                      · {registryTickers[t].name}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => removeTicker(t)}
+                    className="hover:text-destructive"
+                    aria-label={`Remove ${t}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              );
+            })}
+            <TickerCombobox
+              value=""
+              onChange={(v) => {
+                if (v && !tickers.includes(v)) setTickers([...tickers, v]);
+              }}
+              exclude={tickers}
+              placeholder="Add ticker…"
+              className="h-7 w-40 text-[11px]"
+            />
           </div>
+          {unknownTickers.length > 0 && (
+            <p className="text-[10px] text-yellow-500">
+              Not in registry: {unknownTickers.join(", ")}
+            </p>
+          )}
         </div>
+
         {/* Timeframe */}
         <div className="space-y-1.5">
           <Label className="text-xs">Timeframe</Label>
-          <Select value={timeframe} onValueChange={setTimeframe}>
-            <SelectTrigger className="h-8 text-xs bg-background/40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TIMEFRAMES.map((tf) => (
-                <SelectItem key={tf} value={tf} className="text-xs">
-                  {tf}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <TimeframeSelect
+            value={timeframe}
+            onChange={setTimeframe}
+            tickers={tickers}
+            className="h-8 text-xs bg-background/40"
+          />
+          {tfNote && <p className="text-[10px] text-yellow-500">{tfNote}</p>}
         </div>
+
         {/* Direction */}
         <div className="space-y-1.5">
           <Label className="text-xs">Direction</Label>
@@ -326,6 +365,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
             ))}
           </div>
         </div>
+
         {/* Dates */}
         <div className="space-y-1.5">
           <Label className="text-xs">Start date</Label>
@@ -345,6 +385,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
             className="h-8 text-xs bg-background/40"
           />
         </div>
+
         {/* TP / SL */}
         <div className="space-y-1.5">
           <Label className="text-xs">Take Profit %</Label>
@@ -377,6 +418,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
           />
         </div>
       </div>
+
       {/* Read-only conditions */}
       {(openCondsText || closeCondsText) && (
         <div className="mt-4 p-3 rounded border border-border bg-background/40 space-y-1.5">
@@ -400,4 +442,5 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
     </Card>
   );
 };
+
 export default EditableStrategyCard;

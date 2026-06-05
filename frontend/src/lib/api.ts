@@ -125,6 +125,8 @@ export interface RegistryResponse {
   commands: Record<string, unknown>;
   indicators: Record<string, unknown>;
   arguments: Record<string, unknown>;
+  tickers?: Record<string, { name: string; available_timeframes: string[] }>;
+  timeframes?: Record<string, string>;
 }
 
 export interface MonteCarloResult {

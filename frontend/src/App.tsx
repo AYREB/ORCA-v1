@@ -15,6 +15,7 @@ import PaperAccounts from "./pages/PaperAccounts";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import Help from "./pages/Help"
 import { AuthProvider } from "./context/AuthContext";
+import { RegistryProvider } from "@/context/RegistryContext";
 import Settings from "./pages/Settings";
 
 const queryClient = new QueryClient();
@@ -23,7 +24,8 @@ const App = () => (
   <HelmetProvider>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <TooltipProvider>
+          <RegistryProvider>
+          <TooltipProvider>
           <Toaster />
           <Sonner />
           <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -83,6 +85,7 @@ const App = () => (
             </Routes>
           </BrowserRouter>
         </TooltipProvider>
+        </RegistryProvider>
       </AuthProvider>
     </QueryClientProvider>
   </HelmetProvider>
