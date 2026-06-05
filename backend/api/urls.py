@@ -1,0 +1,32 @@
+from django.http import JsonResponse
+from django.urls import path
+
+from . import views
+
+
+def health(request):
+    return JsonResponse({"status": "ok"})
+
+
+urlpatterns = [
+    path("health/", health),
+    path("register/", views.register),
+    path("login/", views.login),
+    path("login/google/", views.google_login),
+    path("logout/", views.logout),
+    path("me/", views.me),
+    path("strategies/", views.strategies),
+    path("strategies/<int:strategy_id>/", views.strategy_detail),
+    path("backtestDSLText/", views.backtestDSLText),
+    path("backtestDSLJSON/", views.backtestDSLJSON),
+    path("dslParameterOptimiser/", views.dslParameterOptimiser),
+    path("dslParameterOptimiser/status/<str:job_id>/", views.dslParameterOptimiserStatus),
+    path("dslGeneticOptimiser/", views.dslGeneticOptimiser),
+    path("dslGeneticOptimiser/status/<str:job_id>/", views.dslGeneticOptimiserStatus),
+    path("registry/", views.registry),
+    path("strategy-assistant/chat/", views.strategy_assistant_chat),
+    path("strategy-assistant/market-data/", views.strategy_assistant_market_data),
+    path("dashboard/summary/", views.dashboard_summary),
+    path("strategy-to-dsl/", views.strategy_to_dsl),
+    path('strategy/chat/', views.strategy_chat),
+]

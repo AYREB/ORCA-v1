@@ -1,0 +1,403 @@
+import { useMemo, useState } from "react";
+import { Play, Loader2, X, Plus, CheckCircle2, AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+interface Props {
+  dsl: Record<string, unknown>;
+  onChange: (next: Record<string, unknown>) => void;
+  onRun: () => void;
+  isRunning: boolean;
+  warnings?: string[];
+  confidence?: number | null;
+}
+const TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1D"];
+// case-insensitive key lookup, returns the actual key name in the object
+const findKey = (obj: any, ...keys: string[]): string | undefined => {
+  if (!obj || typeof obj !== "object") return undefined;
+  const lower: Record<string, string> = {};
+  for (const k of Object.keys(obj)) lower[k.toLowerCase()] = k;
+  for (const k of keys) {
+    const real = lower[k.toLowerCase()];
+    if (real !== undefined) return real;
+  }
+  return undefined;
+};
+const pick = (obj: any, ...keys: string[]): any => {
+  const k = findKey(obj, ...keys);
+  return k === undefined ? undefined : obj[k];
+};
+// Deep-clone via JSON (DSL is plain JSON)
+const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
+const fmtSide = (side: any): string => {
+  if (side == null) return "?";
+  if (typeof side === "number" || typeof side === "string") return String(side);
+  const func = pick(side, "func", "function", "name", "indicator");
+  if (func) {
+    const args = pick(side, "arg", "args", "params", "parameters") || {};
+    const parts = Object.entries(args)
+      .filter(([k, v]) => v !== null && v !== undefined && v !== "" && k !== "timeframe" && k !== "offset")
+      .map(([, v]) => `${v}`);
+    return parts.length ? `${func}(${parts.join(", ")})` : String(func);
+  }
+  const v = pick(side, "value", "val", "constant");
+  if (v !== undefined) return String(v);
+  return JSON.stringify(side);
+};
+const conditionsToText = (conds: any): string => {
+  if (!conds) return "";
+  let list: any[];
+  if (Array.isArray(conds)) list = conds;
+  else if (pick(conds, "conditions")) list = pick(conds, "conditions");
+  else if (pick(conds, "left") !== undefined || pick(conds, "operator") !== undefined) list = [conds];
+  else list = [];
+  return list
+    .map((c, i) => {
+      const op = pick(c, "operator", "op", "comparator") || "?";
+      const line = `${fmtSide(pick(c, "left"))} ${op} ${fmtSide(pick(c, "right"))}`;
+      const joiner =
+        i < list.length - 1
+          ? ` ${pick(c, "nextLogicalOperator", "logical", "join") || "AND"} `
+          : "";
+      return line + joiner;
+    })
+    .join("");
+};
+const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], confidence }: Props) => {
+  // Determine direction block
+  const longKey = findKey(dsl, "LONG", "long");
+  const shortKey = findKey(dsl, "SHORT", "short");
+  const dirKey = longKey || shortKey;
+  const direction: "LONG" | "SHORT" = longKey ? "LONG" : "SHORT";
+  const block: any = dirKey ? (dsl as any)[dirKey] : null;
+  // Locate context
+  const ctxParent =
+    findKey(block || {}, "CONTEXT", "context") ? block :
+    findKey(dsl, "CONTEXT", "context") ? dsl : block || dsl;
+  const ctxKey = findKey(ctxParent, "CONTEXT", "context");
+  const ctx: any = ctxKey ? ctxParent[ctxKey] : ctxParent;
+  const tickersKey = findKey(ctx, "tickers", "ticker", "symbols");
+  const tickersRaw = tickersKey ? ctx[tickersKey] : [];
+  const tickers: string[] = Array.isArray(tickersRaw)
+    ? tickersRaw
+    : tickersRaw
+    ? [String(tickersRaw)]
+    : [];
+  const tfKey = findKey(ctx, "execution_timeframe", "executionTimeframe");
+  const timeframe: string = (tfKey ? ctx[tfKey] : "") || "1D";
+  const dfKey = findKey(ctx, "dateframe", "dateRange");
+  const dateframe = (dfKey ? ctx[dfKey] : {}) || {};
+  const startKey = findKey(dateframe, "start", "from") || "start";
+  const endKey = findKey(dateframe, "end", "to") || "end";
+  const startDate: string = dateframe[startKey] || "";
+  const endDate: string = dateframe[endKey] || "";
+  // TP/SL — search in block, open, open.ARGUMENTS, or root
+  const openKey = block ? findKey(block, "OPEN", "open", "entry") : undefined;
+  const openBlock = openKey ? block[openKey] : undefined;
+  const argsKey = openBlock ? findKey(openBlock, "ARGUMENTS", "arguments") : undefined;
+  const argsObj = argsKey ? openBlock[argsKey] : undefined;
+  const findTpSlContainer = (): { obj: any; tpKey?: string; slKey?: string } => {
+    const candidates = [argsObj, openBlock, block, dsl].filter(Boolean);
+    for (const c of candidates) {
+      const tpK = findKey(c, "takeProfitPercent", "take_profit_percent", "takeProfit", "tp");
+      const slK = findKey(c, "stopLossPercent", "stop_loss_percent", "stopLoss", "sl");
+      if (tpK || slK) return { obj: c, tpKey: tpK, slKey: slK };
+    }
+    return { obj: argsObj || openBlock || block || dsl };
+  };
+  const tpSl = findTpSlContainer();
+  const tpKey = tpSl.tpKey || "takeProfitPercent";
+  const slKey = tpSl.slKey || "stopLossPercent";
+  const tpVal = tpSl.obj?.[tpKey];
+  const slVal = tpSl.obj?.[slKey];
+  // Conditions (read-only)
+  const closeKey = block ? findKey(block, "CLOSE", "close", "exit") : undefined;
+  const closeBlock = closeKey ? block[closeKey] : undefined;
+  const openCondsKey = openBlock ? findKey(openBlock, "CONDITIONS", "conditions") : undefined;
+  const closeCondsKey = closeBlock ? findKey(closeBlock, "CONDITIONS", "conditions") : undefined;
+  const openCondsText = conditionsToText(openCondsKey ? openBlock[openCondsKey] : undefined);
+  const closeCondsText = conditionsToText(closeCondsKey ? closeBlock[closeCondsKey] : undefined);
+  // local state for new-ticker input & percent text inputs (so user can clear field)
+  const [newTicker, setNewTicker] = useState("");
+  const [tpText, setTpText] = useState<string>(
+    tpVal !== undefined && tpVal !== null ? String(Number(tpVal) * 100) : ""
+  );
+  const [slText, setSlText] = useState<string>(
+    slVal !== undefined && slVal !== null ? String(Number(slVal) * 100) : ""
+  );
+  // Mutators all clone -> mutate -> onChange
+  const update = (mutator: (d: any) => void) => {
+    const next = clone(dsl);
+    mutator(next);
+    onChange(next);
+  };
+  const getCtx = (root: any) => {
+    const dKey = findKey(root, "LONG", "long", "SHORT", "short")!;
+    const blk = root[dKey];
+    const cParent = findKey(blk || {}, "CONTEXT", "context") ? blk : findKey(root, "CONTEXT", "context") ? root : blk || root;
+    const cKey = findKey(cParent, "CONTEXT", "context");
+    return cKey ? cParent[cKey] : cParent;
+  };
+  const setTickers = (next: string[]) =>
+    update((d) => {
+      const c = getCtx(d);
+      const k = findKey(c, "tickers", "ticker", "symbols") || "tickers";
+      c[k] = next;
+    });
+  const addTicker = () => {
+    const t = newTicker.trim().toUpperCase();
+    if (!t || tickers.includes(t)) return;
+    setTickers([...tickers, t]);
+    setNewTicker("");
+  };
+  const removeTicker = (t: string) => setTickers(tickers.filter((x) => x !== t));
+  const setTimeframe = (tf: string) =>
+    update((d) => {
+      const c = getCtx(d);
+      const k = findKey(c, "execution_timeframe", "executionTimeframe") || "execution_timeframe";
+      c[k] = tf;
+    });
+  const setStart = (v: string) =>
+    update((d) => {
+      const c = getCtx(d);
+      const dk = findKey(c, "dateframe", "dateRange") || "dateframe";
+      if (!c[dk] || typeof c[dk] !== "object") c[dk] = {};
+      const sk = findKey(c[dk], "start", "from") || "start";
+      c[dk][sk] = v;
+    });
+  const setEnd = (v: string) =>
+    update((d) => {
+      const c = getCtx(d);
+      const dk = findKey(c, "dateframe", "dateRange") || "dateframe";
+      if (!c[dk] || typeof c[dk] !== "object") c[dk] = {};
+      const ek = findKey(c[dk], "end", "to") || "end";
+      c[dk][ek] = v;
+    });
+  const setTpSl = (which: "tp" | "sl", percent: number | null) =>
+    update((d) => {
+      const dKey = findKey(d, "LONG", "long", "SHORT", "short");
+      const blk = dKey ? d[dKey] : d;
+      const oKey = blk ? findKey(blk, "OPEN", "open", "entry") : undefined;
+      const oBlk = oKey ? blk[oKey] : undefined;
+      const aKey = oBlk ? findKey(oBlk, "ARGUMENTS", "arguments") : undefined;
+      let target: any = aKey ? oBlk[aKey] : undefined;
+      if (!target) {
+        // create ARGUMENTS in open block if possible
+        if (oBlk) {
+          if (!oBlk.ARGUMENTS) oBlk.ARGUMENTS = {};
+          target = oBlk.ARGUMENTS;
+        } else {
+          target = blk || d;
+        }
+      }
+      const key = which === "tp" ? tpKey : slKey;
+      if (percent === null) delete target[key];
+      else target[key] = percent / 100;
+    });
+  const setDirection = (dir: "LONG" | "SHORT") =>
+    update((d) => {
+      const curKey = findKey(d, "LONG", "long", "SHORT", "short");
+      if (!curKey) return;
+      if (curKey.toUpperCase() === dir) return;
+      const blk = d[curKey];
+      delete d[curKey];
+      d[dir] = blk;
+    });
+  return (
+    <Card className="p-5 bg-card/50 border-border">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-semibold">Review & Run</h3>
+          {confidence != null && (
+            <Badge variant="outline" className="text-[10px]">
+              {Math.round(confidence * 100)}% confidence
+            </Badge>
+          )}
+        </div>
+        <Button onClick={onRun} disabled={isRunning} size="sm">
+          {isRunning ? (
+            <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Running...</>
+          ) : (
+            <><Play className="h-3.5 w-3.5 mr-2" />Run Backtest</>
+          )}
+        </Button>
+      </div>
+      {warnings.length > 0 && (
+        <div className="mb-4 p-3 rounded border border-yellow-500/30 bg-yellow-500/5 text-xs space-y-1">
+          <div className="font-medium text-yellow-500 flex items-center gap-1.5">
+            <AlertCircle className="h-3.5 w-3.5" />
+            Warnings
+          </div>
+          <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
+            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </div>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Tickers */}
+        <div className="md:col-span-2 space-y-1.5">
+          <Label className="text-xs">Tickers</Label>
+          <div className="flex flex-wrap items-center gap-1.5 p-2 rounded border border-border bg-background/40 min-h-[38px]">
+            {tickers.map((t) => (
+              <span
+                key={t}
+                className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-primary/15 border border-primary/30 text-foreground"
+              >
+                {t}
+                <button
+                  onClick={() => removeTicker(t)}
+                  className="hover:text-destructive"
+                  aria-label={`Remove ${t}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            <div className="flex items-center gap-1">
+              <Input
+                value={newTicker}
+                onChange={(e) => setNewTicker(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addTicker();
+                  }
+                }}
+                placeholder="Add ticker"
+                className="h-6 w-24 text-[11px] px-2 bg-background/60"
+              />
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={addTicker}
+                className="h-6 w-6"
+                disabled={!newTicker.trim()}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        </div>
+        {/* Timeframe */}
+        <div className="space-y-1.5">
+          <Label className="text-xs">Timeframe</Label>
+          <Select value={timeframe} onValueChange={setTimeframe}>
+            <SelectTrigger className="h-8 text-xs bg-background/40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TIMEFRAMES.map((tf) => (
+                <SelectItem key={tf} value={tf} className="text-xs">
+                  {tf}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {/* Direction */}
+        <div className="space-y-1.5">
+          <Label className="text-xs">Direction</Label>
+          <div className="flex rounded border border-border overflow-hidden bg-background/40 h-8">
+            {(["LONG", "SHORT"] as const).map((d) => (
+              <button
+                key={d}
+                onClick={() => setDirection(d)}
+                className={`flex-1 text-[11px] font-medium transition-colors ${
+                  direction === d
+                    ? d === "LONG"
+                      ? "bg-green-500/20 text-green-500"
+                      : "bg-red-500/20 text-red-500"
+                    : "text-muted-foreground hover:bg-muted/40"
+                }`}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* Dates */}
+        <div className="space-y-1.5">
+          <Label className="text-xs">Start date</Label>
+          <Input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStart(e.target.value)}
+            className="h-8 text-xs bg-background/40"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">End date</Label>
+          <Input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEnd(e.target.value)}
+            className="h-8 text-xs bg-background/40"
+          />
+        </div>
+        {/* TP / SL */}
+        <div className="space-y-1.5">
+          <Label className="text-xs">Take Profit %</Label>
+          <Input
+            type="number"
+            step="0.1"
+            value={tpText}
+            onChange={(e) => {
+              setTpText(e.target.value);
+              const n = parseFloat(e.target.value);
+              setTpSl("tp", isNaN(n) ? null : n);
+            }}
+            placeholder="e.g. 15"
+            className="h-8 text-xs bg-background/40"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Stop Loss %</Label>
+          <Input
+            type="number"
+            step="0.1"
+            value={slText}
+            onChange={(e) => {
+              setSlText(e.target.value);
+              const n = parseFloat(e.target.value);
+              setTpSl("sl", isNaN(n) ? null : n);
+            }}
+            placeholder="e.g. 10"
+            className="h-8 text-xs bg-background/40"
+          />
+        </div>
+      </div>
+      {/* Read-only conditions */}
+      {(openCondsText || closeCondsText) && (
+        <div className="mt-4 p-3 rounded border border-border bg-background/40 space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+            Strategy logic
+          </div>
+          {openCondsText && (
+            <div className="text-xs">
+              <span className="text-muted-foreground">Enter when </span>
+              <span className="text-foreground">{openCondsText}</span>
+            </div>
+          )}
+          {closeCondsText && (
+            <div className="text-xs">
+              <span className="text-muted-foreground">Exit when </span>
+              <span className="text-foreground">{closeCondsText}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+};
+export default EditableStrategyCard;

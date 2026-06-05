@@ -1,0 +1,81 @@
+# OS / editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Environment and local config
+.env
+.env.*
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+htmlcov/
+.venv/
+venv/
+env/
+
+# Django / backend runtime artifacts
+*.sqlite3
+backend/db.sqlite3
+backend/**/dsl_output.json
+backend/**/mainDEMOJSON.json
+backend/mainDEMOJSON.json
+backend/trades_output.json
+backend/return_data_output.json
+backend/core/data_csvs/
+
+# Node / frontend dependencies
+node_modules/
+frontend/node_modules/
+.npm/
+.pnpm-store/
+
+# Build output and caches
+dist/
+frontend/dist/
+.vite/
+frontend/.vite/
+frontend/node_modules/.vite/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+node_modules/
+frontend/node_modules/
+backend/db.sqlite3
+*.sqlite3
+*.map
+dist/
+.vite/
+node_modules/
+frontend/node_modules/
+backend/db.sqlite3
+*.sqlite3
+*.map
+.vite/
+node_modules/
+frontend/node_modules/
+backend/db.sqlite3
+*.safetensors
+*.map
+.vite/
+node_modules/
+frontend/node_modules/
+backend/db.sqlite3
+*.safetensors
+*.map
+.vite/
+all-files.txt
