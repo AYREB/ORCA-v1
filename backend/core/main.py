@@ -133,7 +133,7 @@ def parse_datetime_bound(value):
     return parsed.tz_convert(None)
 
 
-def get_fetch_date_bound(value, *, is_end=False):
+def get_fetch_date_bound(value, *, is_end=False, warmup_days=0):
     parsed = parse_datetime_bound(value)
     if parsed is None:
         return value
@@ -141,8 +141,50 @@ def get_fetch_date_bound(value, *, is_end=False):
     if is_end and not is_date_only_bound(value):
         parsed = parsed + timedelta(days=1)
 
+    if not is_end and warmup_days > 0:
+        parsed = parsed - timedelta(days=warmup_days)
+
     return parsed.date().isoformat()
 
+def get_max_indicator_period(parsed_dsl) -> int:
+    """
+    Walk the DSL conditions and find the longest indicator period.
+    Multiply by 2 to account for weekends/holidays in trading days.
+    """
+    max_period = 50  # safe minimum default
+
+    def walk_conditions(cond):
+        nonlocal max_period
+        if not isinstance(cond, dict):
+            return
+
+        if "AND" in cond:
+            for c in cond["AND"]:
+                walk_conditions(c)
+            return
+        if "OR" in cond:
+            for c in cond["OR"]:
+                walk_conditions(c)
+            return
+
+        for side in ["left", "right"]:
+            node = cond.get(side, {})
+            if "func" in node and "arg" in node:
+                arg = node["arg"]
+                # Check all possible period fields
+                for field in ["period", "slow", "k_period"]:
+                    if field in arg:
+                        max_period = max(max_period, int(arg[field]))
+
+    direction = "LONG" if "LONG" in parsed_dsl else "SHORT"
+    open_cond = parsed_dsl[direction].get("OPEN", {}).get("CONDITIONS", {})
+    close_cond = parsed_dsl[direction].get("CLOSE", {}).get("CONDITIONS", {})
+
+    walk_conditions(open_cond)
+    walk_conditions(close_cond)
+
+    # Multiply by 2 to cover weekends and holidays
+    return max_period * 2
 
 def normalize_datetime_index(df):
     if df is None or df.empty:
@@ -237,23 +279,27 @@ def main(parsed_dsl, initial_balance=10000):
     fetch_start_date = get_fetch_date_bound(start_date)
     fetch_end_date = get_fetch_date_bound(end_date, is_end=True)
 
+    warmup_days = get_max_indicator_period(parsed_dsl)
+
+    fetch_start_date = get_fetch_date_bound(start_date, warmup_days=warmup_days)
+    fetch_end_date = get_fetch_date_bound(end_date, is_end=True)
+
     data_dict = {}
 
     for t in TICKERS:
         data_dict[t] = {}
 
         for tf in DATA_TFS:
-            # print(f"Fetching data for {t} @ {tf} between {start_date} → {end_date}")
 
             if internetConnection:
-                # online mode
                 df = datapull.get_data_with_indicator(
                     ticker=t,
-                    start=fetch_start_date,
+                    start=fetch_start_date,  
                     end=fetch_end_date,
                     interval=tf
                 )
-                df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=False)
+
+                df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=True)
                 x=1
             else:
                 # offline mode
