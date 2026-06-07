@@ -26,7 +26,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.authtoken.models import Token
 
 from core.analysis.parameter_optimiser import build_param_grid, build_param_values, genetic_optimizer, optimizer
-from core.main import dslJSONBacktest, dslTextToJsonBacktest
+from core.main import dslJSONBacktest, dslTextToJsonBacktest, BacktestError
 from .assistant import (
     AssistantError,
     ask_strategy_assistant,
@@ -786,13 +786,37 @@ def backtestDSLJSON(request):
             raise APIError("strategy_id must be an integer.")
         strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-    result = dslJSONBacktest(dsl, initial_balance=initial_balance)
+    try:
+        result = dslJSONBacktest(dsl, initial_balance=initial_balance)
+    except BacktestError as e:
+        return JsonResponse({
+            "error": e.message,
+            "code": e.code,
+            "success": False
+        }, status=400)
+    except ValueError as e:
+        # DSL validation errors
+        return JsonResponse({
+            "error": str(e),
+            "code": "validation_error",
+            "success": False
+        }, status=400)
+    except Exception as e:
+        logger.exception("Unexpected backtest error")
+        return JsonResponse({
+            "error": "An unexpected error occurred. Please try again.",
+            "code": "unexpected_error",
+            "success": False
+        }, status=500)
+
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
+
     if strategy:
         strategy.last_result = result
         strategy.dsl_json = dsl or strategy.dsl_json
         strategy.last_run_at = timezone.now()
         strategy.save(update_fields=["last_result", "dsl_json", "last_run_at", "updated_at"])
+
     return JsonResponse(result, safe=False)
 
 
@@ -1049,10 +1073,15 @@ def strategy_to_dsl(request):
 
     backtest_result = None
     if run_backtest:
-        backtest_result = dslJSONBacktest(
-            result,
-            initial_balance=parse_initial_balance(body.get("initial_balance", 10000))
-        )
+        try:
+            backtest_result = dslJSONBacktest(
+                result,
+                initial_balance=parse_initial_balance(body.get("initial_balance", 10000))
+            )
+        except BacktestError as e:
+            backtest_result = {"error": e.message, "code": e.code}
+        except Exception as e:
+            backtest_result = {"error": "Backtest failed unexpectedly"}
 
     return JsonResponse({
         "success": True,

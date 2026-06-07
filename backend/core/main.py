@@ -227,48 +227,39 @@ def dslTextToJsonBacktest(dsl_text, initial_balance=10000):
     trade_data = main(parsed_dsl, initial_balance=initial_balance)
     return trade_data
 
-def dslJSONBacktest(dsl_json, initial_balance=10000):
-    print("dsl_GO")
-    print(dsl_json)
+class BacktestError(Exception):
+    """Known backtest failure with a user-friendly message"""
+    def __init__(self, message: str, code: str = "backtest_error"):
+        super().__init__(message)
+        self.message = message
+        self.code = code
 
-    with open("mainDEMOJSON.json", "w") as f:
-        json.dump(dsl_json,f,indent=4)
-    
+
+def dslJSONBacktest(dsl_json, initial_balance=10000):
+    # Remove file writes - not safe for production
     trade_data = main(dsl_json, initial_balance=initial_balance)
     return trade_data
 
 
 def main(parsed_dsl, initial_balance=10000):
-    # ---------------- Parse and validate DSL ----------------
     parsed_dsl = apply_default_arguments(parsed_dsl)
-    parsed_dsl = merge_indicator_defaults(parsed_dsl) 
+    parsed_dsl = merge_indicator_defaults(parsed_dsl)
 
-
-    with open("Core/Parsing/dsl_output.json", "w") as f:
+    with open(os.path.join(os.path.dirname(__file__), "dsl_output.json"), "w") as f:
         json.dump(parsed_dsl, f, indent=4)
 
-    # Load indicator definitions from JSON registry
-    with open("Core/Registries/indicatorRegistry.json") as f:
+    with open(os.path.join(os.path.dirname(__file__), "registries", "indicatorRegistry.json")) as f:
         INDICATORS_DEF = json.load(f)["INDICATORS"]
 
-
-    # Build functions dynamically — no hardcoding needed
     INDICATOR_FUNCTIONS = indicatorEvaluator.build_indicator_functions(INDICATORS_DEF)
 
-
-    # Validate DSL
     validateParsedDSL.validate_parsed_dsl(parsed_dsl)
 
-    # ---------------- Pull data ----------------
     TICKERS = extract_tickers(parsed_dsl)
     EXECUTION_TF = extract_execution_timeframe(parsed_dsl)
-
-    DATA_TFS = collect_timeframes_from_dsl(
-        parsed_dsl,
-        EXECUTION_TF
-    )
+    DATA_TFS = collect_timeframes_from_dsl(parsed_dsl, EXECUTION_TF)
     DATEFRAME = extract_dateframe(parsed_dsl)
-    print(DATA_TFS)
+
     if DATEFRAME:
         start_date = DATEFRAME["start"]
         end_date = DATEFRAME["end"]
@@ -276,11 +267,7 @@ def main(parsed_dsl, initial_balance=10000):
         start_date = "2024-01-01"
         end_date = "2025-01-01"
 
-    fetch_start_date = get_fetch_date_bound(start_date)
-    fetch_end_date = get_fetch_date_bound(end_date, is_end=True)
-
     warmup_days = get_max_indicator_period(parsed_dsl)
-
     fetch_start_date = get_fetch_date_bound(start_date, warmup_days=warmup_days)
     fetch_end_date = get_fetch_date_bound(end_date, is_end=True)
 
@@ -290,82 +277,76 @@ def main(parsed_dsl, initial_balance=10000):
         data_dict[t] = {}
 
         for tf in DATA_TFS:
-
-            if internetConnection:
+            try:
                 df = datapull.get_data_with_indicator(
                     ticker=t,
-                    start=fetch_start_date,  
+                    start=fetch_start_date,
                     end=fetch_end_date,
                     interval=tf
                 )
+            except Exception as e:
+                raise BacktestError(
+                    f"Failed to fetch market data for {t} ({tf}). "
+                    f"Please check the ticker symbol and try again.",
+                    code="data_fetch_error"
+                )
 
-                df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=True)
-                x=1
-            else:
-                # offline mode
-                csv_path = os.path.join(DATA_CSV_FOLDER, f"{t}.csv")
-                if not os.path.exists(csv_path):
-                    raise FileNotFoundError(
-                        f"Offline mode enabled but missing file: {csv_path}"
-                    )
+            if df is None or df.empty:
+                raise BacktestError(
+                    f"No data available for {t} on the {tf} timeframe "
+                    f"between {start_date} and {end_date}. "
+                    f"Try a different date range or timeframe.",
+                    code="no_data"
+                )
 
-                df = pd.read_csv(csv_path)
-                df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True).dt.tz_localize(None)
-                df = df.set_index("Datetime")
-                df = df.sort_index()
-                df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=False)
-                x=1
+            df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=True)
 
-                # ⭐ Make offline identical to online: add indicators
-                for ind_name, ind_fn in INDICATOR_FUNCTIONS.items():
-                    try:
-                        df[ind_name] = ind_fn(df)
-                    except Exception as e:
-                        print(f"[WARN] Failed to calculate indicator {ind_name}: {e}")
+            if df.empty:
+                raise BacktestError(
+                    f"No data available for {t} after clipping to "
+                    f"{start_date} → {end_date}.",
+                    code="no_data_after_clip"
+                )
 
             data_dict[t][tf] = df
 
+    # Run backtester
+    try:
+        trade_log, cash, positions, pct_change = backtester(
+            parsed_dsl,
+            data_dict,
+            INDICATOR_FUNCTIONS,
+            initial_balance=initial_balance
+        )
+    except Exception as e:
+        raise BacktestError(
+            f"Backtest failed during execution: {str(e)}",
+            code="execution_error"
+        )
 
+    # No trades is not an error but worth flagging
+    warnings = []
+    if not trade_log:
+        warnings.append(
+            "No trades were triggered. Your conditions may be too strict "
+            "for this date range - try adjusting your indicator thresholds."
+        )
 
-    # run backtester
-    trade_log, cash, positions, pct_change = backtester(
-        parsed_dsl,
-        data_dict,
-        INDICATOR_FUNCTIONS,
-        initial_balance=initial_balance
+    invested = sum(
+        positions[ticker] * data_dict[ticker][EXECUTION_TF].iloc[-1]["Close"]
+        for ticker in positions
     )
-
-   # Decide the timeframe per ticker; default '1h'
-   # or fetch from DSL if available
-    invested = sum(positions[ticker] * data_dict[ticker][EXECUTION_TF].iloc[-1]["Close"] for ticker in positions)    
     total_portfolio = cash + invested
+    pct_change = (total_portfolio - initial_balance) / initial_balance * 100
 
-    # Print summary
-    print("\n💰 Final Cash: ${:.2f}".format(cash))
-    print("💼 Invested in Positions: ${:.2f}".format(invested))
-    print("💵 Total Portfolio Value: ${:.2f}".format(total_portfolio))
-    print(f"💹 Total Portfolio Change: {pct_change:.2f}%\n")
-
-    print("📊 Final Positions:")
-    for ticker, shares in positions.items():
-        print(f" - {ticker}: {shares} shares")
-
-    print_trade_summary(trade_log)
-
-
-
-    # Optionally, save trades to JSON
-    with open("trades_output.json", "w") as f:
-        json.dump(trade_log, f, indent=4)
-
-    
-    data_return = {
+    return {
         "cash": cash,
         "invested": invested,
         "total_portfolio": total_portfolio,
         "pct_change": pct_change,
         "json_dsl": parsed_dsl,
         "trades": trade_log,
+        "warnings": warnings,
         "data": {
             ticker: {
                 tf: dataframe_to_response_records(df)
@@ -374,12 +355,6 @@ def main(parsed_dsl, initial_balance=10000):
             for ticker in data_dict
         }
     }
-    with open("return_data_output.json", "w") as f:
-        json.dump(data_return, f, indent=4)
-
-    #print_trade_summary(trade_log)
-
-    return data_return
 
 # if __name__ == "__main__":
 #     main()
