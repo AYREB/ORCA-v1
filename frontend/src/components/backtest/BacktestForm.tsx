@@ -126,13 +126,35 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
 
   useEffect(() => {
     const fetchRegistry = async () => {
+      let merged: Registry;
       try {
-        const data = await api.getRegistry();
-        setRegistry(data as unknown as Registry);
+        merged = { ...(await api.getRegistry()) } as unknown as Registry;
       } catch (err) {
         console.error("Failed to fetch registry:", err);
-        setRegistry(FALLBACK_REGISTRY);
+        merged = FALLBACK_REGISTRY;
       }
+
+      if (user) {
+        try {
+          const { custom } = await api.getCustomIndicators();
+          if (custom.length > 0) {
+            const indicators = { ...merged.indicators.INDICATORS };
+            const customIndicatorMeta: Record<string, { description: string }> = { ...merged.customIndicatorMeta };
+            for (const indicator of custom) {
+              indicators[indicator.name] = {
+                args: indicator.parameters.map((p) => p.name),
+                defaults: Object.fromEntries(indicator.parameters.map((p) => [p.name, p.default])),
+              };
+              customIndicatorMeta[indicator.name] = { description: indicator.description || "Your custom indicator" };
+            }
+            merged = { ...merged, indicators: { INDICATORS: indicators }, customIndicatorMeta };
+          }
+        } catch (err) {
+          console.error("Failed to fetch custom indicators:", err);
+        }
+      }
+
+      setRegistry(merged);
     };
 
     const fetchStrategies = async () => {

@@ -245,6 +245,94 @@ export interface StrategyAssistantMarketDataResponse {
   market_data: StrategyAssistantMarketDataStatus[];
 }
 
+export interface IndicatorParameter {
+  name: string;
+  default: number | string;
+}
+
+export interface NativeIndicator {
+  name: string;
+  function: string;
+  args: string[];
+  defaults: Record<string, unknown>;
+  supportsTimeframe: boolean;
+  family: string;
+  typicalUse: string;
+  watchout: string;
+}
+
+interface RawNativeIndicator {
+  name: string;
+  function?: string;
+  args?: string[];
+  defaults?: Record<string, unknown>;
+  supports_timeframe?: boolean;
+  family?: string;
+  typical_use?: string;
+  watchout?: string;
+}
+
+export interface IndicatorTestPreview {
+  timestamps: string[];
+  values: number[];
+}
+
+export interface IndicatorTestResult {
+  passed: boolean;
+  errors: string[];
+  preview: IndicatorTestPreview | null;
+}
+
+export interface CustomIndicator {
+  id: number;
+  name: string;
+  description: string;
+  parameters: IndicatorParameter[];
+  code: string;
+  lastTestResult: IndicatorTestResult | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface RawCustomIndicator {
+  id: number;
+  name: string;
+  description?: string | null;
+  parameters?: IndicatorParameter[];
+  code?: string;
+  last_test_result?: IndicatorTestResult | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CustomIndicatorsResponse {
+  native: NativeIndicator[];
+  custom: CustomIndicator[];
+}
+
+export type IndicatorAssistantRole = 'user' | 'assistant';
+export type IndicatorAssistantMode = 'ask' | 'agent';
+
+export interface IndicatorAssistantMessage {
+  role: IndicatorAssistantRole;
+  content: string;
+}
+
+export interface IndicatorAssistantContext {
+  name: string;
+  description: string;
+  parameters: IndicatorParameter[];
+  code: string;
+  lastTestResult: IndicatorTestResult | null;
+}
+
+export interface IndicatorAssistantChatResponse {
+  answer: string;
+  model?: string;
+  provider?: string;
+  mode?: IndicatorAssistantMode;
+}
+
 export interface AuthUser {
   id: number;
   email: string;
@@ -298,6 +386,32 @@ class DjangoAPI {
       updatedAt: raw.updated_at,
       lastRun: raw.last_run_at,
       lastResult: raw.last_result || null,
+    };
+  }
+
+  private normalizeNativeIndicator(raw: RawNativeIndicator): NativeIndicator {
+    return {
+      name: raw.name,
+      function: raw.function || '',
+      args: raw.args || [],
+      defaults: raw.defaults || {},
+      supportsTimeframe: Boolean(raw.supports_timeframe),
+      family: raw.family || '',
+      typicalUse: raw.typical_use || '',
+      watchout: raw.watchout || '',
+    };
+  }
+
+  private normalizeCustomIndicator(raw: RawCustomIndicator): CustomIndicator {
+    return {
+      id: raw.id,
+      name: raw.name,
+      description: raw.description || '',
+      parameters: raw.parameters || [],
+      code: raw.code || '',
+      lastTestResult: raw.last_test_result || null,
+      createdAt: raw.created_at,
+      updatedAt: raw.updated_at,
     };
   }
 
@@ -528,6 +642,89 @@ class DjangoAPI {
   async getStrategy(id: number): Promise<SavedStrategy> {
     const data = await this.request<{ strategy: RawSavedStrategy }>(`/strategies/${id}/`);
     return this.normalizeStrategy(data.strategy);
+  }
+
+  // Custom indicators (native = read-only reference, custom = user-owned CRUD)
+  async getCustomIndicators(): Promise<CustomIndicatorsResponse> {
+    const data = await this.request<{ native: RawNativeIndicator[]; custom: RawCustomIndicator[] }>(
+      '/custom-indicators/'
+    );
+    return {
+      native: data.native.map((indicator) => this.normalizeNativeIndicator(indicator)),
+      custom: data.custom.map((indicator) => this.normalizeCustomIndicator(indicator)),
+    };
+  }
+
+  async createCustomIndicator(payload: {
+    name: string;
+    description?: string;
+    parameters: IndicatorParameter[];
+    code: string;
+  }): Promise<CustomIndicator> {
+    const data = await this.request<{ indicator: RawCustomIndicator }>('/custom-indicators/', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: payload.name,
+        description: payload.description ?? '',
+        parameters: payload.parameters,
+        code: payload.code,
+      }),
+    });
+    return this.normalizeCustomIndicator(data.indicator);
+  }
+
+  async updateCustomIndicator(
+    id: number,
+    payload: Partial<{ name: string; description: string; parameters: IndicatorParameter[]; code: string }>
+  ): Promise<CustomIndicator> {
+    const data = await this.request<{ indicator: RawCustomIndicator }>(`/custom-indicators/${id}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        ...(payload.name !== undefined ? { name: payload.name } : {}),
+        ...(payload.description !== undefined ? { description: payload.description } : {}),
+        ...(payload.parameters !== undefined ? { parameters: payload.parameters } : {}),
+        ...(payload.code !== undefined ? { code: payload.code } : {}),
+      }),
+    });
+    return this.normalizeCustomIndicator(data.indicator);
+  }
+
+  async deleteCustomIndicator(id: number): Promise<void> {
+    await this.request(`/custom-indicators/${id}/`, { method: 'DELETE' });
+  }
+
+  async testCustomIndicator(payload: { code: string; parameters: IndicatorParameter[] }): Promise<IndicatorTestResult> {
+    const data = await this.request<{ test_result: IndicatorTestResult }>('/custom-indicators/test/', {
+      method: 'POST',
+      body: JSON.stringify({ code: payload.code, parameters: payload.parameters }),
+    });
+    return data.test_result;
+  }
+
+  async getCustomIndicatorGuide(): Promise<string> {
+    const data = await this.request<{ markdown: string }>('/custom-indicators/guide/');
+    return data.markdown;
+  }
+
+  async chatIndicatorAssistant(
+    messages: IndicatorAssistantMessage[],
+    indicatorContext: IndicatorAssistantContext,
+    mode: IndicatorAssistantMode = 'ask'
+  ): Promise<IndicatorAssistantChatResponse> {
+    return this.request<IndicatorAssistantChatResponse>('/indicator-assistant/chat/', {
+      method: 'POST',
+      body: JSON.stringify({
+        messages,
+        mode,
+        indicator_context: {
+          name: indicatorContext.name,
+          description: indicatorContext.description,
+          parameters: indicatorContext.parameters,
+          code: indicatorContext.code,
+          last_test_result: indicatorContext.lastTestResult,
+        },
+      }),
+    });
   }
 
   async getDashboardSummary(): Promise<DashboardSummary> {

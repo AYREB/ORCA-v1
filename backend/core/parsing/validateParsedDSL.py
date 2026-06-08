@@ -17,7 +17,7 @@ VALID_INDICATORS = set(INDICATORS_DEF.keys())
 # (import all parser functions you wrote: extract_commands, split_top_level,
 # parse_arguments, parse_operand, parse_condition, parse_logical, parse_dsl)
 
-def validate_parsed_dsl(parsed):
+def validate_parsed_dsl(parsed, extra_indicators=None):
     for cmd, blocks in parsed.items():
         for cmd, blocks in parsed.items():
             if cmd == "TICKER":
@@ -35,14 +35,14 @@ def validate_parsed_dsl(parsed):
 
             # Validate CONDITIONS
             if "CONDITIONS" in block_content:
-                validate_conditions(block_content["CONDITIONS"])
+                validate_conditions(block_content["CONDITIONS"], extra_indicators=extra_indicators)
 
             # Validate ARGUMENTS
             if "ARGUMENTS" in block_content:
                 validate_arguments(cmd, block_name, block_content["ARGUMENTS"])
 
 
-def validate_conditions(cond):
+def validate_conditions(cond, extra_indicators=None):
     """
     Recursively validate conditions.
     Leaf conditions can be comparison dicts with 'left', 'operator', 'right'
@@ -55,21 +55,27 @@ def validate_conditions(cond):
                 if not isinstance(value, list):
                     raise ValueError(f"{key} block must be a list")
                 for sub in value:
-                    validate_conditions(sub)
+                    validate_conditions(sub, extra_indicators=extra_indicators)
                 return
 
         # Leaf operand
         if "left" in cond and "operator" in cond and "right" in cond:
-            validate_operand_with_timeframe(cond["left"])
-            validate_operand_with_timeframe(cond["right"])
+            validate_operand_with_timeframe(cond["left"], extra_indicators=extra_indicators)
+            validate_operand_with_timeframe(cond["right"], extra_indicators=extra_indicators)
         else:
             # It's a single operand like RSI / PRICE
-            validate_operand_with_timeframe(cond)
+            validate_operand_with_timeframe(cond, extra_indicators=extra_indicators)
 
-def validate_operand_with_timeframe(op):
+def validate_operand_with_timeframe(op, extra_indicators=None):
     """
     Validate operands, allowing optional timeframe for indicators.
     Handles PRICE (no timeframe) and indicators (optional timeframe as last argument).
+
+    `extra_indicators`, when provided, is a per-request dict of additional indicator
+    definitions (e.g. the authenticated user's compiled custom indicators) shaped like
+    INDICATORS_DEF entries (`{"args": [...], "defaults": {...}, "supports_timeframe": bool}`).
+    It's threaded through as a parameter rather than merged into the module-level
+    INDICATORS_DEF/VALID_INDICATORS globals to avoid cross-request contamination.
     """
     if isinstance(op, dict):
         if "func" in op:
@@ -83,11 +89,13 @@ def validate_operand_with_timeframe(op):
             if func_name.upper() == "PRICE":
                 return
 
-            # Ensure func_name exists in registry
-            if func_name not in INDICATORS_DEF:
+            # Ensure func_name exists in the native registry or the per-request extras
+            info = INDICATORS_DEF.get(func_name)
+            if info is None and extra_indicators:
+                info = extra_indicators.get(func_name)
+            if info is None:
                 raise ValueError(f"Unknown indicator: {func_name}")
 
-            info = INDICATORS_DEF[func_name]
             expected_args = info.get("args", [])
             supports_timeframe = info.get("supports_timeframe", False)
 
@@ -104,8 +112,8 @@ def validate_operand_with_timeframe(op):
 
         elif "op" in op:
             # Recursively validate left/right
-            validate_operand_with_timeframe(op["left"])
-            validate_operand_with_timeframe(op["right"])
+            validate_operand_with_timeframe(op["left"], extra_indicators=extra_indicators)
+            validate_operand_with_timeframe(op["right"], extra_indicators=extra_indicators)
 
 
 def validate_operand(op):

@@ -19,6 +19,8 @@ import {
 } from "@/lib/api";
 import { Checkbox } from "@/components/ui/checkbox";
 import React from "react";
+import { useSettings } from "@/hooks/useSettings";
+import { safeColor, colorWithAlpha, mixColors } from "@/lib/chartTheme";
 
 interface GeneticOptimizerProps {
   dslJson: Record<string, unknown> | null;
@@ -86,6 +88,8 @@ function getDisplayName(paramPath: string, indicator: string | null): string {
 }
 
 const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: GeneticOptimizerProps) => {
+  const { settings } = useSettings();
+  const chartColors = settings.appearance.chartColors;
   const [paramChoices, setParamChoices] = useState<Record<string, ParameterChoice>>({});
   const [gaSettings, setGaSettings] = useState({
     population: 20,
@@ -358,8 +362,7 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
     const pctToColor = (pct: number) => {
       if (!bestPct) return "hsl(var(--muted-foreground))";
       const norm = Math.max(0, Math.min(1, pct / bestPct));
-      const hue = 150 * norm;
-      return `hsl(${hue}, 70%, 50%)`;
+      return mixColors(chartColors.candleDown, chartColors.candleUp, norm, 0.9, "#ef4444", "#22c55e");
     };
 
     const perGenStats = chunks.map((col) => {
@@ -417,23 +420,22 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
                 y1={c.y1 + 8}
                 x2={c.x2 - 16}
               y2={c.y2 + 8}
-              stroke="hsl(var(--border))"
+              stroke={colorWithAlpha(chartColors.grid, 0.6, "hsl(var(--border))")}
               strokeWidth={2}
                 strokeDasharray="6 3"
-                opacity={0.6}
               />
             ))}
             {nodes.map((n) => (
               <g key={n.key} transform={`translate(${n.x}, ${n.y})`}>
-                <circle cx={0} cy={0} r={14} fill={pctToColor(n.pct)} opacity={0.9} />
+                <circle cx={0} cy={0} r={14} fill={pctToColor(n.pct)} />
                 <rect
                   x={-32}
                   y={18}
                   width={64}
                   height={18}
                   rx={8}
-                  fill="hsl(var(--background))"
-                  stroke="hsl(var(--border))"
+                  fill={safeColor(chartColors.background, "hsl(var(--background))")}
+                  stroke={colorWithAlpha(chartColors.grid, 0.6, "hsl(var(--border))")}
                 />
                 <text
                   x={0}
@@ -449,7 +451,7 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             ))}
             {perGenStats.map((stats, idx) => (
               <g key={`stat-${idx}`} transform={`translate(${idx * columnWidth}, ${svgHeight - 30})`}>
-                <rect x={-38} y={-18} width={76} height={30} rx={8} fill="hsl(var(--background))" stroke="hsl(var(--border))" />
+                <rect x={-38} y={-18} width={76} height={30} rx={8} fill={safeColor(chartColors.background, "hsl(var(--background))")} stroke={colorWithAlpha(chartColors.grid, 0.6, "hsl(var(--border))")} />
                 <text x={0} y={-4} textAnchor="middle" fontSize="10" fill="hsl(var(--muted-foreground))" className="font-mono">
                   G{idx + 1}
                 </text>

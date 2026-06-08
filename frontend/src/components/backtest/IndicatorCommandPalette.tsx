@@ -46,10 +46,12 @@ export default function IndicatorCommandPalette({
   const filtered = q.length > 0
     ? indicators.filter((ind) => {
         const meta = INDICATOR_META[ind];
+        const customMeta = registry.customIndicatorMeta?.[ind];
         return (
           ind.toLowerCase().includes(q) ||
           meta?.description.toLowerCase().includes(q) ||
-          meta?.category.toLowerCase().includes(q)
+          meta?.category.toLowerCase().includes(q) ||
+          customMeta?.description.toLowerCase().includes(q)
         );
       })
     : indicators;
@@ -66,7 +68,7 @@ export default function IndicatorCommandPalette({
 
   const grouped: Record<string, string[]> = {};
   for (const ind of filtered) {
-    const cat = INDICATOR_META[ind]?.category || "Other";
+    const cat = INDICATOR_META[ind]?.category || (registry.customIndicatorMeta?.[ind] ? "Custom" : "Other");
     if (!grouped[cat]) grouped[cat] = [];
     grouped[cat].push(ind);
   }
@@ -141,6 +143,7 @@ export default function IndicatorCommandPalette({
     const ind = registry.indicators.INDICATORS[configuring];
     const argKeys = ind?.args || [];
     const meta = INDICATOR_META[configuring];
+    const customMeta = registry.customIndicatorMeta?.[configuring];
 
     return (
       <motion.div
@@ -152,7 +155,10 @@ export default function IndicatorCommandPalette({
       >
         <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-border">
           <span className="font-mono font-semibold text-[11px] text-primary">{configuring}</span>
-          <span className="text-[10px] text-muted-foreground">{meta?.description}</span>
+          <span className="text-[10px] text-muted-foreground">{meta?.description ?? customMeta?.description}</span>
+          {customMeta && (
+            <span className="text-[8px] uppercase tracking-wide px-1 py-0.5 rounded bg-primary/10 text-primary shrink-0">Custom</span>
+          )}
         </div>
         <div className="px-2.5 py-2 flex items-center gap-2 flex-wrap" onKeyDown={handleConfigKeyDown}>
           {argKeys.map((param: string, i: number) => {
@@ -268,6 +274,7 @@ export default function IndicatorCommandPalette({
               {grouped[cat].map((ind) => {
                 itemIndex++;
                 const meta = INDICATOR_META[ind];
+                const customMeta = registry.customIndicatorMeta?.[ind];
                 const currentIdx = itemIndex;
                 return (
                   <button
@@ -284,7 +291,12 @@ export default function IndicatorCommandPalette({
                     }`}>{ind}</span>
                     <span className={`text-[11px] truncate ${
                       clampedIndex === currentIdx ? "text-accent-foreground/80" : "text-muted-foreground/70"
-                    }`}>{meta?.description}</span>
+                    }`}>{meta?.description ?? customMeta?.description}</span>
+                    {customMeta && (
+                      <span className={`ml-auto text-[8px] uppercase tracking-wide px-1 py-0.5 rounded shrink-0 ${
+                        clampedIndex === currentIdx ? "bg-accent-foreground/15 text-accent-foreground" : "bg-primary/10 text-primary"
+                      }`}>Custom</span>
+                    )}
                   </button>
                 );
               })}

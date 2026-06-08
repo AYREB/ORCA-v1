@@ -6,6 +6,8 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { useSettings } from "@/hooks/useSettings";
+import { safeColor, colorWithAlpha } from "@/lib/chartTheme";
 
 const baseVolatilityData = [
   { date: "Jan", actual: 0.018, predicted: 0.017, conditional: 0.016 },
@@ -23,6 +25,8 @@ const baseVolatilityData = [
 ];
 
 const GarchAnalysis = () => {
+  const { settings } = useSettings();
+  const chartColors = settings.appearance.chartColors;
   const [omega, setOmega] = useState(0.000021);
   const [alpha, setAlpha] = useState(0.0842);
   const [beta, setBeta] = useState(0.9012);
@@ -184,11 +188,11 @@ const GarchAnalysis = () => {
               <AreaChart data={volatilityData}>
                 <defs>
                   <linearGradient id="garchVol" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                    <stop offset="5%" stopColor={safeColor(chartColors.areaTop, "hsl(var(--primary))")} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={safeColor(chartColors.areaBottom, "hsl(var(--primary))")} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <CartesianGrid strokeDasharray="3 3" stroke={colorWithAlpha(chartColors.grid, 0.5, "hsl(var(--border))")} />
                 <XAxis
                   dataKey="date"
                   stroke="hsl(var(--muted-foreground))"
@@ -210,7 +214,7 @@ const GarchAnalysis = () => {
                 <Area
                   type="monotone"
                   dataKey="conditional"
-                  stroke="hsl(var(--primary))"
+                  stroke={safeColor(chartColors.line, "hsl(var(--primary))")}
                   strokeWidth={2}
                   fill="url(#garchVol)"
                 />
@@ -230,7 +234,7 @@ const GarchAnalysis = () => {
           <div className="h-[220px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={volatilityData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <CartesianGrid strokeDasharray="3 3" stroke={colorWithAlpha(chartColors.grid, 0.5, "hsl(var(--border))")} />
                 <XAxis
                   dataKey="date"
                   stroke="hsl(var(--muted-foreground))"
@@ -252,7 +256,7 @@ const GarchAnalysis = () => {
                 <Line
                   type="monotone"
                   dataKey="actual"
-                  stroke="hsl(var(--success))"
+                  stroke={safeColor(chartColors.candleUp, "hsl(var(--success))")}
                   strokeWidth={2}
                   dot={false}
                   name="Actual"
@@ -260,7 +264,7 @@ const GarchAnalysis = () => {
                 <Line
                   type="monotone"
                   dataKey="predicted"
-                  stroke="hsl(var(--primary))"
+                  stroke={safeColor(chartColors.line, "hsl(var(--primary))")}
                   strokeWidth={2}
                   strokeDasharray="5 5"
                   dot={false}
@@ -271,11 +275,11 @@ const GarchAnalysis = () => {
           </div>
           <div className="flex items-center justify-center gap-6 mt-3">
             <div className="flex items-center gap-2">
-              <div className="w-3 h-0.5 bg-success" />
+              <div className="w-3 h-0.5" style={{ backgroundColor: safeColor(chartColors.candleUp, "hsl(var(--success))") }} />
               <span className="text-xs text-muted-foreground">Actual</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-0.5 bg-primary border-dashed" />
+              <div className="w-3 h-0.5 border-dashed" style={{ backgroundColor: safeColor(chartColors.line, "hsl(var(--primary))") }} />
               <span className="text-xs text-muted-foreground">Predicted</span>
             </div>
           </div>

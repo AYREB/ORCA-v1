@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { createContext, useState, useCallback, useContext, useEffect, ReactNode } from "react";
 
 export type ChartColorScheme = "classic" | "neon" | "muted";
 export type ChartType = "candles" | "line" | "area";
@@ -177,7 +177,35 @@ function loadSettings(): AppSettings {
   return DEFAULT_SETTINGS;
 }
 
-export function useSettings() {
+interface SettingsContextValue {
+  settings: AppSettings;
+  updateSettings: (partial: DeepPartial<AppSettings>) => void;
+}
+
+const SettingsContext = createContext<SettingsContextValue | undefined>(undefined);
+
+/**
+ * Single shared settings store, mounted once at the app root (see App.tsx).
+ *
+ * Previously `useSettings` was a plain hook with its own `useState` — every
+ * component that called it (Settings, CandlestickChart, ChartView,
+ * BacktestForm, ...) got its own independent in-memory copy seeded from
+ * localStorage at *that component's* mount time, and each unconditionally
+ * wrote its whole snapshot back to the same storage key on every change. That
+ * caused two bugs: (1) the theme/density effects only ever ran inside whatever
+ * leaf component happened to mount `useSettings` first — not at login, since
+ * neither Dashboard nor Index mounts one — so the chosen theme didn't apply
+ * until routing into a page that does; and (2) saving custom chart colors from
+ * Settings could be immediately clobbered back to stale values by another
+ * already-mounted instance (e.g. a chart) re-persisting *its* frozen snapshot,
+ * and that chart kept rendering from its own stale `chartColors` regardless.
+ *
+ * A single provider with one source of truth fixes both: the theme/density
+ * effects run from the moment the app mounts (before any route renders), and
+ * every consumer shares the same live `settings` — so a save from the Settings
+ * page is immediately visible (and persisted) everywhere, including charts.
+ */
+export const SettingsProvider = ({ children }: { children: ReactNode }) => {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
 
   // Persist to localStorage
@@ -185,7 +213,8 @@ export function useSettings() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   }, [settings]);
 
-  // Apply theme class to <html>
+  // Apply theme class to <html> — runs from the moment the app mounts (i.e.
+  // immediately on login), not only once some leaf page mounts a consumer.
   useEffect(() => {
     const root = document.documentElement;
     const theme = settings.appearance.theme;
@@ -243,5 +272,17 @@ export function useSettings() {
     });
   }, []);
 
-  return { settings, updateSettings };
+  return (
+    <SettingsContext.Provider value={{ settings, updateSettings }}>
+      {children}
+    </SettingsContext.Provider>
+  );
+};
+
+export function useSettings() {
+  const context = useContext(SettingsContext);
+  if (!context) {
+    throw new Error("useSettings must be used within a SettingsProvider");
+  }
+  return context;
 }

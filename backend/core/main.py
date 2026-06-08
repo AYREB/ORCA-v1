@@ -43,9 +43,14 @@ dsl_text_example = """
 """
 
 
-def merge_indicator_defaults(parsed_dsl, registry_path="Core/Registries/indicatorRegistry.json"):
+def merge_indicator_defaults(parsed_dsl, registry_path="Core/Registries/indicatorRegistry.json", extra_indicators=None):
     """
     Ensures all indicator calls have dict args with defaults applied.
+
+    `extra_indicators`, when provided, is a per-request dict of additional indicator
+    definitions (e.g. the authenticated user's compiled custom indicators), keyed by
+    their *exact* (case-sensitive) DSL name — unlike native indicators, which are looked
+    up uppercase per the registry's all-caps convention.
     """
     with open(registry_path, "r") as f:
         INDICATORS_DEF = json.load(f)["INDICATORS"]
@@ -53,20 +58,26 @@ def merge_indicator_defaults(parsed_dsl, registry_path="Core/Registries/indicato
     def _resolve_args(node):
         if isinstance(node, dict):
             if "func" in node and "arg" in node:
-                func_name = node["func"].upper()
+                raw_name = node["func"]
                 provided = node["arg"]
-                default_args = INDICATORS_DEF.get(func_name, {}).get("defaults", {})
-                arg_names = INDICATORS_DEF.get(func_name, {}).get("args", [])
+                info = INDICATORS_DEF.get(raw_name.upper()) or (extra_indicators or {}).get(raw_name)
 
-                final_args = {}
-                for name in arg_names:
-                    if name in provided:
-                        final_args[name] = provided[name]
-                    elif str(arg_names.index(name)) in provided:
-                        final_args[name] = provided[str(arg_names.index(name))]
-                    else:
-                        final_args[name] = default_args.get(name, None)
-                node["arg"] = final_args
+                if info is not None:
+                    default_args = info.get("defaults", {})
+                    arg_names = info.get("args", [])
+
+                    final_args = {}
+                    for name in arg_names:
+                        if name in provided:
+                            final_args[name] = provided[name]
+                        elif str(arg_names.index(name)) in provided:
+                            final_args[name] = provided[str(arg_names.index(name))]
+                        else:
+                            final_args[name] = default_args.get(name, None)
+                    node["arg"] = final_args
+                # else: unknown to both registries — leave `provided` untouched so
+                # validation reports "Unknown indicator" with the user's actual args
+                # intact, instead of silently wiping them to {} first.
 
             for v in node.values():
                 _resolve_args(v)
@@ -177,29 +188,41 @@ def clip_dataframe_to_dateframe(df, start_value, end_value, *, clip_start=True):
     return clipped
 
 
-def dslTextToJsonBacktest(dsl_text, initial_balance=10000):
+def dslTextToJsonBacktest(dsl_text, initial_balance=10000, custom_indicators=None):
     print("dsl_GO")
     print(dsl_text)
     parsed_dsl = parser.parse_dsl(dsl_text)
     print(parsed_dsl)
-    trade_data = main(parsed_dsl, initial_balance=initial_balance)
+    trade_data = main(parsed_dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
     return trade_data
 
-def dslJSONBacktest(dsl_json, initial_balance=10000):
+def dslJSONBacktest(dsl_json, initial_balance=10000, custom_indicators=None):
     print("dsl_GO")
     print(dsl_json)
 
     with open("mainDEMOJSON.json", "w") as f:
         json.dump(dsl_json,f,indent=4)
-    
-    trade_data = main(dsl_json, initial_balance=initial_balance)
+
+    trade_data = main(dsl_json, initial_balance=initial_balance, custom_indicators=custom_indicators)
     return trade_data
 
 
-def main(parsed_dsl, initial_balance=10000):
+def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
+    # ---------------- Custom indicators (per authenticated user) ----------------
+    # `custom_indicators` is a plain dict the API layer builds from the user's compiled
+    # CustomIndicator rows: {name: {"calculate": fn, "args": [...], "defaults": {...}}}.
+    # core/ stays decoupled from Django/api — it never imports the sandbox/compiler,
+    # it just executes the callables it's handed.
+    custom_indicators = custom_indicators or {}
+    CUSTOM_INDICATOR_DEFS = {
+        name: {"args": v["args"], "defaults": v["defaults"], "supports_timeframe": False}
+        for name, v in custom_indicators.items()
+    }
+    CUSTOM_INDICATOR_FUNCTIONS = {name: v["calculate"] for name, v in custom_indicators.items()}
+
     # ---------------- Parse and validate DSL ----------------
     parsed_dsl = apply_default_arguments(parsed_dsl)
-    parsed_dsl = merge_indicator_defaults(parsed_dsl) 
+    parsed_dsl = merge_indicator_defaults(parsed_dsl, extra_indicators=CUSTOM_INDICATOR_DEFS)
 
 
     with open("Core/Parsing/dsl_output.json", "w") as f:
@@ -215,7 +238,7 @@ def main(parsed_dsl, initial_balance=10000):
 
 
     # Validate DSL
-    validateParsedDSL.validate_parsed_dsl(parsed_dsl)
+    validateParsedDSL.validate_parsed_dsl(parsed_dsl, extra_indicators=CUSTOM_INDICATOR_DEFS)
 
     # ---------------- Pull data ----------------
     TICKERS = extract_tickers(parsed_dsl)
@@ -286,7 +309,8 @@ def main(parsed_dsl, initial_balance=10000):
         parsed_dsl,
         data_dict,
         INDICATOR_FUNCTIONS,
-        initial_balance=initial_balance
+        initial_balance=initial_balance,
+        custom_indicator_functions=CUSTOM_INDICATOR_FUNCTIONS
     )
 
    # Decide the timeframe per ticker; default '1h'

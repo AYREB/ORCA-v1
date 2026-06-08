@@ -21,6 +21,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useSettings } from "@/hooks/useSettings";
+import { safeColor, colorWithAlpha } from "@/lib/chartTheme";
 import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -119,6 +121,8 @@ const Dashboard = () => {
   const [range, setRange] = useState<RangeKey>("all");
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { settings } = useSettings();
+  const chartColors = settings.appearance.chartColors;
 
   useEffect(() => {
     const loadSummary = async () => {
@@ -348,11 +352,11 @@ const Dashboard = () => {
                         <AreaChart data={chartSeries} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
                           <defs>
                             <linearGradient id="dashboardEquityFill" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.35} />
-                              <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.02} />
+                              <stop offset="5%" stopColor={safeColor(chartColors.areaTop, "hsl(var(--primary))")} stopOpacity={0.35} />
+                              <stop offset="95%" stopColor={safeColor(chartColors.areaBottom, "hsl(var(--primary))")} stopOpacity={0.02} />
                             </linearGradient>
                           </defs>
-                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                          <CartesianGrid strokeDasharray="3 3" stroke={colorWithAlpha(chartColors.grid, 0.5, "hsl(var(--border))")} />
                           <XAxis
                             dataKey="xLabel"
                             stroke="hsl(var(--muted-foreground))"
@@ -377,7 +381,7 @@ const Dashboard = () => {
                           <Area
                             type="monotone"
                             dataKey="equity"
-                            stroke="hsl(var(--primary))"
+                            stroke={safeColor(chartColors.line, "hsl(var(--primary))")}
                             strokeWidth={2.5}
                             fill="url(#dashboardEquityFill)"
                             dot={false}

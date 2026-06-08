@@ -59,11 +59,40 @@ def _eval_volume(merged_args, current_ticker, timeframe, context_index, data_dic
         return None, None
 
 
+def _eval_custom_indicator(calculate_fn, merged_args, offset, current_ticker, context_index,
+                           data_dict, execution_tf):
+    """
+    Evaluate a user-authored custom indicator. Mirrors `_eval_price` — always runs
+    against `execution_tf` (never `timeframe`) so `context["i"]` aligns positionally
+    with the row the main loop is on, and uses the exact `(data, context, **params)`
+    contract `api.indicator_sandbox.compile_indicator` produces.
+    """
+    if current_ticker not in data_dict or execution_tf not in data_dict[current_ticker]:
+        return None, None
+    try:
+        i = context_index - int(offset or 0)
+    except (TypeError, ValueError):
+        return None, None
+    if i < 0:
+        return None, None
+    try:
+        value = calculate_fn(data_dict[current_ticker][execution_tf], {"i": i}, **merged_args)
+    except Exception:
+        return None, None
+
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        return None, None
+    value = float(value)
+    if np.isnan(value):
+        return None, None
+    return value, None
+
+
 # ---------------- OPERAND EVALUATOR ---------------- #
 
 def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
                  context_index=None, global_timeframe="1h", allowed_timeframes=None,
-                 execution_tf=None):
+                 execution_tf=None, custom_indicator_functions=None):
     """
     Evaluate a DSL operand node and return (value, timeframe).
     Returns (None, None) if the operand cannot be evaluated.
@@ -82,9 +111,11 @@ def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
     # Arithmetic
     if "op" in op:
         lv, _ = eval_operand(op["left"],  row, indicator_functions, data_dict, ticker,
-                              context_index, global_timeframe, allowed_timeframes, execution_tf)
+                              context_index, global_timeframe, allowed_timeframes, execution_tf,
+                              custom_indicator_functions)
         rv, _ = eval_operand(op["right"], row, indicator_functions, data_dict, ticker,
-                              context_index, global_timeframe, allowed_timeframes, execution_tf)
+                              context_index, global_timeframe, allowed_timeframes, execution_tf,
+                              custom_indicator_functions)
         if lv is None or rv is None:
             return None, None
         try:
@@ -117,6 +148,17 @@ def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
 
         if upper == "VOLUME":
             return _eval_volume(merged_args, current_ticker, timeframe, context_index, data_dict)
+
+        # Custom (user-authored) indicators — dispatched by exact-case name, always
+        # against execution_tf, using the (data, context, **params) contract. Must
+        # come before the native allowed_timeframes/indicator_functions lookup below,
+        # since custom indicators never go through data_dict[ticker][timeframe] or the
+        # vectorized-series contract.
+        if custom_indicator_functions and func_name in custom_indicator_functions:
+            return _eval_custom_indicator(
+                custom_indicator_functions[func_name], merged_args, offset,
+                current_ticker, context_index, data_dict, execution_tf
+            )
 
         # Remove duplicate timeframe pop that existed in original
         if allowed_timeframes and timeframe not in allowed_timeframes:
@@ -158,7 +200,7 @@ def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
 
 def evaluate_condition(cond, row, indicator_functions, data_dict=None, ticker=None,
                        context_index=None, allowed_timeframes=None, execution_tf=None,
-                       debug=False):
+                       debug=False, custom_indicator_functions=None):
     """
     Evaluate a DSL condition node and return a boolean.
     Supports AND / OR recursion and leaf comparisons.
@@ -166,14 +208,16 @@ def evaluate_condition(cond, row, indicator_functions, data_dict=None, ticker=No
     if "AND" in cond:
         return all(
             evaluate_condition(c, row, indicator_functions, data_dict, ticker,
-                               context_index, allowed_timeframes, execution_tf, debug=debug)
+                               context_index, allowed_timeframes, execution_tf, debug=debug,
+                               custom_indicator_functions=custom_indicator_functions)
             for c in cond["AND"]
         )
 
     if "OR" in cond:
         return any(
             evaluate_condition(c, row, indicator_functions, data_dict, ticker,
-                               context_index, allowed_timeframes, execution_tf, debug=debug)
+                               context_index, allowed_timeframes, execution_tf, debug=debug,
+                               custom_indicator_functions=custom_indicator_functions)
             for c in cond["OR"]
         )
 
@@ -181,7 +225,8 @@ def evaluate_condition(cond, row, indicator_functions, data_dict=None, ticker=No
     tf = _default_tf(allowed_timeframes)
     shared = dict(indicator_functions=indicator_functions, data_dict=data_dict, ticker=ticker,
                   context_index=context_index, global_timeframe=tf,
-                  allowed_timeframes=allowed_timeframes, execution_tf=execution_tf)
+                  allowed_timeframes=allowed_timeframes, execution_tf=execution_tf,
+                  custom_indicator_functions=custom_indicator_functions)
 
     lv, ltf = eval_operand(cond["left"],  row, **shared)
     rv, _   = eval_operand(cond["right"], row, **shared)
@@ -204,7 +249,8 @@ def evaluate_condition(cond, row, indicator_functions, data_dict=None, ticker=No
 
 
 def evaluate_condition_capture(cond, row, indicator_functions, data_dict, ticker,
-                               context_index, allowed_timeframes, execution_tf):
+                               context_index, allowed_timeframes, execution_tf,
+                               custom_indicator_functions=None):
     """
     Evaluate a DSL condition and return (result, left_val, right_val, timeframe).
     Useful for trade logging and debugging.
@@ -212,7 +258,8 @@ def evaluate_condition_capture(cond, row, indicator_functions, data_dict, ticker
     if "AND" in cond:
         results = [
             evaluate_condition_capture(c, row, indicator_functions, data_dict, ticker,
-                                       context_index, allowed_timeframes, execution_tf)
+                                       context_index, allowed_timeframes, execution_tf,
+                                       custom_indicator_functions=custom_indicator_functions)
             for c in cond["AND"]
         ]
         first = results[0] if results else (None, None, None, None)
@@ -221,7 +268,8 @@ def evaluate_condition_capture(cond, row, indicator_functions, data_dict, ticker
     if "OR" in cond:
         results = [
             evaluate_condition_capture(c, row, indicator_functions, data_dict, ticker,
-                                       context_index, allowed_timeframes, execution_tf)
+                                       context_index, allowed_timeframes, execution_tf,
+                                       custom_indicator_functions=custom_indicator_functions)
             for c in cond["OR"]
         ]
         first = results[0] if results else (None, None, None, None)
@@ -231,7 +279,8 @@ def evaluate_condition_capture(cond, row, indicator_functions, data_dict, ticker
     tf = _default_tf(allowed_timeframes)
     shared = dict(indicator_functions=indicator_functions, data_dict=data_dict, ticker=ticker,
                   context_index=context_index, global_timeframe=tf,
-                  allowed_timeframes=allowed_timeframes, execution_tf=execution_tf)
+                  allowed_timeframes=allowed_timeframes, execution_tf=execution_tf,
+                  custom_indicator_functions=custom_indicator_functions)
 
     lv, ltf = eval_operand(cond["left"],  row, **shared)
     rv, _   = eval_operand(cond["right"], row, **shared)

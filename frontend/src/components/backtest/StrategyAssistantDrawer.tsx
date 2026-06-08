@@ -1,6 +1,7 @@
-import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Bot, Lightbulb, Loader2, MessageSquareText, Send, ShieldCheck, Sparkles } from "lucide-react";
 import { api, StrategyAssistantContext, StrategyAssistantMessage } from "@/lib/api";
+import MarkdownContent from "@/components/MarkdownContent";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -48,124 +49,6 @@ const initialMessages: StrategyAssistantMessage[] = [
       "I can read your builder fields, inspect cached ticker data, infer the trade thesis, check risk/reward, and suggest practical numeric values to test. I will not edit the strategy or give live buy/sell advice.",
   },
 ];
-
-const renderInlineMarkdown = (text: string, keyPrefix: string): ReactNode[] => {
-  const nodes: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+?\*\*)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
-    }
-
-    const token = match[0];
-    if (token.startsWith("`")) {
-      nodes.push(
-        <code key={`${keyPrefix}-code-${match.index}`} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-          {token.slice(1, -1)}
-        </code>
-      );
-    } else {
-      nodes.push(
-        <strong key={`${keyPrefix}-strong-${match.index}`} className="font-semibold">
-          {token.slice(2, -2)}
-        </strong>
-      );
-    }
-
-    lastIndex = match.index + token.length;
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
-  }
-
-  return nodes;
-};
-
-const MarkdownMessage = ({ content }: { content: string }) => {
-  const lines = content.split(/\r?\n/);
-  const blocks: ReactNode[] = [];
-  let paragraphLines: string[] = [];
-  let listType: "ul" | "ol" | null = null;
-  let listItems: string[] = [];
-
-  const flushParagraph = () => {
-    if (paragraphLines.length === 0) return;
-    const text = paragraphLines.join(" ");
-    blocks.push(
-      <p key={`p-${blocks.length}`} className="whitespace-normal">
-        {renderInlineMarkdown(text, `p-${blocks.length}`)}
-      </p>
-    );
-    paragraphLines = [];
-  };
-
-  const flushList = () => {
-    if (!listType || listItems.length === 0) return;
-    const Tag = listType;
-    blocks.push(
-      <Tag key={`list-${blocks.length}`} className={`${listType === "ul" ? "list-disc" : "list-decimal"} space-y-1 pl-5`}>
-        {listItems.map((item, itemIndex) => (
-          <li key={`${blocks.length}-${itemIndex}`}>{renderInlineMarkdown(item, `li-${blocks.length}-${itemIndex}`)}</li>
-        ))}
-      </Tag>
-    );
-    listType = null;
-    listItems = [];
-  };
-
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      flushParagraph();
-      flushList();
-      return;
-    }
-
-    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const level = heading[1].length;
-      const Tag = (`h${level}` as "h1" | "h2" | "h3");
-      blocks.push(
-        <Tag key={`h-${index}`} className="font-semibold text-foreground">
-          {renderInlineMarkdown(heading[2], `h-${index}`)}
-        </Tag>
-      );
-      return;
-    }
-
-    const unordered = /^[-*]\s+(.+)$/.exec(trimmed);
-    if (unordered) {
-      flushParagraph();
-      if (listType !== "ul") flushList();
-      listType = "ul";
-      listItems.push(unordered[1]);
-      return;
-    }
-
-    const ordered = /^\d+\.\s+(.+)$/.exec(trimmed);
-    if (ordered) {
-      flushParagraph();
-      if (listType !== "ol") flushList();
-      listType = "ol";
-      listItems.push(ordered[1]);
-      return;
-    }
-
-    flushList();
-    paragraphLines.push(trimmed);
-  });
-
-  flushParagraph();
-  flushList();
-
-  return <div className="space-y-2">{blocks}</div>;
-};
 
 const StrategyAssistantDrawer = ({ context }: StrategyAssistantDrawerProps) => {
   const [open, setOpen] = useState(false);
@@ -283,7 +166,7 @@ const StrategyAssistantDrawer = ({ context }: StrategyAssistantDrawerProps) => {
                         Orca
                       </div>
                     )}
-                    {isUser ? <p className="whitespace-pre-wrap">{message.content}</p> : <MarkdownMessage content={message.content} />}
+                    {isUser ? <p className="whitespace-pre-wrap">{message.content}</p> : <MarkdownContent content={message.content} />}
                   </div>
                 </div>
               );

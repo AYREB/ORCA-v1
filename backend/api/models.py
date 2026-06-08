@@ -16,6 +16,24 @@ class Strategy(models.Model):
         return f"{self.name} ({self.user.email})"
 
 
+class CustomIndicator(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="custom_indicators")
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    parameters = models.JSONField(default=list, blank=True)
+    code = models.TextField(blank=True)
+    last_test_result = models.JSONField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user", "name")
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.name} ({self.user.email})"
+
+
 class BacktestRun(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="backtest_runs")
     strategy = models.ForeignKey(

@@ -305,6 +305,16 @@ OPENAI_API_BASE_URL = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v
 ORCA_ASSISTANT_MODEL = os.getenv("ORCA_ASSISTANT_MODEL", "gpt-5.1")
 ORCA_ASSISTANT_OLLAMA_BASE_URL = os.getenv("ORCA_ASSISTANT_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 ORCA_ASSISTANT_OLLAMA_MODEL = os.getenv("ORCA_ASSISTANT_OLLAMA_MODEL", "gemma3:4b")
+# Local inference is much slower than a hosted API — especially a "cold" request
+# where Ollama has to load the model back into memory first (it unloads idle
+# models after ORCA_ASSISTANT_OLLAMA_KEEP_ALIVE). Give it a separate, longer
+# budget than the hosted-provider timeout below so a slow-but-fine local
+# response isn't mistaken for a hung service.
+ORCA_ASSISTANT_OLLAMA_TIMEOUT_SECONDS = env_float("ORCA_ASSISTANT_OLLAMA_TIMEOUT_SECONDS", 120.0, minimum=1.0)
+# How long Ollama keeps the model loaded in memory after the last request
+# (Ollama's own default is "5m"). Keeping it resident across a chat session
+# avoids paying the multi-second "cold load" cost on every message.
+ORCA_ASSISTANT_OLLAMA_KEEP_ALIVE = os.getenv("ORCA_ASSISTANT_OLLAMA_KEEP_ALIVE", "30m")
 ORCA_ASSISTANT_TIMEOUT_SECONDS = env_float("ORCA_ASSISTANT_TIMEOUT_SECONDS", 30.0, minimum=1.0)
 ORCA_ASSISTANT_TEMPERATURE = env_float("ORCA_ASSISTANT_TEMPERATURE", 0.2, minimum=0.0)
 ORCA_ASSISTANT_MAX_OUTPUT_TOKENS = env_int("ORCA_ASSISTANT_MAX_OUTPUT_TOKENS", 900, minimum=100)

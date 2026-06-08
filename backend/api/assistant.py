@@ -51,6 +51,59 @@ Response style:
 """.strip()
 
 
+INDICATOR_ASSISTANT_INSTRUCTIONS_HEADER = """
+You are Orca's Custom Indicator assistant.
+
+Your role:
+- Help users translate a trading idea into a custom indicator that fits Orca's rigid contract: `def calculate(data, context, **params): ... return result`.
+- **`result` is always a plain number — `int`/`float`, or `float("nan")` when undefined — never a string, bool, or label.** This is the single most common way drafted indicators fail the gate, especially for "signal"-shaped ideas (Bollinger Band breakout, crossover, regime flag, ...): the instinct is to write `result = "buy"` / `"sell"` / `True`, but that's a *strategy condition's* shape, not an *indicator's*. An indicator must always collapse to one number. Translate signal ideas into a number that preserves the same information instead — e.g. `result = 1.0` when the bullish condition holds and `-1.0` when the bearish one does (then a strategy can write `MyBandSignal(...) > 0`), or — usually better — a continuous reading such as `(close - lower_band) / (upper_band - lower_band)` that *is* the thing the signal is based on, so the strategy can threshold it however it likes. If you ever catch yourself about to write a quoted word or `True`/`False` into `result`, stop and pick a numeric encoding instead.
+- Read the user's current draft (name, description, declared parameters, code body, and the most recent compiler/tester result if present) and explain it, suggest improvements, or help debug a failing run.
+- Treat the reference guide below as the source of truth for the data/context/params shapes, what's allowed in the sandbox, and how the compiler/tester works — point users to the specific part of it that answers their question.
+
+Strict boundaries:
+- You cannot write to, edit, compile, run, test, or save the user's indicator — including its declared parameters. The draft (name, description, parameters, code, last test result) is read-only context.
+- You may draft example code in your reply as plain text to illustrate an idea, but make clear the user has to paste/adapt it into the editor and run the tester themselves — never claim you applied or tested anything.
+- You can discuss and suggest changes to the declared parameters too — e.g. propose renaming one, adding a new one the logic needs, or dropping one that's unused — but you cannot apply them yourself; tell the user to edit the Parameters panel directly, or switch to **Agent** mode, which writes the code and updates the parameter list together.
+- If the user reports a compiler/tester error, address that exact error and explain the most likely fix.
+
+Response style:
+- Be concise, concrete, and practical. Short code snippets are welcome when they clarify a point.
+- Use markdown naturally: short paragraphs, bullets, and inline code are fine. Avoid forcing a fixed template onto every reply.
+- Mention which part of the draft (name, a parameter, a specific line of logic) you're referencing when that helps.
+""".strip()
+
+
+INDICATOR_AGENT_INSTRUCTIONS_HEADER = """
+You are Orca's Custom Indicator agent.
+
+Your role:
+- Write or rewrite the BODY of the user's custom indicator on request, so it can be applied directly into the editor and fits Orca's rigid contract: `def calculate(data, context, **params): ... return result`.
+- **`result` must always end up a plain number — `int`/`float`, or `float("nan")` when undefined — NEVER a string, bool, or label.** This is the #1 reason applied code fails the gate. The trap: when a user describes a "signal" idea (a Bollinger Band breakout, a crossover, a regime flag, a buy/sell rule, ...), it's tempting to write `result = "buy"` / `"sell"` / `True` / `False` — DON'T. That is a *strategy condition's* shape (what the user compares the indicator's output *against*), not the indicator's own output. Always translate the idea into a number that carries the same meaning instead: either a discrete encoding (`result = 1.0` for the bullish case, `-1.0` for the bearish one, `0.0`/`float("nan")` for neither — so a strategy can later write `MyBandSignal(...) > 0`), or — generally the better, more useful indicator — a continuous reading that *is* the underlying measurement, e.g. `result = (close - lower_band) / (upper_band - lower_band)` for "where is price within the bands, as a fraction." Before you finish, scan your own draft for `result = "`, `result = True`, `result = False` — if you see any, rewrite that branch numerically.
+- Read the user's current draft (name, description, declared parameters, code body, and the most recent compiler/tester result if present) before writing, and build on it rather than ignoring it.
+- When the body you write needs a declared parameter that doesn't exist yet, or stops needing one that does (you renamed `period` to `lookback`, dropped `multiplier`, added `smoothing`, ...), update the declared parameter list to match — see "Managing declared parameters" below. Keep the body and the declared list in sync: never leave the body reading a parameter you didn't declare, or a declared parameter the body never reads.
+
+Output contract — follow this exactly, every time you write or change code:
+- Give a short explanation (1-3 sentences) of what the code does or what you changed, then exactly one fenced ```python code block — and, only when the declared parameters need to change, exactly one fenced ```json code block immediately after it (see "Managing declared parameters").
+- The python code block must contain ONLY the function body — never the `def calculate(data, context, **params):` line and never a `return` line. Orca adds those automatically and applies your block as a straight replacement of the body.
+- The body must finish by assigning the indicator's final value to a variable named `result`, and it must be numeric — a plain `int`/`float`, or `float("nan")` when undefined (e.g. not enough lookback yet). **Never** a string (`"buy"`, `"sell"`, `"bullish"`, ...), a `bool` (`True`/`False`), or anything else — see the numeric-result rule under "Your role" above; re-read your own draft for a quoted or boolean `result` assignment before you output it. Do not write `return` yourself.
+- You may use `data` (an OHLCV pandas DataFrame with Open/High/Low/Close/Volume columns), `context` (`{"i": <integer index of the current candle>}`), `params` (the declared parameters dict — read with `params.get("name", default)`), plus `pd`, `np`, `math`, and ordinary safe builtins. No imports, no file/network/system access, no eval/exec/dunder access — the sandbox rejects all of that.
+- Never read `data` beyond `context["i"]` — that is lookahead bias and the whole point of `context["i"]` is to prevent it.
+- Output exactly one python code block per reply, and at most one json block. Orca takes the last block of each kind in your message and applies it straight into the editor — don't show multiple alternatives, pick the best one.
+
+Managing declared parameters:
+- The optional ```json block must be a JSON array holding the *complete*, intended parameter list — e.g. `[{"name": "lookback", "default": 20}, {"name": "smoothing", "default": 2}]`. Orca replaces the whole declared list with it (a straight replacement, not a diff/patch): include every parameter the rewritten body needs — the ones you kept and any new ones — and simply leave out any you renamed away from or removed.
+- Each entry needs a `name` that is a valid, unique Python identifier and is NOT one of the reserved words `data, context, params, self, result, calculate, ticker, timeframe, offset` (these collide with the function contract or the DSL operand mechanism and are rejected at save time), and a `default` that is a plain number or short string.
+- Only emit the json block when the parameter list actually needs to change. If your rewritten body uses exactly the same declared parameter names as before, omit it — Orca leaves the declared list untouched in that case.
+
+Strict boundaries:
+- You cannot run the compiler/tester or save the indicator yourself. After your code (and parameters, if you changed them) are applied, remind the user (briefly) to run the tester.
+- If the request is ambiguous, make the most reasonable assumption, write working code for it, and note the assumption in one short clause — don't block on a clarifying question.
+
+Response style:
+- Be concise: lead with what you wrote or changed and why, then the code block(s). Skip filler.
+""".strip()
+
+
 INDICATOR_KNOWLEDGE: dict[str, dict[str, str]] = {
     "PRICE": {
         "family": "Price action",
@@ -973,6 +1026,12 @@ def normalize_strategy_context(raw_context: Any) -> dict[str, Any]:
     return raw_context
 
 
+def normalize_indicator_context(raw_context: Any) -> dict[str, Any]:
+    if not isinstance(raw_context, dict):
+        raise AssistantError("indicator_context must be a JSON object.")
+    return raw_context
+
+
 def _extract_response_text(payload: dict[str, Any]) -> str:
     output_text = payload.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
@@ -993,6 +1052,44 @@ def _extract_response_text(payload: dict[str, Any]) -> str:
     return "\n".join(part.strip() for part in parts if part.strip()).strip()
 
 
+def _indicator_guide_text() -> str:
+    path = Path(__file__).resolve().parent / "docs" / "custom_indicator_guide.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("Custom indicator guide is missing at %s", path)
+        return ""
+
+
+def _indicator_assistant_instructions(mode: str = "ask") -> str:
+    header = INDICATOR_AGENT_INSTRUCTIONS_HEADER if mode == "agent" else INDICATOR_ASSISTANT_INSTRUCTIONS_HEADER
+    guide = _indicator_guide_text()
+    if not guide:
+        return header
+    return (
+        f"{header}\n\n"
+        "Reference guide for building custom indicators (the same one shown to users on the Docs page):\n"
+        f"{guide}"
+    )
+
+
+def _indicator_context_text(indicator_context: dict[str, Any]) -> str:
+    max_chars = int(getattr(settings, "ORCA_ASSISTANT_MAX_CONTEXT_CHARS", 20000))
+    payload = {
+        "name": _safe_text(indicator_context.get("name"), ""),
+        "description": _safe_text(indicator_context.get("description"), ""),
+        "parameters": _as_list(indicator_context.get("parameters")),
+        "code": indicator_context.get("code") if isinstance(indicator_context.get("code"), str) else "",
+        "last_test_result": indicator_context.get("last_test_result"),
+    }
+    raw = json.dumps(payload, indent=2, sort_keys=True)
+    header = "User's current custom-indicator draft (read-only; the locked def/return lines are added automatically and not shown here):\n"
+    budget = max_chars - len(header)
+    if budget <= 0:
+        return header[:max_chars]
+    return f"{header}{raw[:budget]}"
+
+
 def _context_text(strategy_context: dict[str, Any]) -> str:
     max_chars = int(getattr(settings, "ORCA_ASSISTANT_MAX_CONTEXT_CHARS", 20000))
     brief = json.dumps(build_strategy_brief(strategy_context), indent=2, sort_keys=True)
@@ -1011,7 +1108,7 @@ def _context_text(strategy_context: dict[str, Any]) -> str:
     return f"{derived_section}{raw_header}{raw_context[:raw_budget]}"
 
 
-def _ask_openai(messages: list[dict[str, str]], strategy_context: dict[str, Any]) -> dict[str, Any]:
+def _ask_openai(messages: list[dict[str, str]], system_prompt: str, context_text: str) -> dict[str, Any]:
     api_key = getattr(settings, "OPENAI_API_KEY", "")
     if not api_key:
         raise AssistantProviderError(
@@ -1023,15 +1120,15 @@ def _ask_openai(messages: list[dict[str, str]], strategy_context: dict[str, Any]
     input_items = [
         _message_item(
             "developer",
-            "Current read-only Orca strategy context follows. Use it to answer the user's next message.\n\n"
-            f"{_context_text(strategy_context)}",
+            "Current read-only Orca context follows. Use it to answer the user's next message.\n\n"
+            f"{context_text}",
         )
     ]
     input_items.extend(_message_item(message["role"], message["content"]) for message in messages)
 
     request_payload = {
         "model": model,
-        "instructions": STRATEGY_ASSISTANT_INSTRUCTIONS,
+        "instructions": system_prompt,
         "input": input_items,
         "max_output_tokens": int(getattr(settings, "ORCA_ASSISTANT_MAX_OUTPUT_TOKENS", 900)),
         "store": bool(getattr(settings, "ORCA_ASSISTANT_STORE_RESPONSES", False)),
@@ -1082,16 +1179,16 @@ def _ask_openai(messages: list[dict[str, str]], strategy_context: dict[str, Any]
     }
 
 
-def _ask_ollama(messages: list[dict[str, str]], strategy_context: dict[str, Any]) -> dict[str, Any]:
+def _ask_ollama(messages: list[dict[str, str]], system_prompt: str, context_text: str) -> dict[str, Any]:
     model = getattr(settings, "ORCA_ASSISTANT_OLLAMA_MODEL", "llama3.1:8b")
     ollama_base = getattr(settings, "ORCA_ASSISTANT_OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
     ollama_messages = [
         {
             "role": "system",
             "content": (
-                f"{STRATEGY_ASSISTANT_INSTRUCTIONS}\n\n"
-                "Current read-only Orca strategy context follows. Use it to answer the user's next message.\n\n"
-                f"{_context_text(strategy_context)}"
+                f"{system_prompt}\n\n"
+                "Current read-only Orca context follows. Use it to answer the user's next message.\n\n"
+                f"{context_text}"
             ),
         },
         *messages,
@@ -1100,6 +1197,11 @@ def _ask_ollama(messages: list[dict[str, str]], strategy_context: dict[str, Any]
         "model": model,
         "messages": ollama_messages,
         "stream": False,
+        # Tell Ollama to keep the model resident between requests — without this
+        # it unloads after ~5 minutes idle (its own default), and the next
+        # request pays a slow "cold load" on top of generation, which is the
+        # usual cause of "service isn't responding"/timeout reports locally.
+        "keep_alive": getattr(settings, "ORCA_ASSISTANT_OLLAMA_KEEP_ALIVE", "30m"),
         "options": {
             "temperature": float(getattr(settings, "ORCA_ASSISTANT_TEMPERATURE", 0.2)),
             "num_predict": int(getattr(settings, "ORCA_ASSISTANT_MAX_OUTPUT_TOKENS", 900)),
@@ -1116,7 +1218,7 @@ def _ask_ollama(messages: list[dict[str, str]], strategy_context: dict[str, Any]
     try:
         with urllib.request.urlopen(
             request,
-            timeout=float(getattr(settings, "ORCA_ASSISTANT_TIMEOUT_SECONDS", 60.0)),
+            timeout=float(getattr(settings, "ORCA_ASSISTANT_OLLAMA_TIMEOUT_SECONDS", 120.0)),
         ) as response:
             response_payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
@@ -1146,17 +1248,32 @@ def _ask_ollama(messages: list[dict[str, str]], strategy_context: dict[str, Any]
     }
 
 
+def _dispatch_assistant(messages: list[dict[str, str]], system_prompt: str, context_text: str) -> dict[str, Any]:
+    provider = str(getattr(settings, "ORCA_ASSISTANT_PROVIDER", "ollama")).strip().lower()
+    if provider == "openai":
+        return _ask_openai(messages, system_prompt, context_text)
+    if provider == "ollama":
+        return _ask_ollama(messages, system_prompt, context_text)
+    raise AssistantProviderError(
+        "Invalid ORCA_ASSISTANT_PROVIDER. Use 'ollama' or 'openai'.",
+        status_code=500,
+    )
+
+
 def ask_strategy_assistant(messages: list[dict[str, str]], strategy_context: dict[str, Any]) -> dict[str, Any]:
     markets = _as_dict(strategy_context.get("markets"))
     if markets:
         prepare_strategy_market_data(markets)
 
-    provider = str(getattr(settings, "ORCA_ASSISTANT_PROVIDER", "ollama")).strip().lower()
-    if provider == "openai":
-        return _ask_openai(messages, strategy_context)
-    if provider == "ollama":
-        return _ask_ollama(messages, strategy_context)
-    raise AssistantProviderError(
-        "Invalid ORCA_ASSISTANT_PROVIDER. Use 'ollama' or 'openai'.",
-        status_code=500,
+    return _dispatch_assistant(messages, STRATEGY_ASSISTANT_INSTRUCTIONS, _context_text(strategy_context))
+
+
+def ask_indicator_assistant(
+    messages: list[dict[str, str]], indicator_context: dict[str, Any], mode: str = "ask"
+) -> dict[str, Any]:
+    normalized_mode = "agent" if mode == "agent" else "ask"
+    response = _dispatch_assistant(
+        messages, _indicator_assistant_instructions(normalized_mode), _indicator_context_text(indicator_context)
     )
+    response["mode"] = normalized_mode
+    return response

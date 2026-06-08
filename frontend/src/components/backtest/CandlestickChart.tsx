@@ -20,6 +20,7 @@ import type {
 import { OHLCData, TradeEntry } from "@/lib/api";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { useSettings, type ChartColors, type ChartType } from "@/hooks/useSettings";
+import { safeColor, colorWithAlpha } from "@/lib/chartTheme";
 
 interface CandlestickChartProps {
   data: OHLCData[];
@@ -69,17 +70,6 @@ const COLOR_SCHEMES: Record<string, Record<string, string>> = {
 type NormalizedCandle = CandlestickData<Time> & { datetime: string };
 type PrimarySeriesApi = ISeriesApi<"Candlestick"> | ISeriesApi<"Line"> | ISeriesApi<"Area">;
 type AreaOptionsPatch = Parameters<ISeriesApi<"Area">["applyOptions"]>[0];
-
-const safeColor = (value: string | undefined, fallback: string) =>
-  /^#[0-9a-fA-F]{6}$/.test(value || "") ? value! : fallback;
-
-const colorWithAlpha = (value: string | undefined, alpha: number, fallback: string) => {
-  const hex = safeColor(value, fallback).replace("#", "");
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-};
 
 const toCandleSeriesData = (rows: NormalizedCandle[]): CandlestickData<Time>[] =>
   rows.map(({ datetime, ...rest }) => rest);

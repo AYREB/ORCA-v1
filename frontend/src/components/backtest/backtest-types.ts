@@ -29,6 +29,7 @@ export interface ConditionSideOperation {
     commands: { COMMANDS: Record<string, any> };
     indicators: { INDICATORS: Record<string, { args: string[]; defaults: Record<string, any> }> };
     arguments: { ARGUMENTS: Record<string, Record<string, Record<string, any>>> };
+    customIndicatorMeta?: Record<string, { description: string }>;
   }
   
   export const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -60,7 +61,7 @@ export interface ConditionSideOperation {
     OBV: { category: "Volume", description: "On-Balance Volume" },
   };
   
-  export const INDICATOR_CATEGORIES = ["Price", "Trend", "Momentum", "Volatility", "Volume"] as const;
+  export const INDICATOR_CATEGORIES = ["Price", "Trend", "Momentum", "Volatility", "Volume", "Custom"] as const;
   
   export const FALLBACK_REGISTRY: Registry = {
     commands: { COMMANDS: { LONG: {}, SHORT: {} } },

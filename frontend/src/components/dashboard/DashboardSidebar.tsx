@@ -1,15 +1,16 @@
-import { 
-  LayoutDashboard, 
-  FlaskConical, 
-  LineChart, 
-  History, 
-  Settings, 
+import {
+  LayoutDashboard,
+  FlaskConical,
+  LineChart,
+  History,
+  Settings,
   HelpCircle,
   LogOut,
   ChevronLeft,
   Sliders,
   Dna,
-  Wallet
+  Wallet,
+  Sigma
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ const navItems = [
   { icon: Sliders, label: "Optimizer", path: "/dashboard/optimizer" },
   { icon: Dna, label: "Genetic", path: "/dashboard/genetic" },
   { icon: LineChart, label: "Strategies", path: "/dashboard/strategies" },
+  { icon: Sigma, label: "Custom Indicators", path: "/dashboard/indicators" },
   { icon: Wallet, label: "Paper Accounts", path: "/dashboard/paper-accounts" },
   { icon: History, label: "History", path: "/dashboard/history" },
 ];

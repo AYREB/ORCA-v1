@@ -48,7 +48,7 @@ def normalize_row_timestamp(value):
 # ---------------- BACKTESTER ---------------- #
 
 def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000,
-               allow_fractional=True, fractional_precision=1):
+               allow_fractional=True, fractional_precision=1, custom_indicator_functions=None):
 
     # -------- STRATEGY SETUP -------- #
     strategy_type = "LONG" if "LONG" in parsed_dsl else "SHORT"
@@ -112,7 +112,8 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
         indicator_functions=indicator_functions,
         data_dict=data_dict,
         allowed_timeframes=allowed_timeframes,
-        execution_tf=execution_tf
+        execution_tf=execution_tf,
+        custom_indicator_functions=custom_indicator_functions
     )
 
     # ---------------- MAIN LOOP ---------------- #

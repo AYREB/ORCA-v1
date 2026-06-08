@@ -1,6 +1,7 @@
 # backend/api/views.py
 import json
 import logging
+import re
 import ssl
 import threading
 import urllib.error
@@ -26,13 +27,22 @@ from rest_framework.authtoken.models import Token
 from core.analysis.parameter_optimiser import build_param_grid, build_param_values, genetic_optimizer, optimizer
 from core.main import dslJSONBacktest, dslTextToJsonBacktest
 from .assistant import (
+    INDICATOR_KNOWLEDGE,
     AssistantError,
+    ask_indicator_assistant,
     ask_strategy_assistant,
     normalize_assistant_messages,
+    normalize_indicator_context,
     normalize_strategy_context,
     prepare_strategy_market_data,
 )
-from .models import BacktestRun, Strategy
+from .indicator_sandbox import (
+    IndicatorValidationError,
+    compile_indicator,
+    run_indicator_test,
+    validate_parameters,
+)
+from .models import BacktestRun, CustomIndicator, Strategy
 
 try:
     import certifi
@@ -47,6 +57,9 @@ genetic_jobs: dict[str, dict[str, Any]] = {}
 
 DEFAULT_INITIAL_BALANCE = 10000.0
 MAX_STRATEGY_NAME_LENGTH = 255
+MAX_INDICATOR_NAME_LENGTH = 120
+MAX_INDICATOR_DESCRIPTION_LENGTH = 2000
+MAX_INDICATOR_CODE_LENGTH = 20000
 
 DEFAULT_RATE_LIMITS = {
     "auth": {"max_requests": 20, "window_seconds": 300},
@@ -264,6 +277,46 @@ def validate_dsl_text(value: Any, field_name: str = "dsl_text") -> str:
     return value
 
 
+INDICATOR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def validate_indicator_name(name: Any) -> str:
+    parsed = str(name or "").strip()
+    if not parsed:
+        raise APIError("Indicator name is required.")
+    if len(parsed) > MAX_INDICATOR_NAME_LENGTH:
+        raise APIError(f"Indicator name must be {MAX_INDICATOR_NAME_LENGTH} characters or fewer.")
+    if not INDICATOR_NAME_PATTERN.match(parsed):
+        raise APIError(
+            "Indicator name must start with a letter and contain only letters, digits, and "
+            "underscores (e.g. MyMomentum) — it doubles as the name you reference it by in "
+            "strategy conditions, like RSI(period=14) or MyMomentum(period=20)."
+        )
+    if parsed.upper() in {item["name"].upper() for item in _native_indicators()}:
+        raise APIError(f"'{parsed}' is a built-in indicator name and can't be used for a custom indicator.")
+    return parsed
+
+
+def validate_indicator_description(value: Any) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise APIError("description must be a string.")
+    if len(value) > MAX_INDICATOR_DESCRIPTION_LENGTH:
+        raise APIError("description exceeds maximum length.")
+    return value
+
+
+def validate_indicator_code(value: Any) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise APIError("code must be a string.")
+    if len(value) > MAX_INDICATOR_CODE_LENGTH:
+        raise APIError("code exceeds maximum length.")
+    return value
+
+
 def validate_dict_payload(value: Any, field_name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise APIError(f"{field_name} must be a JSON object.")
@@ -326,6 +379,19 @@ def serialize_strategy(strategy: Strategy):
         "created_at": strategy.created_at.isoformat(),
         "updated_at": strategy.updated_at.isoformat(),
         "last_run_at": strategy.last_run_at.isoformat() if strategy.last_run_at else None,
+    }
+
+
+def serialize_custom_indicator(indicator: CustomIndicator):
+    return {
+        "id": indicator.id,
+        "name": indicator.name,
+        "description": indicator.description,
+        "parameters": indicator.parameters,
+        "code": indicator.code,
+        "last_test_result": indicator.last_test_result,
+        "created_at": indicator.created_at.isoformat(),
+        "updated_at": indicator.updated_at.isoformat(),
     }
 
 
@@ -716,6 +782,225 @@ def strategy_detail(request, strategy_id: int):
     return json_error("Method not allowed.", status=405)
 
 
+def _native_indicators() -> list[dict[str, Any]]:
+    """Native indicators, read-only: registry config merged with assistant knowledge."""
+    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
+    try:
+        with open(base / "indicatorRegistry.json", encoding="utf-8") as f:
+            registry_data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        registry_data = {}
+
+    indicators = registry_data.get("INDICATORS") if isinstance(registry_data, dict) else None
+    if not isinstance(indicators, dict):
+        return []
+
+    native: list[dict[str, Any]] = []
+    for name, config in indicators.items():
+        if not isinstance(config, dict):
+            continue
+        knowledge = INDICATOR_KNOWLEDGE.get(name, {})
+        native.append(
+            {
+                "name": name,
+                "function": config.get("function", ""),
+                "args": config.get("args", []),
+                "defaults": config.get("defaults", {}),
+                "supports_timeframe": bool(config.get("supports_timeframe", False)),
+                "family": knowledge.get("family", ""),
+                "typical_use": knowledge.get("typical_use", ""),
+                "watchout": knowledge.get("watchout", ""),
+            }
+        )
+    return native
+
+
+def build_custom_indicator_runtime(user) -> dict[str, dict[str, Any]]:
+    """Compile a user's saved custom indicators into the runtime shape `core.main.main`
+    expects: {name: {"calculate": fn, "args": [...], "defaults": {...}}}, keyed by the
+    exact (case-sensitive) name they're referenced by in DSL conditions."""
+    runtime: dict[str, dict[str, Any]] = {}
+    for indicator in CustomIndicator.objects.filter(user=user):
+        try:
+            calculate = compile_indicator(indicator.code)
+        except IndicatorValidationError:
+            continue  # defensive — saved rows are already gate-passed at save time
+        runtime[indicator.name] = {
+            "calculate": calculate,
+            "args": [param["name"] for param in indicator.parameters],
+            "defaults": {param["name"]: param["default"] for param in indicator.parameters},
+        }
+    return runtime
+
+
+def _validate_indicator_parameters(parameters: Any) -> list[dict[str, Any]]:
+    try:
+        return validate_parameters(parameters)
+    except IndicatorValidationError as exc:
+        raise APIError(str(exc))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET", "POST")
+@token_required
+@rate_limit("compute")
+def custom_indicators(request):
+    user = get_authenticated_user(request)
+
+    if request.method == "GET":
+        custom_qs = CustomIndicator.objects.filter(user=user).order_by("-updated_at")
+        return JsonResponse(
+            {
+                "native": _native_indicators(),
+                "custom": [serialize_custom_indicator(indicator) for indicator in custom_qs],
+            }
+        )
+
+    body = parse_body(request)
+    name = validate_indicator_name(body.get("name"))
+    description = validate_indicator_description(body.get("description"))
+    code = validate_indicator_code(body.get("code"))
+    parameters = _validate_indicator_parameters(body.get("parameters"))
+
+    if CustomIndicator.objects.filter(user=user, name__iexact=name).exists():
+        raise APIError("An indicator with that name already exists.")
+
+    test_result = run_indicator_test(code, parameters)
+    if not test_result.get("passed"):
+        return JsonResponse(
+            {"error": "Indicator failed the compiler/tester gate.", "test_result": test_result},
+            status=422,
+        )
+
+    indicator = CustomIndicator.objects.create(
+        user=user,
+        name=name,
+        description=description,
+        parameters=parameters,
+        code=code,
+        last_test_result=test_result,
+    )
+    return JsonResponse({"indicator": serialize_custom_indicator(indicator)}, status=201)
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET", "PUT", "PATCH", "DELETE")
+@token_required
+@rate_limit("compute")
+def custom_indicator_detail(request, indicator_id: int):
+    user = get_authenticated_user(request)
+
+    try:
+        indicator = CustomIndicator.objects.get(id=indicator_id, user=user)
+    except CustomIndicator.DoesNotExist:
+        return JsonResponse({"error": "Custom indicator not found."}, status=404)
+
+    if request.method == "GET":
+        return JsonResponse({"indicator": serialize_custom_indicator(indicator)})
+
+    if request.method in ("PUT", "PATCH"):
+        body = parse_body(request)
+
+        next_name = indicator.name
+        if body.get("name") is not None:
+            next_name = validate_indicator_name(body.get("name"))
+            if (
+                CustomIndicator.objects.filter(user=user, name__iexact=next_name)
+                .exclude(id=indicator.id)
+                .exists()
+            ):
+                raise APIError("An indicator with that name already exists.")
+
+        next_description = (
+            validate_indicator_description(body.get("description"))
+            if body.get("description") is not None
+            else indicator.description
+        )
+        next_code = (
+            validate_indicator_code(body.get("code")) if body.get("code") is not None else indicator.code
+        )
+        next_parameters = (
+            _validate_indicator_parameters(body.get("parameters"))
+            if "parameters" in body
+            else indicator.parameters
+        )
+
+        gate_inputs_changed = next_code != indicator.code or next_parameters != indicator.parameters
+        last_test_result = indicator.last_test_result
+        if gate_inputs_changed:
+            test_result = run_indicator_test(next_code, next_parameters)
+            if not test_result.get("passed"):
+                return JsonResponse(
+                    {"error": "Indicator failed the compiler/tester gate.", "test_result": test_result},
+                    status=422,
+                )
+            last_test_result = test_result
+
+        indicator.name = next_name
+        indicator.description = next_description
+        indicator.code = next_code
+        indicator.parameters = next_parameters
+        indicator.last_test_result = last_test_result
+        indicator.save()
+        return JsonResponse({"indicator": serialize_custom_indicator(indicator)})
+
+    if request.method == "DELETE":
+        indicator.delete()
+        return JsonResponse({"success": True})
+
+    return json_error("Method not allowed.", status=405)
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("compute")
+def custom_indicator_test(request):
+    get_authenticated_user(request)
+    body = parse_body(request)
+    code = validate_indicator_code(body.get("code"))
+    parameters = _validate_indicator_parameters(body.get("parameters"))
+
+    test_result = run_indicator_test(code, parameters)
+    return no_store(JsonResponse({"test_result": test_result}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def custom_indicator_guide(request):
+    path = Path(__file__).resolve().parent / "docs" / "custom_indicator_guide.md"
+    try:
+        markdown = path.read_text(encoding="utf-8")
+    except OSError:
+        markdown = ""
+    return no_store(JsonResponse({"markdown": markdown}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("assistant")
+def indicator_assistant_chat(request):
+    payload = parse_body(request)
+    messages = normalize_assistant_messages(payload.get("messages"))
+    indicator_context = normalize_indicator_context(payload.get("indicator_context"))
+    mode = "agent" if str(payload.get("mode", "ask")).strip().lower() == "agent" else "ask"
+
+    try:
+        response = ask_indicator_assistant(messages, indicator_context, mode=mode)
+    except AssistantError as exc:
+        raise APIError(exc.message, status_code=exc.status_code)
+
+    return no_store(JsonResponse(response))
+
+
 @csrf_exempt
 @api_error_boundary
 @require_methods("POST")
@@ -726,6 +1011,7 @@ def backtestDSLText(request):
     body = parse_body(request)
     dsl = validate_dsl_text(body.get("dsl_text", ""), field_name="dsl_text")
     initial_balance = parse_initial_balance(body.get("initial_balance", DEFAULT_INITIAL_BALANCE))
+    custom_indicators = build_custom_indicator_runtime(user)
 
     strategy = None
     strategy_label = str(body.get("strategy_name") or body.get("label") or "").strip()[:MAX_STRATEGY_NAME_LENGTH]
@@ -737,7 +1023,7 @@ def backtestDSLText(request):
             raise APIError("strategy_id must be an integer.")
         strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-    result = dslTextToJsonBacktest(dsl, initial_balance=initial_balance)
+    result = dslTextToJsonBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
     if strategy:
         strategy.last_result = result
@@ -757,6 +1043,7 @@ def backtestDSLJSON(request):
     body = parse_body(request)
     dsl = validate_dict_payload(body.get("dsl_json", {}), "dsl_json")
     initial_balance = parse_initial_balance(body.get("initial_balance", DEFAULT_INITIAL_BALANCE))
+    custom_indicators = build_custom_indicator_runtime(user)
 
     strategy = None
     strategy_label = str(body.get("strategy_name") or body.get("label") or "").strip()[:MAX_STRATEGY_NAME_LENGTH]
@@ -768,7 +1055,7 @@ def backtestDSLJSON(request):
             raise APIError("strategy_id must be an integer.")
         strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-    result = dslJSONBacktest(dsl, initial_balance=initial_balance)
+    result = dslJSONBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
     if strategy:
         strategy.last_result = result

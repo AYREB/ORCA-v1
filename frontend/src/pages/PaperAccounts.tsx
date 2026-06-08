@@ -59,6 +59,8 @@ import BacktestResults from "@/components/backtest/BacktestResults";
 import ChartView from "@/components/backtest/ChartView";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
+import { useSettings } from "@/hooks/useSettings";
+import { safeColor, colorWithAlpha } from "@/lib/chartTheme";
 
 interface PaperStrategyRun {
   id: string;
@@ -540,6 +542,8 @@ const createPaperRun = (
 
 const PaperAccounts = () => {
   const { user } = useAuth();
+  const { settings } = useSettings();
+  const chartColors = settings.appearance.chartColors;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [accounts, setAccounts] = useState<PaperAccount[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
@@ -1600,11 +1604,11 @@ const PaperAccounts = () => {
                               <AreaChart data={equityChartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
                                 <defs>
                                   <linearGradient id="paperEquityFill" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.35} />
-                                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.02} />
+                                    <stop offset="5%" stopColor={safeColor(chartColors.areaTop, "hsl(var(--primary))")} stopOpacity={0.35} />
+                                    <stop offset="95%" stopColor={safeColor(chartColors.areaBottom, "hsl(var(--primary))")} stopOpacity={0.02} />
                                   </linearGradient>
                                 </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                                <CartesianGrid strokeDasharray="3 3" stroke={colorWithAlpha(chartColors.grid, 0.5, "hsl(var(--border))")} />
                                 <XAxis
                                   dataKey="label"
                                   stroke="hsl(var(--muted-foreground))"
@@ -1627,7 +1631,7 @@ const PaperAccounts = () => {
                                 <Area
                                   type="monotone"
                                   dataKey="equity"
-                                  stroke="hsl(var(--primary))"
+                                  stroke={safeColor(chartColors.line, "hsl(var(--primary))")}
                                   strokeWidth={2.5}
                                   fill="url(#paperEquityFill)"
                                   dot={false}
@@ -1650,7 +1654,7 @@ const PaperAccounts = () => {
                             ) : (
                               <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={runReturnsData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                                  <CartesianGrid strokeDasharray="3 3" stroke={colorWithAlpha(chartColors.grid, 0.5, "hsl(var(--border))")} />
                                   <XAxis
                                     dataKey="label"
                                     stroke="hsl(var(--muted-foreground))"
@@ -1676,7 +1680,7 @@ const PaperAccounts = () => {
                                     {runReturnsData.map((entry, index) => (
                                       <Cell
                                         key={`${entry.label}-${index}`}
-                                        fill={entry.returnPct >= 0 ? "hsl(var(--success))" : "hsl(var(--destructive))"}
+                                        fill={entry.returnPct >= 0 ? safeColor(chartColors.candleUp, "hsl(var(--success))") : safeColor(chartColors.candleDown, "hsl(var(--destructive))")}
                                       />
                                     ))}
                                   </Bar>

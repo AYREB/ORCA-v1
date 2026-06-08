@@ -11,6 +11,8 @@ import { Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger }
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { toast } from "sonner";
+import { useSettings } from "@/hooks/useSettings";
+import { safeColor, colorWithAlpha, mixColors } from "@/lib/chartTheme";
 
 interface MonteCarloAnalysisProps {
   trades: TradeEntry[];
@@ -81,16 +83,15 @@ const getPercentile = (sortedArr: number[], p: number): number => {
   return sortedArr[Math.min(index, sortedArr.length - 1)];
 };
 
-// Generate color for path based on final return (red to green gradient)
-const getPathColor = (finalReturn: number, opacity: number = 0.4): string => {
+// Generate color for path based on final return (loss color to profit color gradient,
+// derived from the user's chartColors.candleDown/candleUp scheme)
+const getPathColor = (finalReturn: number, lossColor: string, profitColor: string, opacity: number = 0.4): string => {
   // Clamp return between -50% and +100% for color mapping
   const normalized = Math.max(-50, Math.min(100, finalReturn));
   // Map to 0-1 range (0 = -50%, 0.33 = 0%, 1 = +100%)
   const t = (normalized + 50) / 150;
-  
-  // HSL interpolation: red (0) -> yellow (60) -> green (120)
-  const hue = t * 120;
-  return `hsla(${hue}, 70%, 50%, ${opacity})`;
+
+  return mixColors(lossColor, profitColor, t, opacity, "#ef4444", "#22c55e");
 };
 
 // Run Monte Carlo simulation with cooldown buffer
@@ -276,6 +277,9 @@ const runMonteCarloSimulation = (
 };
 
 const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
+  const { settings } = useSettings();
+  const chartColors = settings.appearance.chartColors;
+
   // Simulation parameters
   const [numSimulations, setNumSimulations] = useState(10000);
   const [numTradesForward, setNumTradesForward] = useState(100);
@@ -687,7 +691,7 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
             )}
 
             {/* Main Chart - 500px height for better visualization */}
-            <div className="h-[500px] bg-[#0a0a0a] rounded-lg p-4">
+            <div className="h-[500px] rounded-lg p-4" style={{ backgroundColor: safeColor(chartColors.background, "#0a0a0a") }}>
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={results.chartData}>
                   <defs>
@@ -696,11 +700,11 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                       <stop offset="100%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.02} />
                     </linearGradient>
                     <linearGradient id="band25_75" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.2} />
-                      <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0.05} />
+                      <stop offset="0%" stopColor={safeColor(chartColors.line, "hsl(var(--primary))")} stopOpacity={0.2} />
+                      <stop offset="100%" stopColor={safeColor(chartColors.line, "hsl(var(--primary))")} stopOpacity={0.05} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={colorWithAlpha(chartColors.grid, 0.5, "rgba(255,255,255,0.1)")} />
                   <XAxis
                     dataKey="trade"
                     stroke="rgba(255,255,255,0.3)"
@@ -743,7 +747,7 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                     type="monotone"
                     dataKey="p5"
                     stroke="none"
-                    fill="#0a0a0a"
+                    fill={safeColor(chartColors.background, "#0a0a0a")}
                     fillOpacity={1}
                   />
 
@@ -759,7 +763,7 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                     type="monotone"
                     dataKey="p25"
                     stroke="none"
-                    fill="#0a0a0a"
+                    fill={safeColor(chartColors.background, "#0a0a0a")}
                     fillOpacity={1}
                   />
 
@@ -768,7 +772,12 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                     // Get final return for this path to determine color
                     const lastPoint = results.chartData[results.chartData.length - 1];
                     const pathReturn = lastPoint?.[`pathReturn${i}`] ?? 0;
-                    const pathColor = getPathColor(pathReturn, selectedPath === i ? 0.9 : selectedPath !== null ? 0.1 : 0.35);
+                    const pathColor = getPathColor(
+                      pathReturn,
+                      safeColor(chartColors.candleDown, "#ef4444"),
+                      safeColor(chartColors.candleUp, "#22c55e"),
+                      selectedPath === i ? 0.9 : selectedPath !== null ? 0.1 : 0.35,
+                    );
                     
                     return (
                       <Line
@@ -789,7 +798,7 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                   <Line
                     type="monotone"
                     dataKey="p50"
-                    stroke="hsl(var(--primary))"
+                    stroke={safeColor(chartColors.line, "hsl(var(--primary))")}
                     strokeWidth={2}
                     strokeDasharray="5 5"
                     dot={false}
@@ -800,7 +809,7 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                   <Line
                     type="monotone"
                     dataKey="mean"
-                    stroke="#ffffff"
+                    stroke={safeColor(chartColors.crosshair, "#ffffff")}
                     strokeWidth={3}
                     dot={false}
                     name="Mean"
@@ -812,15 +821,18 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
             {/* Legend */}
             <div className="flex flex-wrap items-center justify-center gap-6 mt-4 pt-3 border-t border-border">
               <div className="flex items-center gap-2">
-                <div className="w-4 h-1 bg-white rounded" />
+                <div className="w-4 h-1 rounded" style={{ backgroundColor: safeColor(chartColors.crosshair, "#ffffff") }} />
                 <span className="text-xs text-muted-foreground">Mean Path</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-0.5 border-t-2 border-dashed border-primary" />
+                <div className="w-4 h-0.5 border-t-2 border-dashed" style={{ borderColor: safeColor(chartColors.line, "hsl(var(--primary))") }} />
                 <span className="text-xs text-muted-foreground">Median Path</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-3 rounded-sm" style={{ background: 'linear-gradient(to right, #ef4444, #eab308, #22c55e)' }} />
+                <div
+                  className="w-4 h-3 rounded-sm"
+                  style={{ background: `linear-gradient(to right, ${safeColor(chartColors.candleDown, "#ef4444")}, ${safeColor(chartColors.candleUp, "#22c55e")})` }}
+                />
                 <span className="text-xs text-muted-foreground">Paths (Loss → Profit)</span>
               </div>
               <div className="flex items-center gap-2">
@@ -849,11 +861,11 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                   <AreaChart data={results.distribution}>
                     <defs>
                       <linearGradient id="mcDist" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="hsl(var(--accent))" stopOpacity={0.4} />
-                        <stop offset="95%" stopColor="hsl(var(--accent))" stopOpacity={0} />
+                        <stop offset="5%" stopColor={safeColor(chartColors.areaTop, "hsl(var(--accent))")} stopOpacity={0.4} />
+                        <stop offset="95%" stopColor={safeColor(chartColors.areaTop, "hsl(var(--accent))")} stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={colorWithAlpha(chartColors.grid, 0.5, "hsl(var(--border))")} />
                     <XAxis
                       dataKey="return"
                       stroke="hsl(var(--muted-foreground))"
@@ -876,21 +888,21 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                     {/* VaR line */}
                     <ReferenceLine
                       x={Math.round(results.metrics.var95 / 10) * 10}
-                      stroke="hsl(var(--destructive))"
+                      stroke={safeColor(chartColors.candleDown, "hsl(var(--destructive))")}
                       strokeDasharray="3 3"
-                      label={{ value: 'VaR 95%', position: 'top', fill: 'hsl(var(--destructive))', fontSize: 10 }}
+                      label={{ value: 'VaR 95%', position: 'top', fill: safeColor(chartColors.candleDown, "hsl(var(--destructive))"), fontSize: 10 }}
                     />
                     {/* Median line */}
                     <ReferenceLine
                       x={Math.round(results.metrics.medianReturn / 10) * 10}
-                      stroke="hsl(var(--primary))"
+                      stroke={safeColor(chartColors.line, "hsl(var(--primary))")}
                       strokeDasharray="3 3"
-                      label={{ value: 'Median', position: 'top', fill: 'hsl(var(--primary))', fontSize: 10 }}
+                      label={{ value: 'Median', position: 'top', fill: safeColor(chartColors.line, "hsl(var(--primary))"), fontSize: 10 }}
                     />
                     <Area
                       type="monotone"
                       dataKey="frequency"
-                      stroke="hsl(var(--accent))"
+                      stroke={safeColor(chartColors.areaTop, "hsl(var(--accent))")}
                       strokeWidth={2}
                       fill="url(#mcDist)"
                     />
