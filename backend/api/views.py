@@ -25,7 +25,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.authtoken.models import Token
 
 from core.analysis.parameter_optimiser import build_param_grid, build_param_values, genetic_optimizer, optimizer
-from core.main import dslJSONBacktest, dslTextToJsonBacktest
+from core.main import dslJSONBacktest, dslTextToJsonBacktest, BacktestError
 from .assistant import (
     INDICATOR_KNOWLEDGE,
     AssistantError,
@@ -42,7 +42,13 @@ from .indicator_sandbox import (
     run_indicator_test,
     validate_parameters,
 )
-from .models import BacktestRun, CustomIndicator, Strategy
+from .models import BacktestRun, CustomIndicator, Strategy, StrategyConversation, StrategyQueryLog
+from core.LLM.orca_llm import parse_strategy, parse_strategy_with_context
+from core.LLM.ambiguity import (
+    detect_missing_fields,
+    get_next_question,
+    is_non_strategy_input,
+)
 
 try:
     import certifi
@@ -51,6 +57,16 @@ except ImportError:  # pragma: no cover - certifi is present in the project venv
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+def _prewarm_model():
+    try:
+        from core.LLM.orca_llm import get_model
+        get_model()
+    except Exception as e:
+        logger.warning(f"Model pre-warm failed: {e}")
+
+threading.Thread(target=_prewarm_model, daemon=True).start()
+
 
 optimizer_jobs: dict[str, dict[str, Any]] = {}
 genetic_jobs: dict[str, dict[str, Any]] = {}
@@ -1055,13 +1071,37 @@ def backtestDSLJSON(request):
             raise APIError("strategy_id must be an integer.")
         strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-    result = dslJSONBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
+    try:
+        result = dslJSONBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
+    except BacktestError as e:
+        return JsonResponse({
+            "error": e.message,
+            "code": e.code,
+            "success": False
+        }, status=400)
+    except ValueError as e:
+        # DSL validation errors
+        return JsonResponse({
+            "error": str(e),
+            "code": "validation_error",
+            "success": False
+        }, status=400)
+    except Exception as e:
+        logger.exception("Unexpected backtest error")
+        return JsonResponse({
+            "error": "An unexpected error occurred. Please try again.",
+            "code": "unexpected_error",
+            "success": False
+        }, status=500)
+
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
+
     if strategy:
         strategy.last_result = result
         strategy.dsl_json = dsl or strategy.dsl_json
         strategy.last_run_at = timezone.now()
         strategy.save(update_fields=["last_result", "dsl_json", "last_run_at", "updated_at"])
+
     return JsonResponse(result, safe=False)
 
 
@@ -1246,6 +1286,16 @@ def dslGeneticOptimiser(request):
     )
     return JsonResponse(result, safe=False)
 
+def get_user_constraints(user):
+    """
+    Returns allowed tickers and timeframes for this user.
+    Extend this as you add plan tiers.
+    """
+    return {
+        "allowed_tickers": None,    # None = all tickers
+        "allowed_timeframes": None  # None = all timeframes
+    }
+
 
 @csrf_exempt
 @api_error_boundary
@@ -1279,6 +1329,373 @@ def dslGeneticOptimiserStatus(request, job_id):
 
 @csrf_exempt
 @api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("assistant")
+def strategy_to_dsl(request):
+    user = get_authenticated_user(request)
+
+    body = parse_body(request)
+    message = (body.get("message") or "").strip()
+
+    if not message:
+        raise APIError("message is required")
+
+    # 1. Call LLM parser
+    result = parse_strategy(message)
+
+    # 2. Handle failure from model
+    if isinstance(result, dict) and "error" in result:
+        return JsonResponse({
+            "success": False,
+            "error": result["error"],
+            "issues": result.get("issues", []),
+            "raw_model_output": result.get("raw_output", "")
+        }, status=400)
+
+    # 3. Optional: immediately run backtest if requested
+    run_backtest = body.get("run_backtest", False)
+
+    backtest_result = None
+    if run_backtest:
+        try:
+            backtest_result = dslJSONBacktest(
+                result,
+                initial_balance=parse_initial_balance(body.get("initial_balance", 10000))
+            )
+        except BacktestError as e:
+            backtest_result = {"error": e.message, "code": e.code}
+        except Exception as e:
+            backtest_result = {"error": "Backtest failed unexpectedly"}
+
+    return JsonResponse({
+        "success": True,
+        "strategy_name": "Generated Strategy",
+        "dsl_json": result,
+        "backtest": backtest_result,
+        "confidence": 0.9,
+        "warnings": [],
+        "explanation": "Strategy generated successfully."
+    })
+
+
+def build_explanation(strategy):
+    direction = "LONG" if "LONG" in strategy else "SHORT"
+    body = strategy[direction]
+    ctx = body["context"]
+    open_args = body["OPEN"]["ARGUMENTS"]
+    has_close = "CLOSE" in body
+
+    tickers = ", ".join(ctx["tickers"])
+    tf = ctx["execution_timeframe"]
+    start = ctx["dateframe"]["start"]
+    end = ctx["dateframe"]["end"]
+
+    tp = open_args.get("takeProfitPercent")
+    sl = open_args.get("stopLossPercent")
+
+    lines = []
+    lines.append(f"{'Long' if direction == 'LONG' else 'Short'} {tickers} on {tf} timeframe")
+    lines.append(f"Backtest period: {start} to {end}")
+
+    if tp:
+        # Values are already whole numbers after fix_percentage_fields
+        lines.append(f"Take profit: {round(float(tp), 1)}%")
+    if sl:
+        lines.append(f"Stop loss: {round(float(sl), 1)}%")
+
+    if has_close:
+        lines.append("Exit: Explicit close condition set")
+    else:
+        lines.append("Exit: Via take profit / stop loss")
+
+    if open_args.get("recurring"):
+        lines.append("Recurring DCA enabled")
+
+    return " | ".join(lines)
+
+
+def log_query(
+    user,
+    raw_input,
+    status,
+    conversation_history=None,
+    model_output=None,
+    errors=None,
+    turns_taken=1,
+    session_id=None,
+    missing_field=None,
+):
+    """Fire and forget query logging - never blocks the request"""
+    try:
+        StrategyQueryLog.objects.create(
+            user=user,
+            raw_input=raw_input,
+            conversation_history=conversation_history or [],
+            model_output=model_output,
+            status=status,
+            errors=errors or [],
+            turns_taken=turns_taken,
+            session_id=session_id,
+            missing_field=missing_field,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log query: {e}")
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("assistant")
+def strategy_chat(request):
+    user = get_authenticated_user(request)
+    body = parse_body(request)
+    message = (body.get("message") or "").strip()
+    session_id = body.get("session_id")
+
+    if not message:
+        raise APIError("message is required")
+
+    # ---- Non-strategy input ----
+    if not session_id and is_non_strategy_input(message):
+        log_query(
+            user=user,
+            raw_input=message,
+            status='non_strategy',
+            session_id=session_id,
+        )
+        return JsonResponse({
+            "status": "clarify",
+            "session_id": str(uuid.uuid4()),
+            "question": "I can help you build and backtest trading strategies. Try describing a strategy like: 'Buy AAPL when RSI drops below 30 on 4h, TP 15%, SL 5%'",
+            "examples": [
+                "Buy AAPL when RSI drops below 30 on 4h, TP 15%, SL 5%",
+                "Short Tesla when price falls below 50-SMA on 4h, TP 20%, SL 10%",
+                "Long Bitcoin when MACD crosses zero on daily, TP 30%, SL 10%",
+            ],
+            "field": "general",
+        })
+
+    # ---- Get or create conversation ----
+    if session_id:
+        conversation = StrategyConversation.objects.filter(
+            session_id=session_id,
+            user=user,
+            status='in_progress'
+        ).first()
+
+        if not conversation:
+            conversation = StrategyConversation.objects.create(
+                user=user,
+                session_id=str(uuid.uuid4()),
+                turns=[],
+                missing_fields=[],
+            )
+    else:
+        conversation = StrategyConversation.objects.create(
+            user=user,
+            session_id=str(uuid.uuid4()),
+            turns=[],
+            missing_fields=[],
+        )
+
+    # ---- Add user message to history ----
+    conversation.add_turn("user", message)
+    history = conversation.get_conversation_history()
+
+    # ---- Max turns guard ----
+    MAX_TURNS = 10
+    if len(history) > MAX_TURNS:
+        conversation.status = 'abandoned'
+        conversation.save(update_fields=["status", "updated_at"])
+        return JsonResponse({
+            "status": "clarify",
+            "session_id": conversation.session_id,
+            "question": "This conversation has gone on too long without a complete strategy. Let's start fresh - try describing your full strategy in one message.",
+            "examples": [
+                "Buy AAPL when RSI drops below 30 on 4h, TP 15%, SL 5%",
+                "Short Tesla when price falls below 50-SMA on 4h, TP 20%, SL 10%",
+            ],
+            "field": "general",
+        })
+
+    # ---- Check for missing fields ----
+    missing = detect_missing_fields(message, history)
+
+    if missing:
+        next_q = get_next_question(missing)
+
+        # If asking about timeframe, show only valid options for mentioned tickers
+        if next_q["field"] == "timeframe":
+            from core.LLM.registry_loader import load_ticker_registry
+            from core.LLM.ambiguity import get_timeframe_question
+
+            all_user_text = " ".join(
+                t["content"] for t in history if t["role"] == "user"
+            )
+            ticker_reg = load_ticker_registry()
+            available_tfs = set()
+
+            for ticker, data in ticker_reg.items():
+                aliases = [a.lower() for a in data.get("aliases", [])] + [ticker.lower()]
+                if any(a in all_user_text.lower() for a in aliases):
+                    tfs = data.get("available_timeframes", ["1h", "4h", "1D"])
+                    available_tfs.update(tfs)
+
+            if available_tfs:
+                next_q = get_timeframe_question(sorted(available_tfs))
+
+        conversation.missing_fields = missing
+        conversation.save(update_fields=["missing_fields", "updated_at"])
+        conversation.add_turn("assistant", next_q["question"])
+
+        log_query(
+            user=user,
+            raw_input=message,
+            status='clarify',
+            conversation_history=history,
+            turns_taken=len(history),
+            session_id=conversation.session_id,
+            missing_field=next_q["field"],
+        )
+
+        return JsonResponse({
+            "status": "clarify",
+            "session_id": conversation.session_id,
+            "question": next_q["question"],
+            "examples": next_q.get("examples", []),
+            "field": next_q["field"],
+            "turns": len(history),
+        })
+
+    # ---- Get user constraints ----
+    constraints = get_user_constraints(user)
+
+    # ---- Try to parse with full context ----
+    strategy, errors, raw_output = parse_strategy_with_context(
+        history,
+        allowed_tickers=constraints["allowed_tickers"],
+        allowed_timeframes=constraints["allowed_timeframes"]
+    )
+
+    # ---- Check for invalid timeframe in errors ----
+    timeframe_errors = [e for e in errors if "Invalid timeframe" in e]
+    if timeframe_errors and strategy is not None:
+        from core.LLM.registry_loader import load_ticker_registry
+        direction = "LONG" if "LONG" in strategy else "SHORT"
+        tickers = strategy[direction]["context"]["tickers"]
+        ticker_reg = load_ticker_registry()
+        available_tfs = set()
+        for t in tickers:
+            tfs = ticker_reg.get(t, {}).get("available_timeframes", ["4h", "1D"])
+            available_tfs.update(tfs)
+
+        available_tfs_list = sorted(available_tfs)
+
+        # Check if user actually specified a timeframe in their messages
+        all_user_text = " ".join(
+            t["content"] for t in history if t["role"] == "user"
+        ).lower()
+
+        user_specified_timeframe = any(
+            re.search(pattern, all_user_text)
+            for pattern in [
+                r'\b(1m|5m|15m|1h|4h|1d)\b',
+                r'\b\d+\s*hour\b',
+                r'\b\d+\s*minute\b',
+                r'\b(hourly|daily|weekly)\b',
+            ]
+        )
+
+        if user_specified_timeframe:
+            # User said a specific timeframe that isn't available - tell them
+            conversation.add_turn("assistant", f"That timeframe isn't available for {', '.join(tickers)}.")
+            conversation.save()
+
+            log_query(
+                user=user,
+                raw_input=message,
+                status='clarify',
+                conversation_history=history,
+                errors=errors,
+                turns_taken=len(history),
+                session_id=conversation.session_id,
+                missing_field='timeframe',
+            )
+
+            return JsonResponse({
+                "status": "clarify",
+                "session_id": conversation.session_id,
+                "question": f"That timeframe isn't available for {', '.join(tickers)}. Please choose from: {', '.join(available_tfs_list)}",
+                "examples": available_tfs_list,
+                "field": "timeframe",
+                "turns": len(history),
+            })
+        else:
+            # User didn't specify - silently use best default
+            best_default = "1h" if "1h" in available_tfs_list else available_tfs_list[0]
+            strategy[direction]["context"]["execution_timeframe"] = best_default
+            # Fall through to success
+
+    # ---- Model failed ----
+    if strategy is None:
+        conversation.add_turn(
+            "assistant",
+            "I couldn't quite parse that. Could you rephrase it?"
+        )
+
+        log_query(
+            user=user,
+            raw_input=message,
+            status='failed',
+            conversation_history=history,
+            errors=errors,
+            turns_taken=len(history),
+            session_id=conversation.session_id,
+        )
+
+        return JsonResponse({
+            "status": "clarify",
+            "session_id": conversation.session_id,
+            "question": "I had trouble understanding that. Could you try rephrasing? For example: 'Buy AAPL when RSI drops below 30 on 4h, TP 15%, SL 5%'",
+            "examples": [
+                "Buy AAPL when RSI drops below 30 on 4h, TP 15%, SL 5%",
+                "Short Tesla when price falls below 50-SMA on 4h, TP 20%, SL 10%",
+            ],
+            "field": "general",
+        })
+
+    # ---- Success ----
+    conversation.status = 'complete'
+    conversation.partial_strategy = strategy
+    explanation = build_explanation(strategy)
+    conversation.add_turn("assistant", f"Got it. {explanation}")
+    conversation.save(update_fields=["status", "partial_strategy", "updated_at"])
+
+    log_query(
+        user=user,
+        raw_input=message,
+        status='complete',
+        conversation_history=history,
+        model_output=strategy,
+        errors=errors,
+        turns_taken=len(history),
+        session_id=conversation.session_id,
+    )
+
+    return JsonResponse({
+        "status": "complete",
+        "session_id": conversation.session_id,
+        "dsl_json": strategy,
+        "explanation": explanation,
+        "warnings": [e for e in errors if "default" not in e],
+        "turns": len(history),
+    })
+
+
+@csrf_exempt
+@api_error_boundary
 @require_methods("GET")
 @token_required
 @rate_limit("general")
@@ -1294,13 +1711,34 @@ def registry(request):
     with open(base / "argumentsRegistry.json", encoding="utf-8") as f:
         arguments = json.load(f)
 
-    return JsonResponse(
-        {
-            "commands": commands,
-            "indicators": indicators,
-            "arguments": arguments,
+    with open(base / "tickerRegistry.json", encoding="utf-8") as f:
+        ticker_data = json.load(f)
+
+    with open(base / "timeframeRegistry.json", encoding="utf-8") as f:
+        timeframe_data = json.load(f)
+
+    # Format tickers for frontend - just what UI needs
+    tickers = {
+        ticker: {
+            "name": data["name"],
+            "available_timeframes": data["available_timeframes"]
         }
-    )
+        for ticker, data in ticker_data.get("TICKERS", {}).items()
+    }
+
+    # Format timeframes for frontend
+    timeframes = {
+        tf: data["label"]
+        for tf, data in timeframe_data.get("TIMEFRAMES", {}).items()
+    }
+
+    return JsonResponse({
+        "commands": commands,
+        "indicators": indicators,
+        "arguments": arguments,
+        "tickers": tickers,
+        "timeframes": timeframes,
+    })
 
 
 @csrf_exempt

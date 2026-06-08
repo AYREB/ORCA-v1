@@ -423,11 +423,12 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
               stroke={colorWithAlpha(chartColors.grid, 0.6, "hsl(var(--border))")}
               strokeWidth={2}
                 strokeDasharray="6 3"
+                opacity={0.6}
               />
             ))}
             {nodes.map((n) => (
               <g key={n.key} transform={`translate(${n.x}, ${n.y})`}>
-                <circle cx={0} cy={0} r={14} fill={pctToColor(n.pct)} />
+                <circle cx={0} cy={0} r={14} fill={pctToColor(n.pct)} opacity={0.9} />
                 <rect
                   x={-32}
                   y={18}

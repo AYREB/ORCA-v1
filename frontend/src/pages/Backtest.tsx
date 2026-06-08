@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Helmet } from "react-helmet-async";
-import { Play, Loader2, ArrowLeft, BarChart3, LineChart, Activity, Shuffle, Code, Settings2 } from "lucide-react";
+import { Play, Loader2, ArrowLeft, BarChart3, LineChart, Activity, Shuffle, Sliders, Code, Settings2, Sparkles } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
 import DSLEditor from "@/components/backtest/DSLEditor";
 import BacktestForm from "@/components/backtest/BacktestForm";
+import AIStrategyBuilder from "@/components/backtest/AIStrategyBuilder";
 import BacktestResults from "@/components/backtest/BacktestResults";
 import ChartView from "@/components/backtest/ChartView";
 import GarchAnalysis from "@/components/backtest/GarchAnalysis";
@@ -18,7 +19,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 
 type ViewMode = "editor" | "results";
-type EntryMode = "form" | "dsl";
+type EntryMode = "form" | "dsl" | "ai";
 
 const Backtest = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -277,6 +278,10 @@ const Backtest = () => {
                         <Settings2 className="h-4 w-4" />
                         Easy Mode
                       </TabsTrigger>
+                      <TabsTrigger value="ai" className="gap-2 data-[state=active]:bg-primary/20">
+                        <Sparkles className="h-4 w-4" />
+                        AI Assistant
+                      </TabsTrigger>
                       <TabsTrigger value="dsl" className="gap-2 data-[state=active]:bg-primary/20">
                         <Code className="h-4 w-4" />
                         DSL Editor
@@ -292,6 +297,9 @@ const Backtest = () => {
                           setStrategyEditorText(text);
                         }}
                       />
+                    </TabsContent>
+                    <TabsContent value="ai">
+                      <AIStrategyBuilder onRunBacktest={handleEasyModeResults} />
                     </TabsContent>
 
                     <TabsContent value="dsl">

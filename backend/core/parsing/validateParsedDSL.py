@@ -19,9 +19,9 @@ VALID_INDICATORS = set(INDICATORS_DEF.keys())
 
 def validate_parsed_dsl(parsed, extra_indicators=None):
     for cmd, blocks in parsed.items():
-        for cmd, blocks in parsed.items():
-            if cmd == "TICKER":
-                continue  # ignore top-level tickers
+        if cmd == "TICKER":
+            continue  # ignore top-level tickers
+
         if cmd not in VALID_COMMANDS:
             raise ValueError(f"Invalid command: {cmd}")
 
@@ -66,6 +66,7 @@ def validate_conditions(cond, extra_indicators=None):
             # It's a single operand like RSI / PRICE
             validate_operand_with_timeframe(cond, extra_indicators=extra_indicators)
 
+
 def validate_operand_with_timeframe(op, extra_indicators=None):
     """
     Validate operands, allowing optional timeframe for indicators.
@@ -83,7 +84,6 @@ def validate_operand_with_timeframe(op, extra_indicators=None):
             args = op.get("arg", {})
             if not isinstance(args, dict):
                 raise ValueError(f"Arguments for {func_name} must be a dict, got {type(args).__name__}")
-
 
             # PRICE does not support timeframe
             if func_name.upper() == "PRICE":
@@ -109,11 +109,14 @@ def validate_operand_with_timeframe(op, extra_indicators=None):
                 if not isinstance(args["timeframe"], str):
                     raise ValueError(f"Expected 'timeframe' to be a string for {func_name}, got {args['timeframe']}")
 
-
         elif "op" in op:
             # Recursively validate left/right
             validate_operand_with_timeframe(op["left"], extra_indicators=extra_indicators)
             validate_operand_with_timeframe(op["right"], extra_indicators=extra_indicators)
+
+        elif "value" in op:
+            # Literal value node - always valid
+            return
 
 
 def validate_operand(op):
@@ -121,48 +124,56 @@ def validate_operand(op):
         raise ValueError(f"Operand must be dict: {op}")
     if "func" in op and op["func"] not in VALID_INDICATORS:
         raise ValueError(f"Invalid indicator: {op['func']}")
-    
+
+
 def validate_arguments(cmd, block_name, args):
     """
-    Validate ARGUMENTS block against the registry for the specific command (LONG/SHORT)
-    and ensure arguments are only used in allowed blocks.
-    
-    cmd: "LONG" or "SHORT"
-    block_name: "OPEN", "CLOSE", etc.
-    args: dictionary of arguments inside the block
+    Validate ARGUMENTS block against the registry.
+    Warns on unknown keys rather than raising - LLM may add extra fields.
     """
     if cmd not in ARGUMENTS_DEF:
         raise ValueError(f"No argument definitions for command: {cmd}")
 
     cmd_registry = ARGUMENTS_DEF[cmd]
 
-    # Check if the block has defined arguments in the registry
     if block_name not in cmd_registry:
         if args:
-            raise ValueError(f"Arguments are not allowed in {cmd} -> {block_name} block: {list(args.keys())}")
-        return  # nothing to validate
+            print(
+                f"[WARN] Arguments present in {cmd} -> {block_name} "
+                f"which has no registry definition: {list(args.keys())}"
+            )
+        return
 
     block_registry = cmd_registry[block_name]
 
     for key, val in args.items():
         if key not in block_registry:
-            raise ValueError(f"Invalid argument for {cmd} -> {block_name}: {key}")
+            # Warn but don't crash - LLM may output extra fields
+            print(f"[WARN] Unknown argument for {cmd} -> {block_name}: {key}, skipping")
+            continue
+
         reg = block_registry[key]
 
-        # Check value against options if specified
         if "options" in reg:
             if val not in reg["options"]:
                 raise ValueError(
-                    f"Invalid value for {key} in {cmd} -> {block_name}: {val}. Allowed: {reg['options']}"
+                    f"Invalid value for {key} in {cmd} -> {block_name}: {val}. "
+                    f"Allowed: {reg['options']}"
                 )
-        # Check type if specified
         elif "type" in reg:
             expected_type = reg["type"]
             if expected_type == "float" and not isinstance(val, (float, int)):
                 raise ValueError(
-                    f"{key} must be a float in {cmd} -> {block_name}, got {type(val).__name__}"
+                    f"{key} must be a float in {cmd} -> {block_name}, "
+                    f"got {type(val).__name__}"
                 )
             elif expected_type == "int" and not isinstance(val, int):
                 raise ValueError(
-                    f"{key} must be an int in {cmd} -> {block_name}, got {type(val).__name__}"
+                    f"{key} must be an int in {cmd} -> {block_name}, "
+                    f"got {type(val).__name__}"
+                )
+            elif expected_type == "bool" and not isinstance(val, bool):
+                raise ValueError(
+                    f"{key} must be a bool in {cmd} -> {block_name}, "
+                    f"got {type(val).__name__}"
                 )

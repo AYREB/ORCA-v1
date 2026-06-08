@@ -30,6 +30,8 @@ export interface ConditionSideOperation {
     indicators: { INDICATORS: Record<string, { args: string[]; defaults: Record<string, any> }> };
     arguments: { ARGUMENTS: Record<string, Record<string, Record<string, any>>> };
     customIndicatorMeta?: Record<string, { description: string }>;
+    tickers?: Record<string, { name: string; available_timeframes: string[] }>;
+    timeframes?: Record<string, string>;
   }
   
   export const generateId = () => Math.random().toString(36).substring(2, 9);

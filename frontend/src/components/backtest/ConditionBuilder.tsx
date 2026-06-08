@@ -64,11 +64,13 @@ export function MultiConditionBuilder({
   conditionGroup,
   setConditionGroup,
   registry,
+  availableTimeframes,
 }: {
   blockName: string;
   conditionGroup: ConditionGroup;
   setConditionGroup: (group: ConditionGroup) => void;
   registry: Registry;
+  availableTimeframes?: string[];
 }) {
   // "adding" state: null = idle, "left" = picking left side, "right" = picking operator + right side
   const [adding, setAdding] = useState<"left" | "right" | null>(null);
@@ -138,6 +140,7 @@ export function MultiConditionBuilder({
                 onRemove={() => removeCondition(cond.id)}
                 registry={registry}
                 isOpen={isOpen}
+                availableTimeframes={availableTimeframes}
               />
               {idx < conditionGroup.conditions.length - 1 && (
                 <div className="flex items-center py-1.5 px-1">
@@ -212,6 +215,7 @@ export function MultiConditionBuilder({
                   setPendingOp("<");
                 }}
                 onCancel={resetAdd}
+                availableTimeframes={availableTimeframes}
               />
             )}
 
@@ -264,6 +268,7 @@ export function MultiConditionBuilder({
                     }}
                     onCancel={resetAdd}
                     placeholder="Pick right side..."
+                    availableTimeframes={availableTimeframes}
                   />
                 )}
               </div>
@@ -297,12 +302,14 @@ function ConditionRow({
   onRemove,
   registry,
   isOpen,
+  availableTimeframes
 }: {
   condition: SingleCondition;
   onChange: (cond: SingleCondition) => void;
   onRemove: () => void;
   registry: Registry;
   isOpen: boolean;
+  availableTimeframes?: string[];
 }) {
   const [editingSide, setEditingSide] = useState<"left" | "right" | null>(null);
   const [expandedSide, setExpandedSide] = useState<"left" | "right" | null>(null);
@@ -344,6 +351,7 @@ function ConditionRow({
                 setEditingSide(null);
               }}
               onCancel={() => setEditingSide(null)}
+              availableTimeframes={availableTimeframes}
             />
           </div>
         ) : (
@@ -374,6 +382,7 @@ function ConditionRow({
                 setEditingSide(null);
               }}
               onCancel={() => setEditingSide(null)}
+              availableTimeframes={availableTimeframes}
             />
           </div>
         ) : (
@@ -418,6 +427,7 @@ function ConditionRow({
             onReplace={() => handleReplace(expandedSide)}
             onClose={() => setExpandedSide(null)}
             registry={registry}
+            availableTimeframes={availableTimeframes}
           />
         )}
       </AnimatePresence>
@@ -588,12 +598,14 @@ function ExpandedArgsEditor({
   onReplace,
   onClose,
   registry,
+  availableTimeframes,
 }: {
   side: ConditionSide;
   onChange: (side: ConditionSide) => void;
   onReplace: () => void;
   onClose: () => void;
   registry: Registry;
+  availableTimeframes?: string[];
 }) {
   if (side.type !== "indicator") return null;
 
@@ -649,7 +661,10 @@ function ExpandedArgsEditor({
                     }
                     className="h-6 px-1.5 rounded border border-border/50 bg-background text-[11px] font-mono text-foreground outline-none focus:border-primary/50 transition-colors cursor-pointer"
                   >
-                    {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
+                    {(availableTimeframes && availableTimeframes.length > 0
+                      ? availableTimeframes
+                      : ["1m", "5m", "15m", "1h", "4h", "1d"]
+                    ).map((tf) => (
                       <option key={tf} value={tf}>{tf}</option>
                     ))}
                   </select>

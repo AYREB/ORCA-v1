@@ -18,6 +18,7 @@ import ProtectedRoute from "./components/auth/ProtectedRoute";
 import Help from "./pages/Help"
 import { AuthProvider } from "./context/AuthContext";
 import { SettingsProvider } from "./hooks/useSettings";
+import { RegistryProvider } from "@/context/RegistryContext";
 import Settings from "./pages/Settings";
 
 const queryClient = new QueryClient();
@@ -27,82 +28,84 @@ const App = () => (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <SettingsProvider>
-          <TooltipProvider>
-            <Toaster />
-            <Sonner />
-            <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-              <Routes>
-                <Route path="/" element={<Index />} />
-                <Route
-                  path="/dashboard"
-                  element={
-                    <ProtectedRoute>
-                      <Dashboard />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/dashboard/backtest"
-                  element={
-                    <ProtectedRoute>
-                      <Backtest />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/dashboard/optimizer"
-                  element={
-                    <ProtectedRoute>
-                      <Optimizer />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/dashboard/genetic"
-                  element={
-                    <ProtectedRoute>
-                      <Genetic />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/dashboard/strategies"
-                  element={
-                    <ProtectedRoute>
-                      <Strategies />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/dashboard/indicators"
-                  element={
-                    <ProtectedRoute>
-                      <CustomIndicators />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/dashboard/indicators/docs"
-                  element={
-                    <ProtectedRoute>
-                      <CustomIndicatorDocs />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/dashboard/paper-accounts"
-                  element={
-                    <ProtectedRoute>
-                      <PaperAccounts />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route path="/dashboard/help" element={<Help />} />
-                <Route path="*" element={<NotFound />} />
-                <Route path="/dashboard/settings" element={<Settings />} />
-              </Routes>
-            </BrowserRouter>
-          </TooltipProvider>
+          <RegistryProvider>
+            <TooltipProvider>
+              <Toaster />
+              <Sonner />
+              <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                <Routes>
+                  <Route path="/" element={<Index />} />
+                  <Route
+                    path="/dashboard"
+                    element={
+                      <ProtectedRoute>
+                        <Dashboard />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/backtest"
+                    element={
+                      <ProtectedRoute>
+                        <Backtest />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/optimizer"
+                    element={
+                      <ProtectedRoute>
+                        <Optimizer />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/genetic"
+                    element={
+                      <ProtectedRoute>
+                        <Genetic />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/strategies"
+                    element={
+                      <ProtectedRoute>
+                        <Strategies />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/indicators"
+                    element={
+                      <ProtectedRoute>
+                        <CustomIndicators />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/indicators/docs"
+                    element={
+                      <ProtectedRoute>
+                        <CustomIndicatorDocs />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/paper-accounts"
+                    element={
+                      <ProtectedRoute>
+                        <PaperAccounts />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route path="/dashboard/help" element={<Help />} />
+                  <Route path="*" element={<NotFound />} />
+                  <Route path="/dashboard/settings" element={<Settings />} />
+                </Routes>
+              </BrowserRouter>
+            </TooltipProvider>
+          </RegistryProvider>
         </SettingsProvider>
       </AuthProvider>
     </QueryClientProvider>

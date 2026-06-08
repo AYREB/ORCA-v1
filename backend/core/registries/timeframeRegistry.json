@@ -1,0 +1,10 @@
+{
+    "TIMEFRAMES": {
+      "1m":  {"label": "1 Minute",  "aliases": ["1m", "1 minute", "1min", "one minute"]},
+      "5m":  {"label": "5 Minutes", "aliases": ["5m", "5 minute", "5min", "five minute"]},
+      "15m": {"label": "15 Minutes","aliases": ["15m", "15 minute", "15min", "fifteen minute"]},
+      "1h":  {"label": "1 Hour",    "aliases": ["1h", "1 hour", "hourly", "1hr", "60 minute"]},
+      "4h":  {"label": "4 Hours",   "aliases": ["4h", "4 hour", "4hr", "four hour"]},
+      "1D":  {"label": "Daily",     "aliases": ["1D", "daily", "day", "1 day"]}
+    }
+  }

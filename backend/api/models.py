@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.db import models
-
+from django.utils import timezone
 
 class Strategy(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="strategies")
@@ -54,3 +54,94 @@ class BacktestRun(models.Model):
     def __str__(self):
         name = self.strategy_name or (self.strategy.name if self.strategy else "Backtest")
         return f"{name} - {self.user.email} ({self.created_at.date()})"
+
+
+class StrategyConversation(models.Model):
+    """Tracks multi-turn strategy building conversations"""
+    user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.CASCADE,
+        related_name='strategy_conversations'
+    )
+    session_id = models.CharField(max_length=64, unique=True)
+    turns = models.JSONField(default=list)
+    partial_strategy = models.JSONField(null=True, blank=True)
+    missing_fields = models.JSONField(default=list)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('in_progress', 'In Progress'),
+            ('complete', 'Complete'),
+            ('abandoned', 'Abandoned'),
+        ],
+        default='in_progress'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def add_turn(self, role, content):
+        self.turns.append({
+            "role": role,
+            "content": content,
+            "timestamp": timezone.now().isoformat()
+        })
+        self.save(update_fields=["turns", "updated_at"])
+
+    def get_conversation_history(self):
+        return [
+            {"role": t["role"], "content": t["content"]}
+            for t in self.turns
+        ]
+
+    class Meta:
+        ordering = ['-created_at']
+
+class StrategyQueryLog(models.Model):
+    """
+    Logs every query sent to the strategy parser.
+    Used for retraining and improving the model over time.
+    """
+    user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='query_logs'
+    )
+    # The raw input from the user
+    raw_input = models.TextField()
+    
+    # The full conversation history (for multi-turn)
+    conversation_history = models.JSONField(default=list)
+    
+    # What the model output
+    model_output = models.JSONField(null=True, blank=True)
+    
+    # Whether it succeeded or needed clarification
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('complete', 'Complete'),
+            ('clarify', 'Clarify'),
+            ('failed', 'Failed'),
+            ('non_strategy', 'Non Strategy'),
+        ],
+        default='complete'
+    )
+    
+    # Validation errors if any
+    errors = models.JSONField(default=list)
+    
+    # How many turns it took
+    turns_taken = models.IntegerField(default=1)
+    
+    # Was this a multi-turn conversation
+    session_id = models.CharField(max_length=64, null=True, blank=True)
+    
+    # Track which field was missing if clarification needed
+    missing_field = models.CharField(max_length=50, null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']

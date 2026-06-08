@@ -1,9 +1,6 @@
 import json
 import pandas as pd
 import numpy as np
-import os
-import subprocess
-import sys
 from datetime import timedelta
 from .data_pulling import datapull
 from .parsing import parser, validateParsedDSL
@@ -11,9 +8,6 @@ from .fetcher_calculators import indicatorEvaluator
 from .parsing.extractingTickers import extract_tickers, extract_execution_timeframe, extract_dateframe, collect_timeframes_from_dsl
 from .backtesting.backtesterCore import backtester
 from .console_ui.PrintTradeSummary import print_trade_summary
-
-internetConnection = True   # or False
-DATA_CSV_FOLDER = "Data_CSVs"
 
 # ---------------- DSL ----------------
 dsl_text_example = """
@@ -144,7 +138,7 @@ def parse_datetime_bound(value):
     return parsed.tz_convert(None)
 
 
-def get_fetch_date_bound(value, *, is_end=False):
+def get_fetch_date_bound(value, *, is_end=False, warmup_days=0):
     parsed = parse_datetime_bound(value)
     if parsed is None:
         return value
@@ -152,8 +146,50 @@ def get_fetch_date_bound(value, *, is_end=False):
     if is_end and not is_date_only_bound(value):
         parsed = parsed + timedelta(days=1)
 
+    if not is_end and warmup_days > 0:
+        parsed = parsed - timedelta(days=warmup_days)
+
     return parsed.date().isoformat()
 
+def get_max_indicator_period(parsed_dsl) -> int:
+    """
+    Walk the DSL conditions and find the longest indicator period.
+    Multiply by 2 to account for weekends/holidays in trading days.
+    """
+    max_period = 50  # safe minimum default
+
+    def walk_conditions(cond):
+        nonlocal max_period
+        if not isinstance(cond, dict):
+            return
+
+        if "AND" in cond:
+            for c in cond["AND"]:
+                walk_conditions(c)
+            return
+        if "OR" in cond:
+            for c in cond["OR"]:
+                walk_conditions(c)
+            return
+
+        for side in ["left", "right"]:
+            node = cond.get(side, {})
+            if "func" in node and "arg" in node:
+                arg = node["arg"]
+                # Check all possible period fields
+                for field in ["period", "slow", "k_period"]:
+                    if field in arg:
+                        max_period = max(max_period, int(arg[field]))
+
+    direction = "LONG" if "LONG" in parsed_dsl else "SHORT"
+    open_cond = parsed_dsl[direction].get("OPEN", {}).get("CONDITIONS", {})
+    close_cond = parsed_dsl[direction].get("CLOSE", {}).get("CONDITIONS", {})
+
+    walk_conditions(open_cond)
+    walk_conditions(close_cond)
+
+    # Multiply by 2 to cover weekends and holidays
+    return max_period * 2
 
 def normalize_datetime_index(df):
     if df is None or df.empty:
@@ -196,13 +232,17 @@ def dslTextToJsonBacktest(dsl_text, initial_balance=10000, custom_indicators=Non
     trade_data = main(parsed_dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
     return trade_data
 
+
+class BacktestError(Exception):
+    """Known backtest failure with a user-friendly message"""
+    def __init__(self, message: str, code: str = "backtest_error"):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
 def dslJSONBacktest(dsl_json, initial_balance=10000, custom_indicators=None):
-    print("dsl_GO")
-    print(dsl_json)
-
-    with open("mainDEMOJSON.json", "w") as f:
-        json.dump(dsl_json,f,indent=4)
-
+    # Remove file writes - not safe for production
     trade_data = main(dsl_json, initial_balance=initial_balance, custom_indicators=custom_indicators)
     return trade_data
 
@@ -224,7 +264,6 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
     parsed_dsl = apply_default_arguments(parsed_dsl)
     parsed_dsl = merge_indicator_defaults(parsed_dsl, extra_indicators=CUSTOM_INDICATOR_DEFS)
 
-
     with open("Core/Parsing/dsl_output.json", "w") as f:
         json.dump(parsed_dsl, f, indent=4)
 
@@ -232,10 +271,8 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
     with open("Core/Registries/indicatorRegistry.json") as f:
         INDICATORS_DEF = json.load(f)["INDICATORS"]
 
-
     # Build functions dynamically — no hardcoding needed
     INDICATOR_FUNCTIONS = indicatorEvaluator.build_indicator_functions(INDICATORS_DEF)
-
 
     # Validate DSL
     validateParsedDSL.validate_parsed_dsl(parsed_dsl, extra_indicators=CUSTOM_INDICATOR_DEFS)
@@ -250,6 +287,7 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
     )
     DATEFRAME = extract_dateframe(parsed_dsl)
     print(DATA_TFS)
+
     if DATEFRAME:
         start_date = DATEFRAME["start"]
         end_date = DATEFRAME["end"]
@@ -257,7 +295,8 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
         start_date = "2024-01-01"
         end_date = "2025-01-01"
 
-    fetch_start_date = get_fetch_date_bound(start_date)
+    warmup_days = get_max_indicator_period(parsed_dsl)
+    fetch_start_date = get_fetch_date_bound(start_date, warmup_days=warmup_days)
     fetch_end_date = get_fetch_date_bound(end_date, is_end=True)
 
     data_dict = {}
@@ -266,57 +305,68 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
         data_dict[t] = {}
 
         for tf in DATA_TFS:
-            # print(f"Fetching data for {t} @ {tf} between {start_date} → {end_date}")
-
-            if internetConnection:
-                # online mode
+            try:
                 df = datapull.get_data_with_indicator(
                     ticker=t,
                     start=fetch_start_date,
                     end=fetch_end_date,
                     interval=tf
                 )
-                df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=False)
-                x=1
-            else:
-                # offline mode
-                csv_path = os.path.join(DATA_CSV_FOLDER, f"{t}.csv")
-                if not os.path.exists(csv_path):
-                    raise FileNotFoundError(
-                        f"Offline mode enabled but missing file: {csv_path}"
-                    )
+            except Exception as e:
+                raise BacktestError(
+                    f"Failed to fetch market data for {t} ({tf}). "
+                    f"Please check the ticker symbol and try again.",
+                    code="data_fetch_error"
+                )
 
-                df = pd.read_csv(csv_path)
-                df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True).dt.tz_localize(None)
-                df = df.set_index("Datetime")
-                df = df.sort_index()
-                df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=False)
-                x=1
+            if df is None or df.empty:
+                raise BacktestError(
+                    f"No data available for {t} on the {tf} timeframe "
+                    f"between {start_date} and {end_date}. "
+                    f"Try a different date range or timeframe.",
+                    code="no_data"
+                )
 
-                # ⭐ Make offline identical to online: add indicators
-                for ind_name, ind_fn in INDICATOR_FUNCTIONS.items():
-                    try:
-                        df[ind_name] = ind_fn(df)
-                    except Exception as e:
-                        print(f"[WARN] Failed to calculate indicator {ind_name}: {e}")
+            df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=True)
+
+            if df.empty:
+                raise BacktestError(
+                    f"No data available for {t} after clipping to "
+                    f"{start_date} → {end_date}.",
+                    code="no_data_after_clip"
+                )
 
             data_dict[t][tf] = df
 
+    # Run backtester
+    try:
+        trade_log, cash, positions, pct_change = backtester(
+            parsed_dsl,
+            data_dict,
+            INDICATOR_FUNCTIONS,
+            initial_balance=initial_balance,
+            custom_indicator_functions=CUSTOM_INDICATOR_FUNCTIONS
+        )
+    except Exception as e:
+        raise BacktestError(
+            f"Backtest failed during execution: {str(e)}",
+            code="execution_error"
+        )
 
+    # No trades is not an error but worth flagging
+    warnings = []
+    if not trade_log:
+        warnings.append(
+            "No trades were triggered. Your conditions may be too strict "
+            "for this date range - try adjusting your indicator thresholds."
+        )
 
-    # run backtester
-    trade_log, cash, positions, pct_change = backtester(
-        parsed_dsl,
-        data_dict,
-        INDICATOR_FUNCTIONS,
-        initial_balance=initial_balance,
-        custom_indicator_functions=CUSTOM_INDICATOR_FUNCTIONS
+    invested = sum(
+        positions[ticker] * data_dict[ticker][EXECUTION_TF].iloc[-1]["Close"]
+        for ticker in positions
     )
-
-   # Decide the timeframe per ticker; default '1h'
-   # or fetch from DSL if available
-    invested = sum(positions[ticker] * data_dict[ticker][EXECUTION_TF].iloc[-1]["Close"] for ticker in positions)    
     total_portfolio = cash + invested
+    pct_change = (total_portfolio - initial_balance) / initial_balance * 100
 
     # Print summary
     print("\n💰 Final Cash: ${:.2f}".format(cash))
@@ -330,20 +380,14 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
 
     print_trade_summary(trade_log)
 
-
-
-    # Optionally, save trades to JSON
-    with open("trades_output.json", "w") as f:
-        json.dump(trade_log, f, indent=4)
-
-    
-    data_return = {
+    return {
         "cash": cash,
         "invested": invested,
         "total_portfolio": total_portfolio,
         "pct_change": pct_change,
         "json_dsl": parsed_dsl,
         "trades": trade_log,
+        "warnings": warnings,
         "data": {
             ticker: {
                 tf: dataframe_to_response_records(df)
@@ -352,12 +396,6 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
             for ticker in data_dict
         }
     }
-    with open("return_data_output.json", "w") as f:
-        json.dump(data_return, f, indent=4)
-
-    #print_trade_summary(trade_log)
-
-    return data_return
 
 # if __name__ == "__main__":
 #     main()

@@ -125,6 +125,8 @@ export interface RegistryResponse {
   commands: Record<string, unknown>;
   indicators: Record<string, unknown>;
   arguments: Record<string, unknown>;
+  tickers?: Record<string, { name: string; available_timeframes: string[] }>;
+  timeframes?: Record<string, string>;
 }
 
 export interface MonteCarloResult {
@@ -344,6 +346,44 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
+export interface StrategyAssistantMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+export interface NLPStrategyResponse {
+  success: boolean;
+  reply?: string;
+  dsl_json?: Record<string, unknown> | null;
+  ready_to_run?: boolean;
+  confidence?: number;
+  warnings?: string[];
+  error?: string;
+}
+
+export interface StrategyChatClarifyResponse {
+  status: 'clarify';
+  session_id: string;
+  question: string;
+  examples?: string[];
+  field?: string;
+}
+export interface StrategyChatCompleteResponse {
+  status: 'complete';
+  session_id: string;
+  dsl_json: Record<string, unknown>;
+  explanation?: string;
+  warnings?: string[];
+}
+export interface StrategyChatErrorResponse {
+  status?: 'error';
+  error?: string;
+}
+export type StrategyChatResponse =
+  | StrategyChatClarifyResponse
+  | StrategyChatCompleteResponse
+  | StrategyChatErrorResponse;
+
+
 class DjangoAPI {
   private baseUrl: string;
   private token: string | null = null;
@@ -480,6 +520,19 @@ class DjangoAPI {
         strategy_id: options?.strategyId,
         strategy_name: options?.strategyName,
         initial_balance: options?.initialBalance,
+      }),
+    });
+  }
+
+  async strategyChatMessage(
+    message: string,
+    sessionId: string | null
+  ): Promise<StrategyChatResponse> {
+    return this.request<StrategyChatResponse>('/strategy/chat/', {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        ...(sessionId ? { session_id: sessionId } : {}),
       }),
     });
   }
@@ -756,6 +809,20 @@ class DjangoAPI {
 
   setLastBacktestResult(result: BacktestResult): void {
     localStorage.setItem('orca_last_backtest', JSON.stringify(result));
+  }
+
+  // NLP -> DSL conversion
+  async convertNLPToDSL(
+    message: string,
+    conversationHistory?: StrategyAssistantMessage[]
+  ): Promise<NLPStrategyResponse> {
+      return this.request<NLPStrategyResponse>('/strategy-to-dsl/', {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        conversation_history: conversationHistory || [],
+      }),
+    });
   }
 }
 
