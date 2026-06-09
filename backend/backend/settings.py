@@ -304,7 +304,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_API_BASE_URL = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
 ORCA_ASSISTANT_MODEL = os.getenv("ORCA_ASSISTANT_MODEL", "gpt-5.1")
 ORCA_ASSISTANT_OLLAMA_BASE_URL = os.getenv("ORCA_ASSISTANT_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-ORCA_ASSISTANT_OLLAMA_MODEL = os.getenv("ORCA_ASSISTANT_OLLAMA_MODEL", "gemma3:4b")
+ORCA_ASSISTANT_OLLAMA_MODEL = os.getenv("ORCA_ASSISTANT_OLLAMA_MODEL", "gemma3:4b")  # strategy advisor
+ORCA_INDICATOR_ASSISTANT_OLLAMA_MODEL = os.getenv("ORCA_INDICATOR_ASSISTANT_OLLAMA_MODEL", "deepseek-coder:6.7b")
 # Local inference is much slower than a hosted API — especially a "cold" request
 # where Ollama has to load the model back into memory first (it unloads idle
 # models after ORCA_ASSISTANT_OLLAMA_KEEP_ALIVE). Give it a separate, longer

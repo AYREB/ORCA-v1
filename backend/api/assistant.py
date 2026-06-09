@@ -1179,8 +1179,8 @@ def _ask_openai(messages: list[dict[str, str]], system_prompt: str, context_text
     }
 
 
-def _ask_ollama(messages: list[dict[str, str]], system_prompt: str, context_text: str) -> dict[str, Any]:
-    model = getattr(settings, "ORCA_ASSISTANT_OLLAMA_MODEL", "llama3.1:8b")
+def _ask_ollama(messages: list[dict[str, str]], system_prompt: str, context_text: str, model_override: str | None = None) -> dict[str, Any]:
+    model = model_override or getattr(settings, "ORCA_ASSISTANT_OLLAMA_MODEL", "llama3.1:8b")
     ollama_base = getattr(settings, "ORCA_ASSISTANT_OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
     ollama_messages = [
         {
@@ -1248,12 +1248,12 @@ def _ask_ollama(messages: list[dict[str, str]], system_prompt: str, context_text
     }
 
 
-def _dispatch_assistant(messages: list[dict[str, str]], system_prompt: str, context_text: str) -> dict[str, Any]:
+def _dispatch_assistant(messages: list[dict[str, str]], system_prompt: str, context_text: str, model_override: str | None = None) -> dict[str, Any]:
     provider = str(getattr(settings, "ORCA_ASSISTANT_PROVIDER", "ollama")).strip().lower()
     if provider == "openai":
         return _ask_openai(messages, system_prompt, context_text)
     if provider == "ollama":
-        return _ask_ollama(messages, system_prompt, context_text)
+        return _ask_ollama(messages, system_prompt, context_text, model_override=model_override)
     raise AssistantProviderError(
         "Invalid ORCA_ASSISTANT_PROVIDER. Use 'ollama' or 'openai'.",
         status_code=500,
@@ -1272,8 +1272,10 @@ def ask_indicator_assistant(
     messages: list[dict[str, str]], indicator_context: dict[str, Any], mode: str = "ask"
 ) -> dict[str, Any]:
     normalized_mode = "agent" if mode == "agent" else "ask"
+    indicator_model = getattr(settings, "ORCA_INDICATOR_ASSISTANT_OLLAMA_MODEL", "deepseek-coder:6.7b")
     response = _dispatch_assistant(
-        messages, _indicator_assistant_instructions(normalized_mode), _indicator_context_text(indicator_context)
+        messages, _indicator_assistant_instructions(normalized_mode), _indicator_context_text(indicator_context),
+        model_override=indicator_model,
     )
     response["mode"] = normalized_mode
     return response
