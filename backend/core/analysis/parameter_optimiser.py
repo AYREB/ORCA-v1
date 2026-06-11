@@ -1,6 +1,7 @@
 import copy
 import itertools
 import json
+import math
 import os
 import random
 import sys
@@ -393,3 +394,260 @@ def genetic_optimizer(parsed_dsl, param_choices=None, initial_balance=10000,
         "errors":      errors,
         "total_runs":  total_runs,
     }
+
+# ---------------- SHARED METAHEURISTIC SCAFFOLDING ---------------- #
+#
+# Random Search, Particle Swarm, Simulated Annealing, and Differential
+# Evolution all search the same discrete parameter space that grid/genetic use
+# (`build_param_values` -> {dot_path: [candidate values]}). They differ only in
+# *how* they pick the next candidate to backtest. These helpers give them a
+# common evaluator (records every run, tracks the best, drives the progress
+# hook) and a common result envelope identical to the grid/genetic optimizers,
+# so the API and frontend treat every optimizer the same.
+
+
+def _make_evaluator(parsed_dsl, data_dict, indicator_functions, initial_balance, total_runs, progress_hook):
+    """Return (evaluate, state). `evaluate(individual)` backtests one parameter
+    set, records it, updates the best, ticks progress, and returns its fitness
+    (pct_change; -inf on failure so failed runs never win)."""
+    state = {"completed": 0, "best": None, "all_results": [], "errors": []}
+
+    def evaluate(individual):
+        params = dict(individual)
+        try:
+            dsl_copy = apply_overrides(parsed_dsl, params)
+            metrics = _run_backtest(dsl_copy, data_dict, indicator_functions, initial_balance)
+            entry = {"params": params, "results": metrics}
+            state["all_results"].append(entry)
+            if state["best"] is None or metrics["pct_change"] > state["best"]["results"]["pct_change"]:
+                state["best"] = {**entry, "dsl": dsl_copy}
+            return metrics["pct_change"]
+        except Exception as e:
+            state["errors"].append({"params": params, "error": str(e)})
+            return float("-inf")
+        finally:
+            state["completed"] += 1
+            if progress_hook:
+                progress_hook(state["completed"], total_runs)
+
+    return evaluate, state
+
+
+def _finalize(parsed_dsl, state, total_runs, label):
+    if state["best"] is None:
+        sample = state["errors"][0]["error"] if state["errors"] else "Unknown error"
+        raise ValueError(f"{label} produced no successful runs. Sample error: {sample}")
+
+    all_backtests = sorted(
+        ({"dsl": apply_overrides(parsed_dsl, e["params"]), **e} for e in state["all_results"]),
+        key=lambda e: e["results"]["pct_change"],
+        reverse=True,
+    )
+    return {
+        "all_backtests": all_backtests,
+        "best_result": state["best"],
+        "errors": state["errors"],
+        "total_runs": total_runs,
+    }
+
+
+def _resolve_param_space(parsed_dsl, param_choices, label):
+    """Build the discrete {path: [values]} space and reject empty selections."""
+    param_values, _ = build_param_values(parsed_dsl, param_choices)
+    param_values = filter_optimizable_parameter_map(param_values)
+    param_keys = list(param_values.keys())
+    if not param_keys:
+        raise ValueError(f"No parameters selected for {label}")
+    return param_values, param_keys
+
+
+def _clamp_index(value, length):
+    return max(0, min(length - 1, int(round(value))))
+
+
+# ---------------- RANDOM SEARCH ---------------- #
+
+def random_search_optimizer(parsed_dsl, param_choices=None, initial_balance=10000,
+                            settings=None, progress_hook=None):
+    """Randomly sample parameter combinations from the search space."""
+    parsed_dsl, data_dict, indicator_functions = _prepare(parsed_dsl)
+    s = settings or {}
+    iterations = max(1, int(s.get("iterations", 30)))
+
+    param_values, param_keys = _resolve_param_space(parsed_dsl, param_choices, "random search")
+    total_runs = iterations
+    evaluate, state = _make_evaluator(
+        parsed_dsl, data_dict, indicator_functions, initial_balance, total_runs, progress_hook
+    )
+
+    for _ in range(iterations):
+        evaluate({k: random.choice(param_values[k]) for k in param_keys})
+
+    return _finalize(parsed_dsl, state, total_runs, "Random search")
+
+
+# ---------------- PARTICLE SWARM OPTIMIZATION ---------------- #
+
+def pso_optimizer(parsed_dsl, param_choices=None, initial_balance=10000,
+                  settings=None, progress_hook=None):
+    """Particle Swarm Optimization over the (continuous) index space of each
+    parameter's candidate-value list. Particles are pulled toward their own
+    best position and the swarm's global best."""
+    parsed_dsl, data_dict, indicator_functions = _prepare(parsed_dsl)
+    s = settings or {}
+    swarm_size = max(2, int(s.get("swarm_size", 15)))
+    iterations = max(1, int(s.get("iterations", 8)))
+    inertia = float(s.get("inertia", 0.7))
+    cognitive = float(s.get("cognitive", 1.5))
+    social = float(s.get("social", 1.5))
+
+    param_values, param_keys = _resolve_param_space(parsed_dsl, param_choices, "particle swarm")
+    lengths = [len(param_values[k]) for k in param_keys]
+    dim = len(param_keys)
+    total_runs = swarm_size * iterations
+    evaluate, state = _make_evaluator(
+        parsed_dsl, data_dict, indicator_functions, initial_balance, total_runs, progress_hook
+    )
+
+    def to_individual(position):
+        return {k: param_values[k][_clamp_index(position[i], lengths[i])] for i, k in enumerate(param_keys)}
+
+    positions = [[random.uniform(0, lengths[i] - 1) for i in range(dim)] for _ in range(swarm_size)]
+    velocities = [[random.uniform(-1, 1) for _ in range(dim)] for _ in range(swarm_size)]
+    pbest_pos = [list(p) for p in positions]
+    pbest_score = []
+    gbest_pos, gbest_score = list(positions[0]), float("-inf")
+
+    for i in range(swarm_size):
+        score = evaluate(to_individual(positions[i]))
+        pbest_score.append(score)
+        if score > gbest_score:
+            gbest_score, gbest_pos = score, list(positions[i])
+
+    for _ in range(1, iterations):
+        for i in range(swarm_size):
+            for d in range(dim):
+                r1, r2 = random.random(), random.random()
+                velocities[i][d] = (
+                    inertia * velocities[i][d]
+                    + cognitive * r1 * (pbest_pos[i][d] - positions[i][d])
+                    + social * r2 * (gbest_pos[d] - positions[i][d])
+                )
+                positions[i][d] = max(0.0, min(lengths[d] - 1, positions[i][d] + velocities[i][d]))
+            score = evaluate(to_individual(positions[i]))
+            if score > pbest_score[i]:
+                pbest_score[i], pbest_pos[i] = score, list(positions[i])
+            if score > gbest_score:
+                gbest_score, gbest_pos = score, list(positions[i])
+
+    return _finalize(parsed_dsl, state, total_runs, "Particle swarm")
+
+
+# ---------------- SIMULATED ANNEALING ---------------- #
+
+def simulated_annealing_optimizer(parsed_dsl, param_choices=None, initial_balance=10000,
+                                  settings=None, progress_hook=None):
+    """Simulated Annealing: take random single-parameter steps, always accept
+    improvements and sometimes accept worse moves (probability falls as the
+    temperature cools), letting it escape local optima early on."""
+    parsed_dsl, data_dict, indicator_functions = _prepare(parsed_dsl)
+    s = settings or {}
+    iterations = max(2, int(s.get("iterations", 40)))
+    temperature = max(1e-6, float(s.get("initial_temp", 1.0)))
+    cooling_rate = float(s.get("cooling_rate", 0.95))
+
+    param_values, param_keys = _resolve_param_space(parsed_dsl, param_choices, "simulated annealing")
+    lengths = [len(param_values[k]) for k in param_keys]
+    dim = len(param_keys)
+    total_runs = iterations
+    evaluate, state = _make_evaluator(
+        parsed_dsl, data_dict, indicator_functions, initial_balance, total_runs, progress_hook
+    )
+
+    def to_individual(indices):
+        return {k: param_values[k][indices[i]] for i, k in enumerate(param_keys)}
+
+    current = [random.randint(0, lengths[i] - 1) for i in range(dim)]
+    current_score = evaluate(to_individual(current))  # counts as the first run
+
+    for _ in range(iterations - 1):
+        neighbor = list(current)
+        d = random.randrange(dim)
+        if lengths[d] > 1:
+            neighbor[d] = max(0, min(lengths[d] - 1, neighbor[d] + random.choice([-1, 1])))
+        score = evaluate(to_individual(neighbor))
+        delta = score - current_score
+        if delta >= 0 or (temperature > 1e-9 and math.isfinite(delta) and random.random() < math.exp(delta / temperature)):
+            current, current_score = neighbor, score
+        temperature *= cooling_rate
+
+    return _finalize(parsed_dsl, state, total_runs, "Simulated annealing")
+
+
+# ---------------- DIFFERENTIAL EVOLUTION ---------------- #
+
+def differential_evolution_optimizer(parsed_dsl, param_choices=None, initial_balance=10000,
+                                     settings=None, progress_hook=None):
+    """Differential Evolution: each candidate is perturbed by the scaled
+    difference of two others (mutation F) and recombined (crossover CR); the
+    trial replaces the target only if it backtests at least as well."""
+    parsed_dsl, data_dict, indicator_functions = _prepare(parsed_dsl)
+    s = settings or {}
+    pop_size = max(4, int(s.get("population", 15)))
+    generations = max(1, int(s.get("generations", 8)))
+    F = float(s.get("mutation", 0.8))
+    CR = float(s.get("crossover", 0.7))
+
+    param_values, param_keys = _resolve_param_space(parsed_dsl, param_choices, "differential evolution")
+    lengths = [len(param_values[k]) for k in param_keys]
+    dim = len(param_keys)
+    total_runs = pop_size * generations
+    evaluate, state = _make_evaluator(
+        parsed_dsl, data_dict, indicator_functions, initial_balance, total_runs, progress_hook
+    )
+
+    def to_individual(vector):
+        return {k: param_values[k][_clamp_index(vector[i], lengths[i])] for i, k in enumerate(param_keys)}
+
+    population = [[random.uniform(0, lengths[i] - 1) for i in range(dim)] for _ in range(pop_size)]
+    fitness = [evaluate(to_individual(ind)) for ind in population]
+
+    for _ in range(1, generations):
+        for i in range(pop_size):
+            others = [j for j in range(pop_size) if j != i]
+            a, b, c = random.sample(others, 3)
+            mutant = [population[a][d] + F * (population[b][d] - population[c][d]) for d in range(dim)]
+            jrand = random.randrange(dim)
+            trial = [
+                max(0.0, min(lengths[d] - 1, mutant[d] if (random.random() < CR or d == jrand) else population[i][d]))
+                for d in range(dim)
+            ]
+            score = evaluate(to_individual(trial))
+            if score >= fitness[i]:
+                population[i], fitness[i] = trial, score
+
+    return _finalize(parsed_dsl, state, total_runs, "Differential evolution")
+
+
+# ---------------- DISPATCH ---------------- #
+
+METAHEURISTIC_OPTIMISERS = {
+    "random": random_search_optimizer,
+    "pso": pso_optimizer,
+    "annealing": simulated_annealing_optimizer,
+    "differential": differential_evolution_optimizer,
+}
+
+
+def estimate_total_runs(method, settings=None):
+    """Number of backtests a method will run, for the async job's progress bar."""
+    s = settings or {}
+    if method == "random":
+        return max(1, int(s.get("iterations", 30)))
+    if method == "pso":
+        return max(2, int(s.get("swarm_size", 15))) * max(1, int(s.get("iterations", 8)))
+    if method == "annealing":
+        return max(2, int(s.get("iterations", 40)))
+    if method == "differential":
+        return max(4, int(s.get("population", 15))) * max(1, int(s.get("generations", 8)))
+    return 0

@@ -2,13 +2,12 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { HelmetProvider } from "react-helmet-async";
 import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import Backtest from "./pages/Backtest";
-import Optimizer from "./pages/Optimizer";
-import Genetic from "./pages/Genetic";
+import Optimizers from "./pages/Optimizers";
 import NotFound from "./pages/NotFound";
 import Strategies from "./pages/Strategies";
 import CustomIndicators from "./pages/CustomIndicators";
@@ -52,20 +51,21 @@ const App = () => (
                     }
                   />
                   <Route
-                    path="/dashboard/optimizer"
+                    path="/dashboard/optimizers"
                     element={
                       <ProtectedRoute>
-                        <Optimizer />
+                        <Optimizers />
                       </ProtectedRoute>
                     }
                   />
+                  {/* Legacy routes -> unified Optimizers tab */}
+                  <Route
+                    path="/dashboard/optimizer"
+                    element={<Navigate to="/dashboard/optimizers?method=parameter" replace />}
+                  />
                   <Route
                     path="/dashboard/genetic"
-                    element={
-                      <ProtectedRoute>
-                        <Genetic />
-                      </ProtectedRoute>
-                    }
+                    element={<Navigate to="/dashboard/optimizers?method=genetic" replace />}
                   />
                   <Route
                     path="/dashboard/strategies"

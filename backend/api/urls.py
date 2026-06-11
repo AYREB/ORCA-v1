@@ -28,6 +28,8 @@ urlpatterns = [
     path("dslParameterOptimiser/status/<str:job_id>/", views.dslParameterOptimiserStatus),
     path("dslGeneticOptimiser/", views.dslGeneticOptimiser),
     path("dslGeneticOptimiser/status/<str:job_id>/", views.dslGeneticOptimiserStatus),
+    path("dslOptimiser/", views.dslOptimiser),
+    path("dslOptimiser/status/<str:job_id>/", views.dslOptimiserStatus),
     path("registry/", views.registry),
     path("strategy-assistant/chat/", views.strategy_assistant_chat),
     path("strategy-assistant/market-data/", views.strategy_assistant_market_data),

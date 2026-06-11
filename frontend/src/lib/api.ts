@@ -121,6 +121,24 @@ export interface GeneticJobStatus {
   error?: string;
 }
 
+// Metaheuristic optimizers (random search, particle swarm, simulated annealing,
+// differential evolution) — all share one endpoint, dispatched by `method`.
+export type OptimiserMethod = "random" | "pso" | "annealing" | "differential";
+
+export interface OptimiserJobStart {
+  job_id: string;
+  total_runs: number;
+}
+
+export interface OptimiserJobStatus {
+  status: "queued" | "running" | "completed" | "error";
+  completed_runs: number;
+  total_runs: number;
+  progress: number;
+  result?: OptimizationResult;
+  error?: string;
+}
+
 export interface RegistryResponse {
   commands: Record<string, unknown>;
   indicators: Record<string, unknown>;
@@ -601,6 +619,31 @@ class DjangoAPI {
 
   async getGeneticJobStatus(jobId: string): Promise<GeneticJobStatus> {
     return this.request<GeneticJobStatus>(`/dslGeneticOptimiser/status/${jobId}/`);
+  }
+
+  // Metaheuristic optimizers (async job) — random / pso / annealing / differential
+  async startOptimiserJob(
+    method: OptimiserMethod,
+    dslJson: Record<string, unknown>,
+    parameterChoice: Record<string, ParameterChoice>,
+    initialBalance: number,
+    settings: Record<string, number>
+  ): Promise<OptimiserJobStart> {
+    return this.request<OptimiserJobStart>("/dslOptimiser/", {
+      method: "POST",
+      body: JSON.stringify({
+        method,
+        dsl_json: dslJson,
+        parameter_choice: parameterChoice,
+        initial_balance: initialBalance,
+        settings,
+        async: true,
+      }),
+    });
+  }
+
+  async getOptimiserJobStatus(jobId: string): Promise<OptimiserJobStatus> {
+    return this.request<OptimiserJobStatus>(`/dslOptimiser/status/${jobId}/`);
   }
 
   // Get registry (commands, indicators, arguments)

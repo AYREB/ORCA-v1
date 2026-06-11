@@ -263,6 +263,11 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # API protection and abuse limits.
+# Number of trusted reverse proxies in front of the app. 0 (default) = none, so
+# rate limiting uses the real socket peer and ignores the spoofable
+# X-Forwarded-For header. Behind Railway/Vercel's edge set this to 1 so the real
+# client IP (appended by the trusted proxy) is used instead of REMOTE_ADDR.
+TRUSTED_PROXY_COUNT = env_int("TRUSTED_PROXY_COUNT", 0, minimum=0)
 MAX_JSON_BODY_BYTES = env_int("MAX_JSON_BODY_BYTES", 1048576, minimum=1)
 MAX_DSL_TEXT_LENGTH = env_int("MAX_DSL_TEXT_LENGTH", 50000, minimum=1000)
 MAX_INITIAL_BALANCE = env_float("MAX_INITIAL_BALANCE", 100000000.0, minimum=1.0)

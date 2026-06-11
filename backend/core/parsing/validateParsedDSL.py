@@ -1,12 +1,18 @@
 import json
+import os
 
-with open("Core/Registries/commandRegistry.json") as f:
+# Resolve registries relative to this file (backend/core/parsing/ -> backend/core/registries/).
+# These load at import time, so a cwd-relative or wrong-case path (e.g. "Core/Registries")
+# would crash the whole app on import on a case-sensitive filesystem (Linux/Railway).
+_REGISTRIES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "registries")
+
+with open(os.path.join(_REGISTRIES_DIR, "commandRegistry.json")) as f:
     COMMANDS_DEF = json.load(f)["COMMANDS"]
 
-with open("Core/Registries/indicatorRegistry.json") as f:
+with open(os.path.join(_REGISTRIES_DIR, "indicatorRegistry.json")) as f:
     INDICATORS_DEF = json.load(f)["INDICATORS"]
 
-with open("Core/Registries/argumentsRegistry.json") as f:
+with open(os.path.join(_REGISTRIES_DIR, "argumentsRegistry.json")) as f:
     ARGUMENTS_DEF = json.load(f)["ARGUMENTS"]
 
 VALID_COMMANDS = set(COMMANDS_DEF.keys())

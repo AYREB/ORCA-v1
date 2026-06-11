@@ -8,7 +8,6 @@ import {
   LogOut,
   ChevronLeft,
   Sliders,
-  Dna,
   Wallet,
   Sigma
 } from "lucide-react";
@@ -26,8 +25,7 @@ interface DashboardSidebarProps {
 const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
   { icon: FlaskConical, label: "New Backtest", path: "/dashboard/backtest" },
-  { icon: Sliders, label: "Optimizer", path: "/dashboard/optimizer" },
-  { icon: Dna, label: "Genetic", path: "/dashboard/genetic" },
+  { icon: Sliders, label: "Optimizers", path: "/dashboard/optimizers" },
   { icon: LineChart, label: "Strategies", path: "/dashboard/strategies" },
   { icon: Sigma, label: "Custom Indicators", path: "/dashboard/indicators" },
   { icon: Wallet, label: "Paper Accounts", path: "/dashboard/paper-accounts" },

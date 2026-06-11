@@ -1,5 +1,11 @@
 import json
+import os
 import re
+
+# Resolve registries relative to this file (backend/core/parsing/ -> backend/core/registries/)
+# so paths work regardless of the process cwd and on case-sensitive filesystems (Linux).
+_REGISTRIES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "registries")
+_INDICATOR_REGISTRY_PATH = os.path.join(_REGISTRIES_DIR, "indicatorRegistry.json")
 
 # ---------------- Parenthesis-aware extraction ----------------
 def extract_commands(dsl_text):
@@ -261,7 +267,7 @@ def parse_arithmetic(expr):
     return parse_operand(expr) 
 
 
-def parse_indicator_args(arg_str, indicator_name=None, registry_path="Core/Registries/indicatorRegistry.json"):
+def parse_indicator_args(arg_str, indicator_name=None, registry_path=_INDICATOR_REGISTRY_PATH):
     """
     Parse a string like 'close, 0' or 'period=14, timeframe="1h"' into a dict.
     Applies indicator defaults from registry if args missing.
@@ -537,10 +543,6 @@ def parse_dsl(dsl_text):
             **subdict,
             "context": final_context,
         }
-
-    # --- OPTIONAL JSON OUTPUT ---
-    with open("Core/Parsing/dsl_output.json", "w") as f:
-        json.dump(commands, f, indent=4)
 
     return commands
 

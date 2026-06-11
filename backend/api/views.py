@@ -24,7 +24,14 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.authtoken.models import Token
 
-from core.analysis.parameter_optimiser import build_param_grid, build_param_values, genetic_optimizer, optimizer
+from core.analysis.parameter_optimiser import (
+    METAHEURISTIC_OPTIMISERS,
+    build_param_grid,
+    build_param_values,
+    estimate_total_runs,
+    genetic_optimizer,
+    optimizer,
+)
 from core.main import dslJSONBacktest, dslTextToJsonBacktest, BacktestError
 from .assistant import (
     INDICATOR_KNOWLEDGE,
@@ -70,6 +77,9 @@ threading.Thread(target=_prewarm_model, daemon=True).start()
 
 optimizer_jobs: dict[str, dict[str, Any]] = {}
 genetic_jobs: dict[str, dict[str, Any]] = {}
+# Shared store for the metaheuristic optimizers (random / pso / annealing / differential),
+# which all run through the single dslOptimiser endpoint and differ only by `method`.
+optimiser_jobs: dict[str, dict[str, Any]] = {}
 
 DEFAULT_INITIAL_BALANCE = 10000.0
 MAX_STRATEGY_NAME_LENGTH = 255
@@ -175,10 +185,26 @@ def resolve_rate_limit(bucket: str) -> tuple[int, int]:
 
 
 def get_client_ip(request) -> str:
-    forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip() or "unknown"
-    return (request.META.get("REMOTE_ADDR") or "").strip() or "unknown"
+    """Best-effort client IP for IP-based rate limiting.
+
+    X-Forwarded-For is fully client-controllable, so trusting its leftmost value
+    lets an attacker mint a fresh rate-limit bucket per request and walk straight
+    past the auth/brute-force limits. We therefore only honor XFF when
+    TRUSTED_PROXY_COUNT is set (= the number of trusted proxies in front of the
+    app, e.g. 1 behind Railway/Vercel's edge) and read the entry that proxy
+    appended — counting from the right, which a client cannot forge. Default 0
+    means "no trusted proxy", so we use the real socket peer (REMOTE_ADDR).
+    """
+    num_proxies = int(getattr(settings, "TRUSTED_PROXY_COUNT", 0))
+    remote_addr = (request.META.get("REMOTE_ADDR") or "").strip()
+
+    if num_proxies > 0:
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
+        parts = [part.strip() for part in forwarded_for.split(",") if part.strip()]
+        if len(parts) >= num_proxies:
+            return parts[-num_proxies] or "unknown"
+
+    return remote_addr or "unknown"
 
 
 def get_rate_limit_identifier(request) -> str:
@@ -1306,6 +1332,121 @@ def dslGeneticOptimiserStatus(request, job_id):
     user = get_authenticated_user(request)
     cleanup_jobs(genetic_jobs)
     job = genetic_jobs.get(job_id)
+    if not job or job.get("user_id") != user.id:
+        return JsonResponse({"error": "Job not found"}, status=404)
+
+    completed = job.get("completed_runs", 0)
+    total = job.get("total_runs", 0)
+    progress = (completed / total * 100) if total else 0
+
+    response = {
+        "status": job["status"],
+        "completed_runs": completed,
+        "total_runs": total,
+        "progress": min(100, max(0, progress)),
+    }
+    if job["status"] == "completed":
+        response["result"] = job.get("result")
+    if job["status"] == "error":
+        response["error"] = job.get("error")
+
+    return JsonResponse(response, safe=False)
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("compute")
+def dslOptimiser(request):
+    """Generic entrypoint for the metaheuristic optimizers (random search,
+    particle swarm, simulated annealing, differential evolution). Dispatches on
+    `method`; otherwise mirrors the grid/genetic endpoints (sync or async job)."""
+    user = get_authenticated_user(request)
+    body = parse_body(request)
+
+    method = str(body.get("method", "")).strip().lower()
+    runner = METAHEURISTIC_OPTIMISERS.get(method)
+    if runner is None:
+        valid = ", ".join(sorted(METAHEURISTIC_OPTIMISERS))
+        raise APIError(f"Unknown optimiser method '{method}'. Expected one of: {valid}.")
+
+    dsl = validate_dict_payload(body.get("dsl_json", {}), "dsl_json")
+    parameter_choice = validate_dict_payload(body.get("parameter_choice", {}), "parameter_choice")
+    initial_balance = parse_initial_balance(body.get("initial_balance", DEFAULT_INITIAL_BALANCE))
+    opt_settings = body.get("settings", {})
+    if opt_settings and not isinstance(opt_settings, dict):
+        raise APIError("settings must be a JSON object when provided.")
+    async_mode = bool(body.get("async", False))
+
+    if async_mode:
+        cleanup_jobs(optimiser_jobs)
+        ensure_user_can_create_job(optimiser_jobs, user.id)
+
+        job_id = str(uuid.uuid4())
+        total_runs = estimate_total_runs(method, opt_settings)
+
+        optimiser_jobs[job_id] = {
+            "status": "queued",
+            "completed_runs": 0,
+            "total_runs": total_runs,
+            "result": None,
+            "error": None,
+            "user_id": user.id,
+            "created_at": timezone.now(),
+        }
+
+        def progress_hook(done, total):
+            job = optimiser_jobs.get(job_id)
+            if not job:
+                return
+            job["completed_runs"] = done
+            job["total_runs"] = total
+            job["status"] = "running"
+
+        def run_job():
+            try:
+                result = runner(
+                    parsed_dsl=dsl,
+                    param_choices=parameter_choice,
+                    initial_balance=initial_balance,
+                    settings=opt_settings,
+                    progress_hook=progress_hook,
+                )
+                job = optimiser_jobs.get(job_id)
+                if not job:
+                    return
+                job["result"] = result
+                job["status"] = "completed"
+                job["completed_runs"] = job.get("total_runs", 0)
+            except Exception as exc:
+                job = optimiser_jobs.get(job_id)
+                if not job:
+                    return
+                job["error"] = str(exc) if settings.DEBUG else "Optimization failed."
+                job["status"] = "error"
+
+        threading.Thread(target=run_job, daemon=True).start()
+        return JsonResponse({"job_id": job_id, "total_runs": total_runs})
+
+    result = runner(
+        parsed_dsl=dsl,
+        param_choices=parameter_choice,
+        initial_balance=initial_balance,
+        settings=opt_settings,
+    )
+    return JsonResponse(result, safe=False)
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("status")
+def dslOptimiserStatus(request, job_id):
+    user = get_authenticated_user(request)
+    cleanup_jobs(optimiser_jobs)
+    job = optimiser_jobs.get(job_id)
     if not job or job.get("user_id") != user.id:
         return JsonResponse({"error": "Job not found"}, status=404)
 

@@ -59,6 +59,34 @@ _FORBIDDEN_NAMES = {
     "memoryview", "exit", "quit", "help",
 }
 
+# Attribute (method) names that are never legitimately needed by an indicator
+# (which just computes a number from in-memory OHLCV) but are reachable on the
+# pd/np modules exposed in SAFE_GLOBALS and would punch straight through the
+# sandbox: pickle-backed readers/writers (arbitrary code execution on load),
+# file/network I/O (read /etc/passwd, exfiltrate, SSRF), and expression
+# evaluators. Blocked at the AST level as `<obj>.<attr>` so e.g.
+# `pd.read_pickle(url)`, `df.to_csv(path)`, `np.load(f)`, `df.query(...)` are
+# rejected before anything runs. The in-memory converters an indicator actually
+# uses (to_numpy/to_list/to_dict/to_frame/...) are deliberately NOT listed.
+_FORBIDDEN_ATTRS = {
+    # Deserialization / arbitrary-code-execution
+    "read_pickle", "to_pickle", "load", "loads", "save",
+    # Expression evaluation
+    "eval", "query",
+    # File / network readers
+    "read_csv", "read_table", "read_fwf", "read_json", "read_html", "read_xml",
+    "read_excel", "read_hdf", "read_feather", "read_parquet", "read_orc",
+    "read_sas", "read_spss", "read_stata", "read_sql", "read_sql_query",
+    "read_sql_table", "read_gbq", "read_clipboard",
+    # File / network writers
+    "to_csv", "to_hdf", "to_feather", "to_parquet", "to_orc", "to_excel",
+    "to_json", "to_html", "to_xml", "to_latex", "to_stata", "to_sql",
+    "to_gbq", "to_clipboard", "to_markdown",
+    # numpy file I/O
+    "savez", "savez_compressed", "savetxt", "loadtxt", "genfromtxt",
+    "fromfile", "tofile", "memmap", "fromregex", "DataSource",
+}
+
 _SAFE_BUILTIN_NAMES = (
     "abs", "all", "any", "bool", "dict", "enumerate", "filter", "float",
     "int", "isinstance", "len", "list", "map", "max", "min", "range",
@@ -151,6 +179,12 @@ def validate_indicator_source(body: str) -> None:
         elif isinstance(node, ast.Attribute):
             if _is_dunder(node.attr):
                 raise IndicatorValidationError(f"Access to '.{node.attr}' is not allowed.")
+            if node.attr in _FORBIDDEN_ATTRS:
+                raise IndicatorValidationError(
+                    f"Use of '.{node.attr}' is not allowed in indicator code — "
+                    "file, network, pickle, and eval access are blocked. Compute "
+                    "your result from the provided in-memory OHLCV 'data' only."
+                )
         elif isinstance(node, ast.keyword):
             if node.arg and _is_dunder(node.arg):
                 raise IndicatorValidationError(f"Keyword argument '{node.arg}' is not allowed.")

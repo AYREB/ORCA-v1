@@ -271,6 +271,7 @@ Same as QA but:
 | `ORCA_MODAL_API_KEY`          | Modal auth key                  | Modal auth key                   |
 | `GOOGLE_CLIENT_ID`            | your Google OAuth client ID     | your Google OAuth client ID      |
 | `SECURE_SSL_REDIRECT`         | `True`                          | `True`                           |
+| `TRUSTED_PROXY_COUNT`         | `1`                             | `1`                              |
 
 ### Vercel (Frontend) — set per environment
 

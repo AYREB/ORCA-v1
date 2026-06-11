@@ -1,4 +1,5 @@
 import json
+import os
 import pandas as pd
 import numpy as np
 from datetime import timedelta
@@ -8,6 +9,12 @@ from .fetcher_calculators import indicatorEvaluator
 from .parsing.extractingTickers import extract_tickers, extract_execution_timeframe, extract_dateframe, collect_timeframes_from_dsl
 from .backtesting.backtesterCore import backtester
 from .console_ui.PrintTradeSummary import print_trade_summary
+
+# Resolve registries relative to this file (backend/core/ -> backend/core/registries/) so
+# paths work regardless of process cwd and on case-sensitive filesystems (Linux/Railway).
+_REGISTRIES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "registries")
+_INDICATOR_REGISTRY_PATH = os.path.join(_REGISTRIES_DIR, "indicatorRegistry.json")
+_ARGUMENTS_REGISTRY_PATH = os.path.join(_REGISTRIES_DIR, "argumentsRegistry.json")
 
 # ---------------- DSL ----------------
 dsl_text_example = """
@@ -37,7 +44,7 @@ dsl_text_example = """
 """
 
 
-def merge_indicator_defaults(parsed_dsl, registry_path="Core/Registries/indicatorRegistry.json", extra_indicators=None):
+def merge_indicator_defaults(parsed_dsl, registry_path=_INDICATOR_REGISTRY_PATH, extra_indicators=None):
     """
     Ensures all indicator calls have dict args with defaults applied.
 
@@ -83,7 +90,7 @@ def merge_indicator_defaults(parsed_dsl, registry_path="Core/Registries/indicato
     return parsed_dsl
 
 
-def apply_default_arguments(parsed_dsl, registry_path="Core/Registries/argumentsRegistry.json"):
+def apply_default_arguments(parsed_dsl, registry_path=_ARGUMENTS_REGISTRY_PATH):
     with open(registry_path, "r") as f:
         arg_defaults = json.load(f)["ARGUMENTS"]
     for side in ["LONG", "SHORT"]:
@@ -264,11 +271,8 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
     parsed_dsl = apply_default_arguments(parsed_dsl)
     parsed_dsl = merge_indicator_defaults(parsed_dsl, extra_indicators=CUSTOM_INDICATOR_DEFS)
 
-    with open("Core/Parsing/dsl_output.json", "w") as f:
-        json.dump(parsed_dsl, f, indent=4)
-
     # Load indicator definitions from JSON registry
-    with open("Core/Registries/indicatorRegistry.json") as f:
+    with open(_INDICATOR_REGISTRY_PATH) as f:
         INDICATORS_DEF = json.load(f)["INDICATORS"]
 
     # Build functions dynamically — no hardcoding needed
