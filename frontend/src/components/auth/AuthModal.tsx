@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { X, Mail, Lock, User, ArrowRight, Eye, EyeOff } from "lucide-react";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
+import { X, Mail, Lock, User, ArrowRight, Eye, EyeOff, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
+import FinanceBackground, { TickerTape } from "@/components/effects/FinanceBackground";
+import orcaLogo from "@/assets/orca-logo.png";
 
 declare global {
   interface Window {
@@ -35,6 +37,11 @@ declare global {
     };
   }
 }
+
+const fieldVariants: Variants = {
+  hidden: { opacity: 0, y: 12 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: "easeOut" } },
+};
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -157,21 +164,29 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
               exit={{ opacity: 0 }}
               className="fixed inset-0 z-50 flex items-center justify-center"
             >
-          {/* Backdrop */}
-          <div
-            onClick={onClose}
-            className="absolute inset-0 bg-background/80 backdrop-blur-sm"
-          />
+          {/* Animated market backdrop */}
+          <div onClick={onClose} className="absolute inset-0 overflow-hidden bg-background">
+            <FinanceBackground />
+            <div className="absolute inset-0 gradient-radial" />
+            <div className="absolute inset-0 bg-gradient-to-b from-background/60 via-transparent to-background/80" />
+            <div className="absolute left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent animate-scan-line" />
+            <TickerTape />
+          </div>
 
           {/* Modal */}
           <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2 }}
+            initial={{ opacity: 0, scale: 0.95, y: 16 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 16 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
             className="relative z-10 w-full max-w-md mx-4"
           >
-            <div className="relative rounded-2xl border border-border bg-card p-8 shadow-2xl">
+            {/* Gradient glow behind the card */}
+            <div className="absolute -inset-6 rounded-3xl bg-primary/10 blur-2xl animate-pulse-glow pointer-events-none" />
+
+            {/* Gradient border wrapper */}
+            <div className="relative rounded-2xl bg-gradient-to-b from-primary/40 via-border/60 to-border/40 p-px shadow-2xl">
+              <div className="relative rounded-[calc(1rem-1px)] bg-card/85 p-8 backdrop-blur-xl">
               {/* Close button */}
               <button
                 onClick={onClose}
@@ -182,6 +197,18 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
 
               {/* Header */}
               <div className="text-center mb-8">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.4, delay: 0.1 }}
+                  className="relative mx-auto mb-4 flex h-14 w-14 items-center justify-center"
+                >
+                  <div className="absolute inset-0 rounded-xl bg-primary/15 blur-md animate-pulse-glow" />
+                  <img src={orcaLogo} alt="Orca" className="relative h-12 w-12 rounded-xl" />
+                  <div className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary shadow-lg">
+                    <TrendingUp className="h-3 w-3 text-primary-foreground" />
+                  </div>
+                </motion.div>
                 <h2 className="text-2xl font-bold mb-2">
                   {mode === "login" ? "Welcome Back" : "Create Account"}
                 </h2>
@@ -193,39 +220,47 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
               </div>
 
               {/* Form */}
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <motion.form
+                onSubmit={handleSubmit}
+                className="space-y-4"
+                initial="hidden"
+                animate="visible"
+                variants={{
+                  visible: { transition: { staggerChildren: 0.07, delayChildren: 0.15 } },
+                }}
+              >
                 {mode === "signup" && (
-                  <div className="relative">
+                  <motion.div variants={fieldVariants} className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                     <Input
                       type="text"
                       placeholder="Full Name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      className="pl-10 h-12 bg-secondary border-border"
+                      className="pl-10 h-12 bg-secondary border-border transition-shadow focus-visible:shadow-[0_0_16px_hsl(var(--primary)/0.25)]"
                     />
-                  </div>
+                  </motion.div>
                 )}
 
-                <div className="relative">
+                <motion.div variants={fieldVariants} className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                   <Input
                     type="email"
                     placeholder="Email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="pl-10 h-12 bg-secondary border-border"
+                    className="pl-10 h-12 bg-secondary border-border transition-shadow focus-visible:shadow-[0_0_16px_hsl(var(--primary)/0.25)]"
                   />
-                </div>
+                </motion.div>
 
-                <div className="relative">
+                <motion.div variants={fieldVariants} className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                   <Input
                     type={showPassword ? "text" : "password"}
                     placeholder="Password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="pl-10 pr-10 h-12 bg-secondary border-border"
+                    className="pl-10 pr-10 h-12 bg-secondary border-border transition-shadow focus-visible:shadow-[0_0_16px_hsl(var(--primary)/0.25)]"
                   />
                   <button
                     type="button"
@@ -234,21 +269,23 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
                   >
                     {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                   </button>
-                </div>
+                </motion.div>
 
                 {mode === "login" && (
-                  <div className="text-right">
+                  <motion.div variants={fieldVariants} className="text-right">
                     <a href="#" className="text-sm text-primary hover:underline">
                       Forgot password?
                     </a>
-                  </div>
+                  </motion.div>
                 )}
 
-                <Button type="submit" variant="hero" className="w-full h-12" disabled={isSubmitting}>
-                  {mode === "login" ? "Sign In" : "Create Account"}
-                  <ArrowRight className="h-5 w-5" />
-                </Button>
-              </form>
+                <motion.div variants={fieldVariants}>
+                  <Button type="submit" variant="hero" className="w-full h-12 group" disabled={isSubmitting}>
+                    {mode === "login" ? "Sign In" : "Create Account"}
+                    <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
+                  </Button>
+                </motion.div>
+              </motion.form>
 
               {/* Divider */}
               <div className="relative my-6">
@@ -291,6 +328,7 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
                   {mode === "login" ? "Sign up" : "Sign in"}
                 </button>
               </p>
+              </div>
             </div>
           </motion.div>
           </motion.div>

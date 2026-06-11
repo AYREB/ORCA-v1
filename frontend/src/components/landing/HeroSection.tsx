@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import { ArrowRight, Play, BarChart3, Zap, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import FinanceBackground, { TickerTape } from "@/components/effects/FinanceBackground";
 
 interface HeroSectionProps {
   onSignupClick: () => void;
@@ -9,10 +10,13 @@ interface HeroSectionProps {
 const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
-      {/* Background Effects */}
-      <div className="absolute inset-0 grid-pattern opacity-40" />
-      <div className="absolute inset-0 gradient-radial" />
-      
+      {/* Animated market background */}
+      <div className="absolute inset-0">
+        <FinanceBackground />
+        <div className="absolute inset-0 gradient-radial" />
+        <div className="absolute inset-0 bg-gradient-to-b from-background/70 via-transparent to-background" />
+      </div>
+
       {/* Animated scan line */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent animate-scan-line" />
@@ -29,6 +33,9 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
         animate={{ scale: [1.2, 1, 1.2], opacity: [0.2, 0.4, 0.2] }}
         transition={{ duration: 10, repeat: Infinity }}
       />
+
+      {/* Live ticker tape */}
+      <TickerTape />
 
       <div className="container mx-auto px-4 relative z-10">
         <div className="max-w-4xl mx-auto text-center">
@@ -144,13 +151,15 @@ const PreviewCard = ({ icon, title, description, delay }: { icon: React.ReactNod
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
     transition={{ duration: 0.5, delay }}
-    className="p-5 rounded-xl border border-border/50 bg-card/50 backdrop-blur-sm hover:border-primary/30 transition-colors"
+    className="group relative rounded-xl bg-gradient-to-b from-primary/30 via-border/60 to-border/40 p-px transition-shadow hover:shadow-[0_0_24px_hsl(var(--primary)/0.15)]"
   >
-    <div className="flex items-center gap-3 mb-3">
-      <div className="p-2 rounded-lg bg-secondary">{icon}</div>
-      <h3 className="font-semibold">{title}</h3>
+    <div className="h-full rounded-[calc(0.75rem-1px)] bg-card/70 p-5 backdrop-blur-md">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="p-2 rounded-lg bg-secondary transition-colors group-hover:bg-primary/15">{icon}</div>
+        <h3 className="font-semibold">{title}</h3>
+      </div>
+      <p className="text-sm text-muted-foreground">{description}</p>
     </div>
-    <p className="text-sm text-muted-foreground">{description}</p>
   </motion.div>
 );
 
