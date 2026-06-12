@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { Info, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 // Argument Selector Component with parent-child support
 export function ArgumentSelector({
@@ -17,6 +18,11 @@ export function ArgumentSelector({
 }) {
   const [addedArgs, setAddedArgs] = useState<string[]>(Object.keys(currentArgs));
 
+  // Display name and option labels come from the registry; fall back to the raw id.
+  const labelOf = (arg: string) => availableArgs[arg]?.label || arg;
+  const optionLabelOf = (arg: string, option: string) =>
+    availableArgs[arg]?.optionLabels?.[option] || option;
+
   // Get children of a parent arg
   const getChildren = (parentArg: string) => {
     return Object.keys(availableArgs).filter(
@@ -28,7 +34,7 @@ export function ArgumentSelector({
     if (!addedArgs.includes(arg)) {
       const newArgs = [arg];
       onChange(arg, availableArgs[arg]?.default ?? null);
-      
+
       // If this arg has children, also add them with defaults
       const children = getChildren(arg);
       children.forEach((child) => {
@@ -37,7 +43,7 @@ export function ArgumentSelector({
           onChange(child, availableArgs[child]?.default ?? null);
         }
       });
-      
+
       setAddedArgs([...addedArgs, ...newArgs]);
     }
   };
@@ -46,7 +52,7 @@ export function ArgumentSelector({
     // Also remove any children of this arg
     const children = getChildren(arg);
     const toRemove = [arg, ...children];
-    
+
     setAddedArgs(addedArgs.filter((a) => !toRemove.includes(a)));
     toRemove.forEach((a) => onChange(a, undefined));
   };
@@ -58,8 +64,8 @@ export function ArgumentSelector({
 
   // Filter out trade settings args from OPEN block since they're managed by Risk Management.
   const hiddenArgs = [
-    "takeProfitPercent", 
-    "stopLossPercent", 
+    "takeProfitPercent",
+    "stopLossPercent",
     "spread"
   ];
   const topLevelArgs = Object.keys(availableArgs).filter((a) => !availableArgs[a]?.parent && !hiddenArgs.includes(a));
@@ -73,34 +79,44 @@ export function ArgumentSelector({
     const valType = typeof argData.default;
 
     return (
-      <div 
-        key={arg} 
+      <div
+        key={arg}
         className={`flex items-center gap-2 p-2 rounded-lg bg-background/30 border border-border/30 ${
           isChild ? "ml-4 border-l-2 border-l-primary/30" : ""
         }`}
       >
-        <span className="text-xs text-muted-foreground flex-1 truncate">
-          {isChild && <span className="text-primary/50 mr-1">↳</span>}
-          {arg}
+        <span className="flex flex-1 items-center gap-1.5 truncate text-xs text-muted-foreground">
+          {isChild && <span className="text-primary/50">↳</span>}
+          <span className="truncate">{labelOf(arg)}</span>
+          {argData.description && (
+            <Tooltip delayDuration={150}>
+              <TooltipTrigger asChild>
+                <Info className="h-3 w-3 shrink-0 cursor-help text-muted-foreground/60 hover:text-primary" />
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-[280px] text-xs">
+                {argData.description}
+              </TooltipContent>
+            </Tooltip>
+          )}
         </span>
         {valType === "boolean" ? (
           <Select value={String(val)} onValueChange={(v) => onChange(arg, v === "true")}>
-            <SelectTrigger className="w-20 h-7 text-xs bg-secondary/50">
+            <SelectTrigger className="w-24 h-7 text-xs bg-secondary/50">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="true">true</SelectItem>
-              <SelectItem value="false">false</SelectItem>
+              <SelectItem value="true">Enabled</SelectItem>
+              <SelectItem value="false">Disabled</SelectItem>
             </SelectContent>
           </Select>
         ) : argData.options ? (
           <Select value={val} onValueChange={(v) => onChange(arg, v)}>
-            <SelectTrigger className="w-36 h-7 text-xs bg-secondary/50">
+            <SelectTrigger className="w-44 h-7 text-xs bg-secondary/50">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {argData.options.map((opt: string) => (
-                <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                <SelectItem key={opt} value={opt}>{optionLabelOf(arg, opt)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -126,7 +142,7 @@ export function ArgumentSelector({
         .map((arg) => (
           <div key={arg}>
             {renderArgRow(arg, false)}
-            
+
             {/* Render children if parent is enabled (set to true) */}
             {isParentEnabled(arg) && (
               <div className="space-y-2 mt-2">
@@ -139,13 +155,22 @@ export function ArgumentSelector({
         ))}
 
       {topLevelArgs.filter((a) => !addedArgs.includes(a)).length > 0 && (
-        <Select onValueChange={addArg}>
+        <Select onValueChange={addArg} value="">
           <SelectTrigger className="w-full h-8 text-xs bg-secondary/30 border-dashed">
             <SelectValue placeholder="+ Add parameter..." />
           </SelectTrigger>
           <SelectContent>
             {topLevelArgs.filter((a) => !addedArgs.includes(a)).map((arg) => (
-              <SelectItem key={arg} value={arg}>{arg}</SelectItem>
+              <SelectItem key={arg} value={arg} className="py-2">
+                <div className="flex flex-col items-start gap-0.5 text-left">
+                  <span className="text-xs font-medium">{labelOf(arg)}</span>
+                  {availableArgs[arg]?.description && (
+                    <span className="max-w-[320px] whitespace-normal text-[11px] leading-snug text-muted-foreground">
+                      {availableArgs[arg].description}
+                    </span>
+                  )}
+                </div>
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>

@@ -13,7 +13,7 @@ export interface TradeEntry {
   timestamp: string;
   sl_price?: number;
   tp_price?: number;
-  close_reason?: 'SL' | 'TP' | 'CLOSE_CONDITION';
+  close_reason?: 'SL' | 'TP' | 'CLOSE_CONDITION' | 'MAX_HOLD';
 }
 
 export interface OHLCData {

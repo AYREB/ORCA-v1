@@ -3,55 +3,222 @@
     "LONG": {
       "OPEN": {
         "initialOpenPositionInvestType": {
-          "options": ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"],
-          "default": "fixedValue",
-          "description": "Specifies how the initial investment amount is calculated."
+          "label": "Position Size Type",
+          "options": [
+            "percentCashBalance",
+            "fixedValue",
+            "percentSharePrice",
+            "numberShares"
+          ],
+          "optionLabels": {
+            "percentCashBalance": "% of Cash Balance",
+            "fixedValue": "Fixed Dollar Amount",
+            "percentSharePrice": "% of Share Price",
+            "numberShares": "Number of Shares"
+          },
+          "default": "percentCashBalance",
+          "description": "How the size of each opening trade is calculated."
         },
         "initialOpenPositionInvestAmount": {
+          "label": "Position Size Amount",
           "type": "float",
           "default": 0.2,
-          "description": "Defines the numeric value used when the investment type requires a fixed or percent-based amount."
+          "description": "Size value for the chosen type: a fraction for percent types (0.2 = 20% of cash), dollars for Fixed Dollar Amount, or a share count for Number of Shares."
         },
         "recurring": {
+          "label": "Recurring Entries (DCA)",
           "type": "bool",
           "default": false,
-          "description": "Enable/disable recurring trades for this position."
+          "description": "Keep adding to the position at set intervals while it stays open (dollar-cost averaging)."
         },
         "recurringPeriod": {
+          "label": "Bars Between Entries",
           "type": "int",
           "default": 5,
-          "description": "Minimum number of bars/periods between additional investments."
+          "description": "Minimum number of bars to wait before each additional recurring entry.",
+          "parent": "recurring"
         },
         "recurringInvestType": {
-          "options": ["percentCashBalance", "fixedValue", "percentSharePrice", "numberShares"],
+          "label": "Recurring Size Type",
+          "options": [
+            "percentCashBalance",
+            "fixedValue",
+            "percentSharePrice",
+            "numberShares"
+          ],
+          "optionLabels": {
+            "percentCashBalance": "% of Cash Balance",
+            "fixedValue": "Fixed Dollar Amount",
+            "percentSharePrice": "% of Share Price",
+            "numberShares": "Number of Shares"
+          },
           "default": "percentCashBalance",
-          "description": "Investment type for recurring trades."
+          "description": "How the size of each recurring entry is calculated.",
+          "parent": "recurring"
         },
         "recurringInvestAmount": {
+          "label": "Recurring Size Amount",
           "type": "float",
           "default": 0.1,
-          "description": "Amount to invest each recurring trade, interpreted according to recurringInvestType."
+          "description": "Size of each recurring entry, interpreted according to the Recurring Size Type (0.1 = 10% for percent types).",
+          "parent": "recurring"
         },
         "maxRecurringCount": {
+          "label": "Max Recurring Entries",
           "type": "int",
           "default": 0,
-          "description": "Maximum number of recurring investments per position (0 = unlimited)."
+          "description": "Maximum number of recurring entries per position. 0 = unlimited.",
+          "parent": "recurring"
         },
         "spread": {
+          "label": "Spread %",
           "type": "float",
           "default": 0.0,
-          "description": "Bid/ask spread percentage applied on entries and exits (e.g. 0.1 = 0.1%)."
+          "description": "Bid/ask spread applied to entry and exit prices (0.1 = 0.1%)."
+        },
+        "stopLossPercent": {
+          "label": "Stop Loss %",
+          "type": "float",
+          "default": 5,
+          "description": "Closes the position if price falls this percent below entry (5 = 5%)."
+        },
+        "takeProfitPercent": {
+          "label": "Take Profit %",
+          "type": "float",
+          "default": 10,
+          "description": "Closes the position if price rises this percent above entry (10 = 10%)."
         }
       },
       "CLOSE": {
-        "test": {
-          "type": "float",
-          "default": 0.5,
-          "description": "test"
+        "minHoldBars": {
+          "label": "Minimum Hold (bars)",
+          "type": "int",
+          "default": 0,
+          "description": "Ignore the close condition for the first N bars after entry (0 = off). Stop loss and take profit still apply."
+        },
+        "maxHoldBars": {
+          "label": "Max Hold (bars)",
+          "type": "int",
+          "default": 0,
+          "description": "Force-close the position after holding for this many bars, regardless of conditions (0 = off)."
+        },
+        "reentryCooldownBars": {
+          "label": "Re-entry Cooldown (bars)",
+          "type": "int",
+          "default": 0,
+          "description": "After closing, wait this many bars before a new position can be opened (0 = off)."
         }
       }
     },
     "SHORT": {
+      "OPEN": {
+        "initialOpenPositionInvestType": {
+          "label": "Position Size Type",
+          "options": [
+            "percentCashBalance",
+            "fixedValue",
+            "percentSharePrice",
+            "numberShares"
+          ],
+          "optionLabels": {
+            "percentCashBalance": "% of Cash Balance",
+            "fixedValue": "Fixed Dollar Amount",
+            "percentSharePrice": "% of Share Price",
+            "numberShares": "Number of Shares"
+          },
+          "default": "percentCashBalance",
+          "description": "How the size of each opening short is calculated."
+        },
+        "initialOpenPositionInvestAmount": {
+          "label": "Position Size Amount",
+          "type": "float",
+          "default": 0.2,
+          "description": "Size committed to the short for the chosen type: a fraction for percent types (0.2 = 20% of cash), dollars for Fixed Dollar Amount, or a share count for Number of Shares."
+        },
+        "recurring": {
+          "label": "Recurring Entries",
+          "type": "bool",
+          "default": false,
+          "description": "Keep adding to the short position at set intervals while it stays open."
+        },
+        "recurringPeriod": {
+          "label": "Bars Between Entries",
+          "type": "int",
+          "default": 5,
+          "description": "Minimum number of bars to wait before each additional recurring short entry.",
+          "parent": "recurring"
+        },
+        "recurringInvestType": {
+          "label": "Recurring Size Type",
+          "options": [
+            "percentCashBalance",
+            "fixedValue",
+            "percentSharePrice",
+            "numberShares"
+          ],
+          "optionLabels": {
+            "percentCashBalance": "% of Cash Balance",
+            "fixedValue": "Fixed Dollar Amount",
+            "percentSharePrice": "% of Share Price",
+            "numberShares": "Number of Shares"
+          },
+          "default": "percentCashBalance",
+          "description": "How the size of each recurring short entry is calculated.",
+          "parent": "recurring"
+        },
+        "recurringInvestAmount": {
+          "label": "Recurring Size Amount",
+          "type": "float",
+          "default": 0.1,
+          "description": "Size of each recurring short entry, interpreted according to the Recurring Size Type (0.1 = 10% for percent types).",
+          "parent": "recurring"
+        },
+        "maxRecurringCount": {
+          "label": "Max Recurring Entries",
+          "type": "int",
+          "default": 0,
+          "description": "Maximum number of recurring short entries per position. 0 = unlimited.",
+          "parent": "recurring"
+        },
+        "spread": {
+          "label": "Spread %",
+          "type": "float",
+          "default": 0.0,
+          "description": "Bid/ask spread applied to entry and exit prices (0.1 = 0.1%)."
+        },
+        "stopLossPercent": {
+          "label": "Stop Loss %",
+          "type": "float",
+          "default": 5,
+          "description": "Closes the short if price rises this percent above entry (5 = 5%) \u2014 shorts lose when price climbs."
+        },
+        "takeProfitPercent": {
+          "label": "Take Profit %",
+          "type": "float",
+          "default": 10,
+          "description": "Closes the short if price falls this percent below entry (10 = 10%)."
+        }
+      },
+      "CLOSE": {
+        "minHoldBars": {
+          "label": "Minimum Hold (bars)",
+          "type": "int",
+          "default": 0,
+          "description": "Ignore the close condition for the first N bars after entry (0 = off). Stop loss and take profit still apply."
+        },
+        "maxHoldBars": {
+          "label": "Max Hold (bars)",
+          "type": "int",
+          "default": 0,
+          "description": "Force-close the position after holding for this many bars, regardless of conditions (0 = off)."
+        },
+        "reentryCooldownBars": {
+          "label": "Re-entry Cooldown (bars)",
+          "type": "int",
+          "default": 0,
+          "description": "After closing, wait this many bars before a new position can be opened (0 = off)."
+        }
+      }
     }
   }
 }

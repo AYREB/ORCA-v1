@@ -62,6 +62,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
 
     open_cond, close_cond = get_long_short_conditions(parsed_dsl, strategy_type)
     open_args = get_open_args(parsed_dsl, strategy_type)
+    close_args = get_close_args(parsed_dsl, strategy_type)
     dateframe = extract_dateframe(parsed_dsl) or {}
     trade_start_at = parse_datetime_bound(dateframe.get("start"))
     trade_end_at = parse_datetime_bound(dateframe.get("end"))
@@ -78,6 +79,11 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
     rec_type      = open_args.get("recurringInvestType", "percentCashBalance")
     rec_amt       = open_args.get("recurringInvestAmount", 0.1)
     max_recurs    = open_args.get("maxRecurringCount", 0)
+
+    # Close arguments (all measured in execution-timeframe bars, 0 = disabled).
+    min_hold_bars    = int(close_args.get("minHoldBars", 0) or 0)
+    max_hold_bars    = int(close_args.get("maxHoldBars", 0) or 0)
+    reentry_cooldown = int(close_args.get("reentryCooldownBars", 0) or 0)
 
     # -------- DATA SETUP -------- #
     exec_dfs = {
@@ -106,6 +112,8 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
     trade_log = []
     last_recurring_index = {ticker: -float("inf") for ticker in exec_dfs}
     recurring_count = {ticker: 0 for ticker in exec_dfs}
+    entry_index = {ticker: None for ticker in exec_dfs}
+    last_close_index = {ticker: -float("inf") for ticker in exec_dfs}
 
     # -------- SHARED CONDITION EVAL KWARGS -------- #
     eval_kwargs = dict(
@@ -144,7 +152,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
             in_position = (is_long and position > 0) or (not is_long and position < 0)
 
             # ---------------- OPEN ---------------- #
-            if position == 0 and open_cond:
+            if position == 0 and open_cond and (i - last_close_index[ticker]) >= reentry_cooldown:
                 result, *_ = evaluate_condition_capture(
                     open_cond, row, ticker=ticker, context_index=i, **eval_kwargs
                 )
@@ -159,6 +167,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                         positions[ticker] += shares * (1 if is_long else -1)
                         last_recurring_index[ticker] = i
                         recurring_count[ticker] = 0
+                        entry_index[ticker] = i
 
                         sl_price = exec_price * (1 + (-1 if is_long else 1) * sl_pct / 100) if sl_pct else None
                         tp_price = exec_price * (1 + (1 if is_long else -1) * tp_pct / 100) if tp_pct else None
@@ -212,7 +221,9 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
 
                 close_price = None
                 reason = None
+                bars_held = i - entry_index[ticker] if entry_index[ticker] is not None else 0
 
+                # SL/TP are risk exits and always fire, regardless of minimum hold.
                 if last_entry:
                     if is_long:
                         if last_entry.get("sl_price") and row["Low"] <= last_entry["sl_price"]:
@@ -225,7 +236,10 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                         elif last_entry.get("tp_price") and row["Low"] <= last_entry["tp_price"]:
                             close_price, reason = last_entry["tp_price"], "TP"
 
-                if close_price is None and close_cond:
+                if close_price is None and max_hold_bars and bars_held >= max_hold_bars:
+                    close_price, reason = current_prices[ticker], "MAX_HOLD"
+
+                if close_price is None and close_cond and bars_held >= min_hold_bars:
                     result, *_ = evaluate_condition_capture(
                         close_cond, row, ticker=ticker, context_index=i, **eval_kwargs
                     )
@@ -237,6 +251,8 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                     exec_price = (apply_sell_spread if is_long else apply_buy_spread)(close_price, half_spread)
                     cash += shares * exec_price * (1 if is_long else -1)
                     positions[ticker] = 0
+                    entry_index[ticker] = None
+                    last_close_index[ticker] = i
 
                     trade_log.append({
                         "type": "SELL" if is_long else "BUY",
