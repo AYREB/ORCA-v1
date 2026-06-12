@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Helmet } from "react-helmet-async";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { BookOpen, Lock, Pencil, Plus, Sigma, Trash2 } from "lucide-react";
-import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import IndicatorEditor from "@/components/indicators/IndicatorEditor";
 import { api, CustomIndicator, NativeIndicator } from "@/lib/api";
 import { toast } from "sonner";
@@ -34,7 +33,7 @@ const NativeIndicatorCard = ({ indicator, index }: { indicator: NativeIndicator;
     animate={{ opacity: 1, y: 0 }}
     transition={{ duration: 0.35, delay: index * 0.04 }}
   >
-    <Card className="border-border bg-card/50 backdrop-blur h-full">
+    <Card className="glass-card glass-hover h-full border-border/70">
       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
         <div className="space-y-1">
           <CardTitle className="text-lg font-mono">{indicator.name}</CardTitle>
@@ -62,7 +61,6 @@ const NativeIndicatorCard = ({ indicator, index }: { indicator: NativeIndicator;
 );
 
 const CustomIndicators = () => {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [native, setNative] = useState<NativeIndicator[]>([]);
   const [custom, setCustom] = useState<CustomIndicator[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -119,43 +117,32 @@ const CustomIndicators = () => {
   const hasCustom = useMemo(() => custom.length > 0, [custom]);
 
   return (
-    <>
-      <Helmet>
-        <title>Custom Indicators - Orca</title>
-        <meta name="description" content="Browse native indicators and build, test, and manage your own." />
-      </Helmet>
+    <DashboardLayout
+      title="Custom Indicators"
+      metaDescription="Browse native indicators and build, test, and manage your own."
+    >
+      <PageHeader
+        icon={Sigma}
+        eyebrow="Indicator workshop"
+        title="Custom Indicators"
+        description="Browse native indicators and write, test, and manage your own."
+        actions={
+          <>
+            <Button variant="outline" asChild>
+              <Link to="/dashboard/indicators/docs">
+                <BookOpen className="h-4 w-4 mr-2" />
+                Docs
+              </Link>
+            </Button>
+            <Button variant="hero" onClick={openCreate}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create Indicator
+            </Button>
+          </>
+        }
+      />
 
-      <div className="min-h-screen bg-background">
-        <DashboardSidebar isCollapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
-
-        <main className={`transition-all duration-300 ${sidebarCollapsed ? "ml-16" : "ml-64"}`}>
-          <div className="p-6 max-w-7xl mx-auto space-y-10">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-primary/10 border border-primary/20">
-                  <Sigma className="h-5 w-5 text-primary" />
-                </div>
-                <div>
-                  <h1 className="text-2xl font-bold">Custom Indicators</h1>
-                  <p className="text-sm text-muted-foreground">
-                    Browse native indicators and write, test, and manage your own.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" asChild>
-                  <Link to="/dashboard/indicators/docs">
-                    <BookOpen className="h-4 w-4 mr-2" />
-                    Docs
-                  </Link>
-                </Button>
-                <Button onClick={openCreate}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Create Indicator
-                </Button>
-              </div>
-            </div>
-
+      <div className="space-y-10">
             <section className="space-y-4">
               <div>
                 <h2 className="text-lg font-semibold">Native Indicators</h2>
@@ -201,7 +188,7 @@ const CustomIndicators = () => {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.35, delay: index * 0.04 }}
                     >
-                      <Card className="border-border bg-card/60 backdrop-blur h-full">
+                      <Card className="glass-card glass-hover h-full border-border/70">
                         <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
                           <div className="space-y-1">
                             <CardTitle className="text-lg">{indicator.name}</CardTitle>
@@ -264,7 +251,7 @@ const CustomIndicators = () => {
                   ))}
                 </div>
               ) : (
-                <div className="rounded-xl border border-dashed border-border bg-card/40 p-10 text-center">
+                <div className="glass-card border-dashed p-10 text-center">
                   <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-muted/30 flex items-center justify-center">
                     <Sigma className="h-6 w-6 text-muted-foreground" />
                   </div>
@@ -280,8 +267,6 @@ const CustomIndicators = () => {
                 </div>
               )}
             </section>
-          </div>
-        </main>
       </div>
 
       <IndicatorEditor
@@ -290,7 +275,7 @@ const CustomIndicators = () => {
         indicator={editingIndicator}
         onSaved={handleSaved}
       />
-    </>
+    </DashboardLayout>
   );
 };
 

@@ -60,6 +60,29 @@ export interface DashboardSummary {
   recentBacktests: DashboardBacktest[];
 }
 
+export interface BacktestRunRecord {
+  id: number;
+  strategy_id: number | null;
+  strategy_name: string;
+  pct_change: number;
+  win_rate: number;
+  trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  final_balance: number;
+  cash: number;
+  invested: number;
+  equity_curve: Array<{ timestamp: string; equity: number }>;
+  created_at: string;
+}
+
+export interface BacktestHistoryResponse {
+  runs: BacktestRunRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface ParameterChoice {
   mode: 'nochange' | 'auto' | 'manual' | 'range';
   indicator?: string;
@@ -67,6 +90,8 @@ export interface ParameterChoice {
   start?: number;
   end?: number;
   steps?: number;
+  // UI-side toggle used by the optimizer panels; passed through and ignored by the backend.
+  enabled?: boolean;
 }
 
 export interface OptimizationResult {
@@ -842,6 +867,32 @@ class DjangoAPI {
         created_at: run.created_at ?? "",
       })),
     };
+  }
+
+  // Backtest run history
+  async getBacktestHistory(options?: { limit?: number; offset?: number }): Promise<BacktestHistoryResponse> {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    if (options?.offset !== undefined) params.set('offset', String(options.offset));
+    const query = params.toString();
+    const data = await this.request<Partial<BacktestHistoryResponse>>(
+      `/backtest-runs/${query ? `?${query}` : ''}`
+    );
+    return {
+      runs: (data.runs ?? []).map((run) => ({
+        ...run,
+        strategy_id: run.strategy_id ?? null,
+        strategy_name: run.strategy_name || 'Backtest',
+        equity_curve: run.equity_curve ?? [],
+      })),
+      total: data.total ?? 0,
+      limit: data.limit ?? 0,
+      offset: data.offset ?? 0,
+    };
+  }
+
+  async deleteBacktestRun(id: number): Promise<void> {
+    await this.request(`/backtest-runs/${id}/`, { method: 'DELETE' });
   }
 
   // Store last backtest result for parameter optimizer

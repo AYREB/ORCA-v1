@@ -13,6 +13,7 @@ import Strategies from "./pages/Strategies";
 import CustomIndicators from "./pages/CustomIndicators";
 import CustomIndicatorDocs from "./pages/CustomIndicatorDocs";
 import PaperAccounts from "./pages/PaperAccounts";
+import History from "./pages/History";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import Help from "./pages/Help"
 import { AuthProvider } from "./context/AuthContext";
@@ -96,6 +97,14 @@ const App = () => (
                     element={
                       <ProtectedRoute>
                         <PaperAccounts />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/history"
+                    element={
+                      <ProtectedRoute>
+                        <History />
                       </ProtectedRoute>
                     }
                   />

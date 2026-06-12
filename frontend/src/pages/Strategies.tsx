@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { Helmet } from "react-helmet-async";
 import { motion } from "framer-motion";
 import {
   Bookmark,
@@ -12,7 +11,7 @@ import {
   Activity,
   Shuffle,
 } from "lucide-react";
-import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import { api, SavedStrategy } from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -35,7 +34,6 @@ import BacktestForm from "@/components/backtest/BacktestForm";
 import { api as djangoApi } from "@/lib/api";
 
 const Strategies = () => {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [strategies, setStrategies] = useState<SavedStrategy[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState<SavedStrategy | null>(null);
   const [editStrategy, setEditStrategy] = useState<SavedStrategy | null>(null);
@@ -191,47 +189,33 @@ const Strategies = () => {
   const selectedTrades = selectedStrategy?.lastResult?.trades ?? [];
 
   return (
-    <>
-      <Helmet>
-        <title>Strategies - Orca</title>
-        <meta name="description" content="Review, edit, and manage your saved trading strategies." />
-      </Helmet>
+    <DashboardLayout
+      title="Strategies"
+      metaDescription="Review, edit, and manage your saved trading strategies."
+    >
+      <PageHeader
+        icon={Bookmark}
+        eyebrow="Your playbook"
+        title="Saved Strategies"
+        description="Browse, review results, and refine your saved playbook."
+        actions={
+          <Button variant="outline" onClick={loadStrategies} disabled={isLoading}>
+            {isLoading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Refreshing
+              </>
+            ) : (
+              <>
+                <BarChart3 className="h-4 w-4 mr-2" />
+                Refresh
+              </>
+            )}
+          </Button>
+        }
+      />
 
-      <div className="min-h-screen bg-background">
-        <DashboardSidebar
-          isCollapsed={sidebarCollapsed}
-          onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-        />
-
-        <main className={`transition-all duration-300 ${sidebarCollapsed ? "ml-16" : "ml-64"}`}>
-          <div className="p-6 max-w-7xl mx-auto">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-primary/10 border border-primary/20">
-                  <Bookmark className="h-5 w-5 text-primary" />
-                </div>
-                <div>
-                  <h1 className="text-2xl font-bold">Saved Strategies</h1>
-                  <p className="text-sm text-muted-foreground">
-                    Browse, review results, and refine your saved playbook.
-                  </p>
-                </div>
-              </div>
-              <Button variant="outline" onClick={loadStrategies} disabled={isLoading}>
-                {isLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Refreshing
-                  </>
-                ) : (
-                  <>
-                    <BarChart3 className="h-4 w-4 mr-2" />
-                    Refresh
-                  </>
-                )}
-              </Button>
-            </div>
-
+      <div>
             {isLoading ? (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                 {Array.from({ length: 3 }).map((_, idx) => (
@@ -251,7 +235,7 @@ const Strategies = () => {
                     transition={{ duration: 0.4, delay: index * 0.05 }}
                   >
                     <Card
-                      className="border-border bg-card/60 backdrop-blur cursor-pointer transition-shadow hover:shadow-lg"
+                      className="glass-card glass-hover cursor-pointer border-border/70"
                       role="button"
                       tabIndex={0}
                       onClick={(e) => {
@@ -365,7 +349,7 @@ const Strategies = () => {
                 ))}
               </div>
             ) : (
-              <div className="rounded-xl border border-dashed border-border bg-card/40 p-10 text-center">
+              <div className="glass-card border-dashed p-10 text-center">
                 <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-muted/30 flex items-center justify-center">
                   <Bookmark className="h-6 w-6 text-muted-foreground" />
                 </div>
@@ -375,8 +359,6 @@ const Strategies = () => {
                 </p>
               </div>
             )}
-          </div>
-        </main>
       </div>
 
       <Dialog open={isResultsOpen} onOpenChange={setIsResultsOpen}>
@@ -488,7 +470,7 @@ const Strategies = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </>
+    </DashboardLayout>
   );
 };
 

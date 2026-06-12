@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { Helmet } from "react-helmet-async";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sliders,
@@ -16,7 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import ParameterOptimizer from "@/components/backtest/ParameterOptimizer";
 import GeneticOptimizer from "@/components/backtest/GeneticOptimizer";
 import MetaheuristicOptimizer, { type OptimiserSettingField } from "@/components/backtest/MetaheuristicOptimizer";
@@ -113,7 +112,6 @@ const STEPS: { id: WizardStep; label: string }[] = [
 ];
 
 const Optimizers = () => {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedStrategy, setSelectedStrategy] = useState<SavedStrategy | null>(null);
   const [strategies, setStrategies] = useState<SavedStrategy[]>([]);
   const [step, setStep] = useState<WizardStep>(1);
@@ -200,33 +198,19 @@ const Optimizers = () => {
   };
 
   return (
-    <>
-      <Helmet>
-        <title>Optimizers - Orca</title>
-        <meta
-          name="description"
-          content="Optimize your trading strategies with grid/parameter search or a genetic algorithm."
-        />
-      </Helmet>
+    <DashboardLayout
+      title="Optimizers"
+      metaDescription="Optimize your trading strategies with grid/parameter search or a genetic algorithm."
+      maxWidth="max-w-5xl"
+    >
+      <PageHeader
+        icon={activeMethod.icon}
+        eyebrow="Parameter tuning"
+        title="Optimizers"
+        description="Search for stronger strategy parameters with grid search, genetic algorithms, and metaheuristics."
+      />
 
-      <div className="min-h-screen bg-background">
-        <DashboardSidebar
-          isCollapsed={sidebarCollapsed}
-          onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-        />
-
-        <main className={`transition-all duration-300 ${sidebarCollapsed ? "ml-16" : "ml-64"}`}>
-          <div className="p-6 max-w-5xl mx-auto">
-            {/* Header */}
-            <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
-              <div className="flex items-center gap-3 mb-1">
-                <div className="p-2 rounded-lg bg-primary/10 border border-primary/20">
-                  <activeMethod.icon className="h-6 w-6 text-primary" />
-                </div>
-                <h1 className="text-2xl font-bold">Optimizers</h1>
-              </div>
-            </motion.div>
-
+      <div>
             {/* Stepper */}
             <div className="mb-8 flex items-center">
               {STEPS.map((s, index) => {
@@ -247,7 +231,7 @@ const Optimizers = () => {
                             ? "border-primary bg-primary text-primary-foreground"
                             : isComplete
                               ? "border-primary/40 bg-primary/15 text-primary"
-                              : "border-border bg-card text-muted-foreground"
+                              : "border-border bg-card/60 text-muted-foreground backdrop-blur"
                         }`}
                       >
                         {isComplete ? <Check className="h-4 w-4" /> : s.id}
@@ -294,8 +278,8 @@ const Optimizers = () => {
                           onClick={() => handlePickMethod(m.id)}
                           className={`group flex flex-col gap-3 rounded-xl border p-5 text-left transition-colors ${
                             isSelected
-                              ? "border-primary/40 bg-primary/10"
-                              : "border-border bg-card/40 hover:border-primary/30 hover:bg-card/60"
+                              ? "border-primary/40 bg-primary/10 shadow-[0_0_24px_-8px_hsl(var(--primary)/0.4)]"
+                              : "glass-card glass-hover border-border/70"
                           }`}
                         >
                           <div className="flex items-center justify-between">
@@ -357,7 +341,7 @@ const Optimizers = () => {
                       />
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center h-[400px] rounded-xl border border-dashed border-border bg-card/30">
+                    <div className="glass-card flex h-[400px] flex-col items-center justify-center border-dashed">
                       <div className="p-4 rounded-full bg-muted/30 mb-4">
                         <AlertCircle className="h-12 w-12 text-muted-foreground/50" />
                       </div>
@@ -397,7 +381,7 @@ const Optimizers = () => {
                     </button>
                   </div>
 
-                  <div className="mb-4 flex items-center justify-between p-4 rounded-xl border border-primary/30 bg-primary/5">
+                  <div className="mb-4 flex items-center justify-between rounded-xl border border-primary/30 bg-primary/5 p-4 backdrop-blur-xl">
                     <div>
                       <div className="flex items-center gap-2 mb-1">
                         <Bookmark className="h-4 w-4 text-primary" />
@@ -445,10 +429,8 @@ const Optimizers = () => {
                 </motion.div>
               )}
             </AnimatePresence>
-          </div>
-        </main>
       </div>
-    </>
+    </DashboardLayout>
   );
 };
 

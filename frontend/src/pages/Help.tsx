@@ -1,12 +1,11 @@
 import { useState, useMemo } from "react";
 import { motion } from "framer-motion";
-import { Helmet } from "react-helmet-async";
 import {
   BookOpen, FlaskConical, LineChart, Sliders, BarChart3,
   TrendingUp, Lightbulb, HelpCircle, Keyboard, Zap,
   MousePointerClick, Code2, Play, Save, ArrowRightLeft, Search
 } from "lucide-react";
-import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
@@ -155,7 +154,6 @@ const tips = [
 const dslKeywords = "dsl example ticker dateframe timeframe long short open close conditions arguments strategy code syntax format";
 
 const Help = () => {
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
   const matchesSearch = (text: string) => {
@@ -174,47 +172,29 @@ const Help = () => {
   const hasResults = filteredSteps.length > 0 || filteredHowTo.length > 0 || showDsl || filteredTools.length > 0 || filteredFaq.length > 0 || filteredTips.length > 0;
 
   return (
-    <>
-      <Helmet>
-        <title>Help & Documentation - Orca</title>
-        <meta name="description" content="Learn how to use Orca's backtesting platform to build, test, and optimize trading strategies." />
-      </Helmet>
+    <DashboardLayout
+      title="Help & Documentation"
+      metaDescription="Learn how to use Orca's backtesting platform to build, test, and optimize trading strategies."
+      maxWidth="max-w-5xl"
+    >
+      <PageHeader
+        icon={HelpCircle}
+        eyebrow="Knowledge base"
+        title="Help & Documentation"
+        description="Learn how to build, test, and optimize your trading strategies on Orca."
+      >
+        <div className="relative max-w-xl">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search for help..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-11 border-border bg-secondary/60 pl-9"
+          />
+        </div>
+      </PageHeader>
 
-      <div className="min-h-screen bg-background">
-        <DashboardSidebar
-          isCollapsed={isSidebarCollapsed}
-          onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-        />
-
-        <main className={`transition-all duration-300 ${isSidebarCollapsed ? "ml-16" : "ml-64"}`}>
-          <div className="p-6 max-w-5xl mx-auto">
-            {/* Header */}
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4 }}
-              className="mb-6"
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <HelpCircle className="h-5 w-5 text-primary" />
-                <h1 className="text-xl font-bold">Help & Documentation</h1>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Learn how to build, test, and optimize your trading strategies on Orca.
-              </p>
-            </motion.div>
-
-            {/* Search */}
-            <div className="relative mb-6">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search for help..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-
+      <div>
             {!hasResults && (
               <div className="text-center py-12">
                 <HelpCircle className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
@@ -267,7 +247,7 @@ const Help = () => {
                   <BookOpen className="h-4 w-4 text-primary" />
                   How To
                 </h2>
-                <Card className="bg-card/50">
+                <Card className="glass-card glass-hover border-border/70">
                   <CardContent className="p-4">
                     <Accordion type="multiple" className="w-full">
                       {filteredHowTo.map((section) => (
@@ -305,7 +285,7 @@ const Help = () => {
                   <Keyboard className="h-4 w-4 text-primary" />
                   DSL Example
                 </h2>
-                <Card className="bg-card/50">
+                <Card className="glass-card glass-hover border-border/70">
                   <CardContent className="p-4">
                     <p className="text-xs text-muted-foreground mb-3">
                       Here's what a complete strategy looks like in DSL format. You can paste this directly into the DSL editor:
@@ -393,7 +373,7 @@ CLOSE{
                   <Lightbulb className="h-4 w-4 text-primary" />
                   Frequently Asked Questions
                 </h2>
-                <Card className="bg-card/50">
+                <Card className="glass-card glass-hover border-border/70">
                   <CardContent className="p-4">
                     <Accordion type="multiple" className="w-full">
                       {filteredFaq.map((item, i) => (
@@ -424,7 +404,7 @@ CLOSE{
                   <Lightbulb className="h-4 w-4 text-primary" />
                   Tips & Tricks
                 </h2>
-                <Card className="bg-card/50">
+                <Card className="glass-card glass-hover border-border/70">
                   <CardContent className="p-4">
                     <ul className="text-xs text-muted-foreground space-y-2 leading-relaxed">
                       {filteredTips.map((tip, i) => (
@@ -435,10 +415,8 @@ CLOSE{
                 </Card>
               </motion.section>
             )}
-          </div>
-        </main>
       </div>
-    </>
+    </DashboardLayout>
   );
 };
 

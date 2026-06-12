@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Helmet } from "react-helmet-async";
 import { motion } from "framer-motion";
 import {
   Activity,
@@ -32,7 +31,7 @@ import {
   BarChart,
   ReferenceLine,
 } from "recharts";
-import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -544,7 +543,6 @@ const PaperAccounts = () => {
   const { user } = useAuth();
   const { settings } = useSettings();
   const chartColors = settings.appearance.chartColors;
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [accounts, setAccounts] = useState<PaperAccount[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [strategies, setStrategies] = useState<SavedStrategy[]>([]);
@@ -1236,65 +1234,41 @@ const PaperAccounts = () => {
 
   return (
     <>
-      <Helmet>
-        <title>Paper Accounts - Orca</title>
-        <meta
-          name="description"
-          content="Create and manage paper trading accounts, apply strategies, inspect trades, and track all-time performance."
+      <DashboardLayout
+        title="Paper Accounts"
+        metaDescription="Create and manage paper trading accounts, apply strategies, inspect trades, and track all-time performance."
+        maxWidth="max-w-[1500px]"
+      >
+        <PageHeader
+          icon={Rocket}
+          eyebrow="Sim execution lab"
+          title="Paper Accounts"
+          description="Add strategies to a paper account from now on, update manually to current market data, and keep the equity trail."
+          actions={
+            <>
+              <Button variant="outline" onClick={loadStrategies} disabled={isLoadingStrategies}>
+                {isLoadingStrategies ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Refreshing
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    Refresh Strategies
+                  </>
+                )}
+              </Button>
+              <Button variant="hero" onClick={openCreateAccountDialog}>
+                <Plus className="mr-2 h-4 w-4" />
+                New Paper Account
+              </Button>
+            </>
+          }
         />
-      </Helmet>
-
-      <div className="min-h-screen bg-background">
-        <DashboardSidebar
-          isCollapsed={sidebarCollapsed}
-          onToggle={() => setSidebarCollapsed((previous) => !previous)}
-        />
-
-        <main className={`transition-all duration-300 ${sidebarCollapsed ? "ml-16" : "ml-64"}`}>
-          <div className="mx-auto max-w-[1500px] space-y-6 p-6">
-            <motion.section
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35 }}
-              className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-primary/15 via-card/95 to-card p-6"
-            >
-              <div className="absolute -left-14 -top-14 h-44 w-44 rounded-full bg-primary/15 blur-3xl" />
-              <div className="absolute -bottom-12 right-0 h-44 w-44 rounded-full bg-accent/10 blur-3xl" />
-              <div className="relative z-10 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-primary/90">
-                    <Rocket className="h-3.5 w-3.5" />
-                    Sim execution lab
-                  </div>
-                  <h1 className="text-3xl font-semibold">Paper Accounts</h1>
-                  <p className="text-sm text-muted-foreground">
-                    Add strategies to a paper account from now on, update manually to current market data, and keep the equity trail.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="outline" onClick={loadStrategies} disabled={isLoadingStrategies}>
-                    {isLoadingStrategies ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Refreshing
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="mr-2 h-4 w-4" />
-                        Refresh Strategies
-                      </>
-                    )}
-                  </Button>
-                  <Button onClick={openCreateAccountDialog}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    New Paper Account
-                  </Button>
-                </div>
-              </div>
-            </motion.section>
 
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
-              <Card className="border-border bg-card/70">
+              <Card className="glass-card border-border/70">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-lg">Account Book</CardTitle>
                   <CardDescription>Switch workspaces and track each simulation separately.</CardDescription>
@@ -2042,8 +2016,6 @@ const PaperAccounts = () => {
                 </div>
               )}
             </div>
-          </div>
-        </main>
 
         <Dialog open={accountDialogOpen} onOpenChange={setAccountDialogOpen}>
           <DialogContent>
@@ -2080,7 +2052,7 @@ const PaperAccounts = () => {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      </div>
+      </DashboardLayout>
     </>
   );
 };

@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { Helmet } from "react-helmet-async";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   User,
@@ -18,7 +17,7 @@ import {
   MousePointer2,
   Target,
 } from "lucide-react";
-import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -168,7 +167,6 @@ const AppearancePreview = ({ appearance }: { appearance: AppSettings["appearance
 
 /* ─── Main Settings Page ─── */
 const Settings = () => {
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const { settings, updateSettings } = useSettings();
   const { toast } = useToast();
 
@@ -256,25 +254,21 @@ const Settings = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background flex">
-      <Helmet>
-        <title>Settings | ORCA</title>
-        <meta name="description" content="Configure your ORCA trading platform settings" />
-      </Helmet>
-
-      <DashboardSidebar
-        isCollapsed={isSidebarCollapsed}
-        onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+    <DashboardLayout
+      title="Settings"
+      metaDescription="Configure your ORCA trading platform settings"
+      maxWidth="max-w-3xl"
+    >
+      <PageHeader
+        icon={SlidersHorizontal}
+        eyebrow="Your workspace"
+        title="Settings"
+        description="Manage your profile, appearance, and backtest defaults."
       />
 
-      <main className={`flex-1 transition-all duration-300 ${isSidebarCollapsed ? "ml-16" : "ml-64"}`}>
-        <div className="p-6 max-w-3xl mx-auto">
-          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
-            <h1 className="text-2xl font-bold text-foreground mb-1">Settings</h1>
-            <p className="text-sm text-muted-foreground mb-6">Manage your profile, appearance, and backtest defaults.</p>
-
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
             <Tabs defaultValue="profile" className="space-y-6">
-              <TabsList className="bg-muted/50 border border-border">
+              <TabsList className="border border-border/70 bg-card/60 backdrop-blur-xl">
                 <TabsTrigger value="profile" className="gap-1.5 text-xs">
                   <User className="h-3.5 w-3.5" /> Profile
                 </TabsTrigger>
@@ -291,7 +285,7 @@ const Settings = () => {
 
               {/* ─── Profile ─── */}
               <TabsContent value="profile">
-                <Card className="border-border bg-card">
+                <Card className="glass-card border-border/70">
                   <CardHeader>
                     <CardTitle className="text-lg">Profile</CardTitle>
                     <CardDescription>Your display name and email.</CardDescription>
@@ -324,7 +318,7 @@ const Settings = () => {
 
               {/* ─── Appearance ─── */}
               <TabsContent value="appearance">
-                <Card className="border-border bg-card">
+                <Card className="glass-card border-border/70">
                   <CardHeader className="flex flex-row items-center justify-between">
                     <div>
                       <CardTitle className="text-lg">Appearance</CardTitle>
@@ -529,7 +523,7 @@ const Settings = () => {
 
               {/* ─── Backtest Defaults ─── */}
               <TabsContent value="defaults">
-                <Card className="border-border bg-card">
+                <Card className="glass-card border-border/70">
                   <CardHeader>
                     <CardTitle className="text-lg">Default Backtest Parameters</CardTitle>
                     <CardDescription>Pre-fill values when creating a new backtest.</CardDescription>
@@ -575,7 +569,7 @@ const Settings = () => {
 
               {/* ─── Notifications ─── */}
               <TabsContent value="notifications">
-                <Card className="border-border bg-card">
+                <Card className="glass-card border-border/70">
                   <CardHeader>
                     <CardTitle className="text-lg">Notifications & Alerts</CardTitle>
                     <CardDescription>Control in-app notifications and sound effects.</CardDescription>
@@ -615,10 +609,8 @@ const Settings = () => {
                 </Card>
               </TabsContent>
             </Tabs>
-          </motion.div>
-        </div>
-      </main>
-    </div>
+      </motion.div>
+    </DashboardLayout>
   );
 };
 

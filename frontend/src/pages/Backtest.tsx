@@ -1,10 +1,9 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Helmet } from "react-helmet-async";
-import { Play, Loader2, ArrowLeft, BarChart3, LineChart, Activity, Shuffle, Sliders, Code, Settings2, Sparkles } from "lucide-react";
+import { Play, Loader2, ArrowLeft, BarChart3, LineChart, Activity, Shuffle, FlaskConical, Code, Settings2, Sparkles } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import DSLEditor from "@/components/backtest/DSLEditor";
 import BacktestForm from "@/components/backtest/BacktestForm";
 import AIStrategyBuilder from "@/components/backtest/AIStrategyBuilder";
@@ -22,7 +21,6 @@ type ViewMode = "editor" | "results";
 type EntryMode = "form" | "dsl" | "ai";
 
 const Backtest = () => {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [dslText, setDslText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<BacktestResult | null>(null);
@@ -203,66 +201,53 @@ const Backtest = () => {
   };
 
   return (
-    <>
-      <Helmet>
-        <title>New Backtest - Orca</title>
-        <meta name="description" content="Configure and run a new backtest for your trading strategy." />
-      </Helmet>
-
-      <div className="min-h-screen bg-background">
-        <DashboardSidebar
-          isCollapsed={sidebarCollapsed}
-          onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-        />
-
-        <main className={`transition-all duration-300 ${sidebarCollapsed ? "ml-16" : "ml-64"}`}>
-          <div className="p-6 max-w-7xl mx-auto">
-            {/* Header */}
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex items-center justify-between mb-6"
+    <DashboardLayout
+      title="New Backtest"
+      metaDescription="Configure and run a new backtest for your trading strategy."
+    >
+      <PageHeader
+        icon={FlaskConical}
+        eyebrow={viewMode === "editor" ? "Strategy lab" : "Run analysis"}
+        title={
+          <span className="flex items-center gap-3">
+            {viewMode === "results" && (
+              <Button variant="ghost" size="icon" onClick={handleBackToEditor}>
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+            )}
+            {viewMode === "editor" ? "New Backtest" : "Backtest Results"}
+          </span>
+        }
+        description={
+          viewMode === "editor"
+            ? "Define your strategy with the visual builder, AI assistant, or raw DSL — then run it."
+            : "Analyze your strategy performance across charts, risk models, and trade logs."
+        }
+        actions={
+          viewMode === "editor" && entryMode === "dsl" ? (
+            <Button
+              variant="hero"
+              onClick={handleRunBacktest}
+              disabled={isLoading || !dslText.trim()}
+              className="min-w-[140px]"
             >
-              <div className="flex items-center gap-4">
-                {viewMode === "results" && (
-                  <Button variant="ghost" size="icon" onClick={handleBackToEditor}>
-                    <ArrowLeft className="h-5 w-5" />
-                  </Button>
-                )}
-                <div>
-                  <h1 className="text-2xl font-bold">
-                    {viewMode === "editor" ? "New Backtest" : "Backtest Results"}
-                  </h1>
-                  <p className="text-muted-foreground text-sm">
-                    {viewMode === "editor"
-                      ? "Define your strategy and run a backtest"
-                      : "Analyze your strategy performance"}
-                  </p>
-                </div>
-              </div>
-
-              {viewMode === "editor" && entryMode === "dsl" && (
-                <Button
-                  onClick={handleRunBacktest}
-                  disabled={isLoading || !dslText.trim()}
-                  className="min-w-[140px]"
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Running...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="h-4 w-4 mr-2" />
-                      Run Backtest
-                    </>
-                  )}
-                </Button>
+              {isLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 mr-2" />
+                  Run Backtest
+                </>
               )}
-            </motion.div>
+            </Button>
+          ) : undefined
+        }
+      />
 
-            <AnimatePresence mode="wait">
+      <AnimatePresence mode="wait">
               {viewMode === "editor" ? (
                 <motion.div
                   key="editor"
@@ -273,7 +258,7 @@ const Backtest = () => {
                 >
                   {/* Entry Mode Tabs */}
                   <Tabs value={entryMode} onValueChange={(v) => setEntryMode(v as EntryMode)} className="w-full">
-                    <TabsList className="mb-6 bg-card/50 border border-border p-1">
+                    <TabsList className="mb-6 border border-border/70 bg-card/60 p-1 backdrop-blur-xl">
                       <TabsTrigger value="form" className="gap-2 data-[state=active]:bg-primary/20">
                         <Settings2 className="h-4 w-4" />
                         Easy Mode
@@ -321,7 +306,7 @@ const Backtest = () => {
                   transition={{ duration: 0.3 }}
                 >
                   <Tabs defaultValue="numerical" className="w-full" key={resultsKey}>
-                    <TabsList className="mb-6 bg-card/50 border border-border p-1">
+                    <TabsList className="mb-6 border border-border/70 bg-card/60 p-1 backdrop-blur-xl">
                       <TabsTrigger value="numerical" className="gap-2 data-[state=active]:bg-primary/20">
                         <BarChart3 className="h-4 w-4" />
                         Numerical
@@ -361,7 +346,7 @@ const Backtest = () => {
                     </TabsContent>
 
                     <TabsContent value="strategy">
-                      <div className="p-4 rounded-xl border border-border bg-card/50 space-y-6">
+                      <div className="glass-card space-y-6 p-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
                             <label className="text-sm font-medium">Strategy Name</label>
@@ -438,12 +423,9 @@ const Backtest = () => {
                     </TabsContent>
                   </Tabs>
                 </motion.div>
-              ) : null}
-            </AnimatePresence>
-          </div>
-        </main>
-      </div>
-    </>
+        ) : null}
+      </AnimatePresence>
+    </DashboardLayout>
   );
 };
 

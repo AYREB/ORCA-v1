@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { Registry, FALLBACK_REGISTRY } from "@/components/backtest/backtest-types";
 interface RegistryContextType {
   registry: Registry;
@@ -19,7 +20,16 @@ const RegistryContext = createContext<RegistryContextType | undefined>(undefined
 export const RegistryProvider = ({ children }: { children: ReactNode }) => {
   const [registry, setRegistry] = useState<Registry>(FALLBACK_REGISTRY);
   const [loading, setLoading] = useState(true);
+  // Wait for AuthProvider to finish bootstrapping (it sets the api token);
+  // fetching earlier 401s and strands the app on the fallback registry.
+  const { token, loading: authLoading } = useAuth();
   useEffect(() => {
+    if (authLoading) return;
+    if (!token) {
+      // Logged out: the endpoint requires auth, keep the fallback registry.
+      setLoading(false);
+      return;
+    }
     let alive = true;
     (async () => {
       try {
@@ -34,7 +44,7 @@ export const RegistryProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [authLoading, token]);
   const tickers = registry.tickers ?? {};
   const timeframes =
     registry.timeframes && Object.keys(registry.timeframes).length > 0

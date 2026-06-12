@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Helmet } from "react-helmet-async";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import {
   Activity,
+  ArrowRight,
   BarChart3,
   FlaskConical,
-  Sparkles,
+  LayoutDashboard,
   Target,
   TrendingDown,
   TrendingUp,
@@ -23,7 +23,7 @@ import {
 } from "recharts";
 import { useSettings } from "@/hooks/useSettings";
 import { safeColor, colorWithAlpha } from "@/lib/chartTheme";
-import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -114,7 +114,6 @@ const getSeriesDrawdown = (series: CurvePoint[]): number => {
 };
 
 const Dashboard = () => {
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -226,74 +225,57 @@ const Dashboard = () => {
     },
   ];
 
+  const firstName = (user?.name || "").trim().split(/\s+/)[0];
+
   return (
-    <>
-      <Helmet>
-        <title>Dashboard - Orca</title>
-        <meta name="description" content="Performance dashboard with account equity, run metrics, and strategy activity." />
-      </Helmet>
+    <DashboardLayout
+      title="Dashboard"
+      metaDescription="Performance dashboard with account equity, run metrics, and strategy activity."
+      maxWidth="max-w-[1500px]"
+    >
+      <PageHeader
+        icon={LayoutDashboard}
+        eyebrow="Trading command center"
+        title={firstName ? `Welcome back, ${firstName}` : "Dashboard"}
+        description="Track portfolio movement, validate edge, and keep your strategy runs in one place."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => navigate("/dashboard/strategies")}>
+              Manage Strategies
+            </Button>
+            <Button variant="hero" onClick={() => navigate("/dashboard/backtest")}>
+              <FlaskConical className="h-4 w-4" />
+              New Backtest
+            </Button>
+          </>
+        }
+      >
+        {error && <p className="text-sm text-destructive">{error}</p>}
+      </PageHeader>
 
-      <div className="min-h-screen bg-background">
-        <DashboardSidebar
-          isCollapsed={isSidebarCollapsed}
-          onToggle={() => setIsSidebarCollapsed((previous) => !previous)}
-        />
-
-        <main className={`transition-all duration-300 ${isSidebarCollapsed ? "ml-16" : "ml-64"}`}>
-          <div className="max-w-[1500px] mx-auto p-6 space-y-6">
-            <motion.section
-              initial={{ opacity: 0, y: -12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35 }}
-              className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-primary/15 via-card/95 to-card p-6"
-            >
-              <div className="absolute -right-24 -top-24 h-52 w-52 rounded-full bg-primary/15 blur-3xl" />
-              <div className="absolute -bottom-20 -left-16 h-44 w-44 rounded-full bg-accent/10 blur-3xl" />
-              <div className="relative z-10 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-primary/90">
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Trading command center
-                  </div>
-                  <h1 className="text-3xl font-semibold">Dashboard</h1>
-                  <p className="text-sm text-muted-foreground">
-                    Track portfolio movement, validate edge, and keep your strategy runs in one place.
-                  </p>
-                  {error && <p className="text-sm text-destructive">{error}</p>}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" onClick={() => navigate("/dashboard/strategies")}>
-                    Manage Strategies
-                  </Button>
-                  <Button variant="hero" onClick={() => navigate("/dashboard/backtest")}>
-                    <FlaskConical className="h-4 w-4" />
-                    New Backtest
-                  </Button>
-                </div>
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {metricCards.map((card, index) => (
+          <motion.div
+            key={card.label}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.06, duration: 0.28 }}
+            className="glass-card glass-hover p-4"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">{card.label}</p>
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-background/50">
+                <card.icon className={`h-4 w-4 ${card.accent}`} />
               </div>
-            </motion.section>
+            </div>
+            <p className={`text-2xl font-semibold font-mono ${card.accent}`}>{card.value}</p>
+          </motion.div>
+        ))}
+      </section>
 
-            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              {metricCards.map((card, index) => (
-                <motion.div
-                  key={card.label}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.06, duration: 0.28 }}
-                  className="rounded-xl border border-border bg-card/70 p-4"
-                >
-                  <div className="mb-3 flex items-center justify-between">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">{card.label}</p>
-                    <card.icon className={`h-4 w-4 ${card.accent}`} />
-                  </div>
-                  <p className={`text-2xl font-semibold font-mono ${card.accent}`}>{card.value}</p>
-                </motion.div>
-              ))}
-            </section>
-
-            <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-              <Card className="border-border bg-card/70">
-                <CardHeader className="pb-4">
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <Card className="glass-card border-border/70">
+          <CardHeader className="pb-4">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
                       <CardTitle className="text-lg">Equity Curve</CardTitle>
@@ -393,12 +375,25 @@ const Dashboard = () => {
                 </CardContent>
               </Card>
 
-              <Card className="border-border bg-card/70">
+              <Card className="glass-card border-border/70">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-lg">Recent Backtests</CardTitle>
-                  <CardDescription>
-                    Latest runs with return, win-rate, and final balance snapshot.
-                  </CardDescription>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg">Recent Backtests</CardTitle>
+                      <CardDescription>
+                        Latest runs with return, win-rate, and final balance snapshot.
+                      </CardDescription>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1 text-primary hover:text-primary"
+                      onClick={() => navigate("/dashboard/history")}
+                    >
+                      View All
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {isLoading ? (
@@ -418,8 +413,8 @@ const Dashboard = () => {
                         return (
                           <button
                             key={backtest.id}
-                            className="w-full rounded-lg border border-border bg-background/50 p-3 text-left transition-colors hover:bg-background/80"
-                            onClick={() => navigate("/dashboard/backtest")}
+                            className="w-full rounded-lg border border-border bg-background/50 p-3 text-left transition-all hover:border-primary/30 hover:bg-background/80"
+                            onClick={() => navigate("/dashboard/history")}
                           >
                             <div className="mb-2 flex items-start justify-between gap-3">
                               <p className="line-clamp-1 text-sm font-semibold">{backtest.strategy_name || "Backtest"}</p>
@@ -478,26 +473,23 @@ const Dashboard = () => {
               </Card>
             </section>
 
-            {!isLoading && summary && summary.backtestRunCount > 0 && (
-              <motion.section
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3 }}
-                className="rounded-xl border border-border bg-card/70 p-4"
-              >
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Activity className="h-4 w-4" />
-                  <span>
-                    {summary.backtestRunCount} total runs tracked. Continue testing to strengthen curve quality and
-                    confidence intervals.
-                  </span>
-                </div>
-              </motion.section>
-            )}
+      {!isLoading && summary && summary.backtestRunCount > 0 && (
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="glass-card p-4"
+        >
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Activity className="h-4 w-4 text-primary" />
+            <span>
+              {summary.backtestRunCount} total runs tracked. Continue testing to strengthen curve quality and
+              confidence intervals.
+            </span>
           </div>
-        </main>
-      </div>
-    </>
+        </motion.section>
+      )}
+    </DashboardLayout>
   );
 };
 

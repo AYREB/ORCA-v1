@@ -1919,3 +1919,64 @@ def dashboard_summary(request):
     }
 
     return JsonResponse(response)
+
+
+def serialize_backtest_run_full(run: BacktestRun):
+    payload = serialize_backtest_run(run)
+    payload.update(
+        {
+            "winning_trades": run.winning_trades,
+            "losing_trades": run.losing_trades,
+            "cash": run.cash,
+            "invested": run.invested,
+            "equity_curve": run.equity_curve or [],
+        }
+    )
+    return payload
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def backtest_runs(request):
+    user = get_authenticated_user(request)
+
+    try:
+        limit = int(request.GET.get("limit", 200))
+        offset = int(request.GET.get("offset", 0))
+    except (TypeError, ValueError):
+        raise APIError("limit and offset must be integers.")
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+
+    runs_qs = BacktestRun.objects.filter(user=user).order_by("-created_at")
+    total = runs_qs.count()
+    runs = runs_qs[offset : offset + limit]
+
+    return JsonResponse(
+        {
+            "runs": [serialize_backtest_run_full(run) for run in runs],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("DELETE")
+@token_required
+@rate_limit("general")
+def backtest_run_detail(request, run_id: int):
+    user = get_authenticated_user(request)
+
+    try:
+        run = BacktestRun.objects.get(id=run_id, user=user)
+    except BacktestRun.DoesNotExist:
+        return JsonResponse({"error": "Backtest run not found."}, status=404)
+
+    run.delete()
+    return JsonResponse({"success": True})
