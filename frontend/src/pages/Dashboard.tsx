@@ -162,6 +162,24 @@ const Dashboard = () => {
 
   const chartSeries = useMemo(() => downsampleSeries(filteredCurve, 140), [filteredCurve]);
 
+  // Tighten the Y-axis to the plotted equity range (with padding) instead of
+  // anchoring at $0 — otherwise small day-to-day moves look like a flat line.
+  const equityDomain = useMemo<[number, number]>(() => {
+    const values = chartSeries.map((point) => point.equity).filter((value) => Number.isFinite(value));
+    if (values.length === 0) return [0, 1];
+
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+
+    if (min === max) {
+      const padding = Math.max(1, Math.abs(min) * 0.02);
+      return [min - padding, max + padding];
+    }
+
+    const padding = (max - min) * 0.08;
+    return [Math.max(0, min - padding), max + padding];
+  }, [chartSeries]);
+
   const seriesStats = useMemo(() => {
     if (filteredCurve.length === 0) {
       return {
@@ -347,6 +365,8 @@ const Dashboard = () => {
                             minTickGap={24}
                           />
                           <YAxis
+                            domain={equityDomain}
+                            allowDecimals={false}
                             stroke="hsl(var(--muted-foreground))"
                             tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
                             tickFormatter={(value) => `$${Math.round(value).toLocaleString()}`}
