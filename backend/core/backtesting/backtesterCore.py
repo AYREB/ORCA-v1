@@ -161,7 +161,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                     exec_price = (apply_buy_spread if is_long else apply_sell_spread)(market_price, half_spread)
 
                     shares = calculate_shares(cash, exec_price, invest_type, invest_amount,
-                                              allow_fractional, fractional_precision)
+                                              allow_fractional, fractional_precision, sl_pct=sl_pct)
                     if shares > 0:
                         cash += shares * exec_price * (-1 if is_long else 1)
                         positions[ticker] += shares * (1 if is_long else -1)

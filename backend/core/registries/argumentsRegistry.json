@@ -7,23 +7,25 @@
           "options": [
             "percentCashBalance",
             "fixedValue",
-            "percentSharePrice",
-            "numberShares"
+            "numberShares",
+            "riskFixedAmount",
+            "riskPercentBalance"
           ],
           "optionLabels": {
             "percentCashBalance": "% of Cash Balance",
             "fixedValue": "Fixed Dollar Amount",
-            "percentSharePrice": "% of Share Price",
-            "numberShares": "Number of Shares"
+            "numberShares": "Number of Shares",
+            "riskFixedAmount": "Risk Fixed $ per Trade",
+            "riskPercentBalance": "Risk % of Balance per Trade"
           },
           "default": "percentCashBalance",
-          "description": "How the size of each opening trade is calculated."
+          "description": "How the size of each opening trade is calculated. Risk-based types size the position so that hitting the stop loss costs exactly the amount you specify — a stop loss must be set."
         },
         "initialOpenPositionInvestAmount": {
           "label": "Position Size Amount",
           "type": "float",
           "default": 0.2,
-          "description": "Size value for the chosen type: a fraction for percent types (0.2 = 20% of cash), dollars for Fixed Dollar Amount, or a share count for Number of Shares."
+          "description": "Amount for the chosen sizing type. % of Cash / Risk %: fraction (0.2 = 20%). Fixed Dollar / Risk Fixed $: dollar amount (100 = $100). Number of Shares: share count. For risk-based types this is the maximum you are willing to lose if the stop loss is hit."
         },
         "recurring": {
           "label": "Recurring Entries (DCA)",
@@ -117,23 +119,25 @@
           "options": [
             "percentCashBalance",
             "fixedValue",
-            "percentSharePrice",
-            "numberShares"
+            "numberShares",
+            "riskFixedAmount",
+            "riskPercentBalance"
           ],
           "optionLabels": {
             "percentCashBalance": "% of Cash Balance",
             "fixedValue": "Fixed Dollar Amount",
-            "percentSharePrice": "% of Share Price",
-            "numberShares": "Number of Shares"
+            "numberShares": "Number of Shares",
+            "riskFixedAmount": "Risk Fixed $ per Trade",
+            "riskPercentBalance": "Risk % of Balance per Trade"
           },
           "default": "percentCashBalance",
-          "description": "How the size of each opening short is calculated."
+          "description": "How the size of each opening short is calculated. Risk-based types size the position so that hitting the stop loss costs exactly the amount you specify — a stop loss must be set."
         },
         "initialOpenPositionInvestAmount": {
           "label": "Position Size Amount",
           "type": "float",
           "default": 0.2,
-          "description": "Size committed to the short for the chosen type: a fraction for percent types (0.2 = 20% of cash), dollars for Fixed Dollar Amount, or a share count for Number of Shares."
+          "description": "Amount for the chosen sizing type. % of Cash / Risk %: fraction (0.2 = 20%). Fixed Dollar / Risk Fixed $: dollar amount (100 = $100). Number of Shares: share count. For risk-based types this is the maximum you are willing to lose if the stop loss is hit."
         },
         "recurring": {
           "label": "Recurring Entries",

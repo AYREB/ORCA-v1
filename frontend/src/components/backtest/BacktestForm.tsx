@@ -511,6 +511,17 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Guard: risk-based sizing needs a real stop loss
+    const currentOpenArgs = blocks[side]?.OPEN?.ARGUMENTS || {};
+    const investType = currentOpenArgs.initialOpenPositionInvestType;
+    if (investType === "riskFixedAmount" || investType === "riskPercentBalance") {
+      if (!stopLossPercent || stopLossPercent <= 0) {
+        toast.error("Risk-based position sizing requires Stop Loss % > 0. Set it in the Risk Management section on step 3.");
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const payloadDsl = buildJsonDsl();
@@ -561,7 +572,10 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
   };
 
   const canRunBacktest = () => {
-    return tickers.filter(Boolean).length > 0 && (conditionGroups.OPEN?.conditions?.length || 0) > 0;
+    if (tickers.filter(Boolean).length === 0 || (conditionGroups.OPEN?.conditions?.length || 0) === 0) return false;
+    const investType = blocks[side]?.OPEN?.ARGUMENTS?.initialOpenPositionInvestType;
+    if ((investType === "riskFixedAmount" || investType === "riskPercentBalance") && (!stopLossPercent || stopLossPercent <= 0)) return false;
+    return true;
   };
 
   const goNext = () => {
@@ -830,20 +844,35 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                           onChange={(e) => setTakeProfitPercent(numberInputValue(e.currentTarget.valueAsNumber))}
                           className="bg-secondary/50 border-border/50 h-9"
                         />
+                        {takeProfitPercent <= 0 && (
+                          <p className="text-[11px] text-muted-foreground/60">0 = disabled </p>
+                        )}
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="stopLossPercent" className="text-xs text-muted-foreground">
-                          Stop Loss %
-                        </Label>
-                        <Input
-                          id="stopLossPercent"
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          value={stopLossPercent}
-                          onChange={(e) => setStopLossPercent(numberInputValue(e.currentTarget.valueAsNumber))}
-                          className="bg-secondary/50 border-border/50 h-9"
-                        />
+                        {(() => {
+                          const isRiskBased = openArgs.initialOpenPositionInvestType === "riskFixedAmount" || openArgs.initialOpenPositionInvestType === "riskPercentBalance";
+                          const slMissing = isRiskBased && (!stopLossPercent || stopLossPercent <= 0);
+                          return (
+                            <>
+                              <Label htmlFor="stopLossPercent" className={`text-xs ${slMissing ? "text-destructive" : "text-muted-foreground"}`}>
+                                Stop Loss %{isRiskBased && " (required)"}
+                              </Label>
+                              <Input
+                                id="stopLossPercent"
+                                type="number"
+                                min="0"
+                                step="0.1"
+                                value={stopLossPercent}
+                                onChange={(e) => setStopLossPercent(numberInputValue(e.currentTarget.valueAsNumber))}
+                                className={`h-9 ${slMissing ? "border-destructive bg-destructive/5" : "bg-secondary/50 border-border/50"}`}
+                              />
+                              {slMissing
+                                ? <p className="text-[11px] text-destructive">Required for risk-based sizing</p>
+                                : stopLossPercent <= 0 && <p className="text-[11px] text-muted-foreground/60">0 = disabled</p>
+                              }
+                            </>
+                          );
+                        })()}
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="spread" className="text-xs text-muted-foreground">
@@ -858,12 +887,20 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                           onChange={(e) => setSpread(numberInputValue(e.currentTarget.valueAsNumber))}
                           className="bg-secondary/50 border-border/50 h-9"
                         />
+                        {spread <= 0 && (
+                          <p className="text-[11px] text-muted-foreground/60">0 = disabled</p>
+                        )}
                       </div>
                     </div>
                   </div>
                   {Object.keys(allowedArgs.OPEN || {}).length > 0 && (
                     <div className="space-y-3 pt-3 border-t border-border/30">
-                      <Label className="text-xs uppercase tracking-wider text-muted-foreground">Open Parameters</Label>
+                      <div className="flex items-start justify-between gap-2">
+                        <Label className="text-xs uppercase tracking-wider text-muted-foreground">Open Parameters</Label>
+                        <span className="text-[11px] text-muted-foreground/70 text-right leading-snug">
+                          Position sizing · Recurring DCA · more
+                        </span>
+                      </div>
                       <ArgumentSelector
                         block="OPEN"
                         availableArgs={allowedArgs.OPEN || {}}

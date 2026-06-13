@@ -69,7 +69,16 @@ RULES:
 - Output ONLY raw JSON, no explanation, no markdown
 - Percentages as decimals (5% = 0.05)
 - Default timeframe: 1h if not specified
-- Default date range: last 1 year if not specified"""
+- Default date range: last 1 year if not specified
+
+POSITION SIZING (initialOpenPositionInvestType):
+- "percentCashBalance" + amount as fraction (0.2 = 20% of cash) — default
+- "fixedValue" + amount as dollars (500 = $500)
+- "numberShares" + amount as share count (10 = 10 shares)
+- "riskFixedAmount" + amount as dollars to risk (100 = risk $100 per trade, requires stopLossPercent)
+- "riskPercentBalance" + amount as fraction to risk (0.01 = risk 1% of balance per trade, requires stopLossPercent)
+Risk-based sizing: position = risk_amount / (entry_price × stopLossPercent/100)
+Use riskFixedAmount when user says "risk $X per trade". Use riskPercentBalance when user says "risk X% per trade"."""
 
 
 def fix_percentage_fields(block: dict) -> dict:

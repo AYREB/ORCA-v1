@@ -119,8 +119,10 @@ JSON SCHEMA RULES:
 OPEN ARGUMENTS (include only what is specified or can be inferred):
 - stopLossPercent: whole number (5 = 5% stop loss, backtester divides by 100 internally)
 - takeProfitPercent: whole number (15 = 15% take profit)
-- initialOpenPositionInvestType: "percentCashBalance" | "fixedValue" | "numberShares"
-- initialOpenPositionInvestAmount: fraction for percent types (0.2 = 20% of cash), dollar amount for fixedValue
+- initialOpenPositionInvestType: "percentCashBalance" | "fixedValue" | "numberShares" | "riskFixedAmount" | "riskPercentBalance"
+- initialOpenPositionInvestAmount: fraction for percent/risk-percent types (0.2 = 20%, 0.01 = 1%), dollar amount for fixedValue/riskFixedAmount, share count for numberShares
+  riskFixedAmount: risk $X if SL hit (e.g. 100 = risk $100 per trade, requires stopLossPercent)
+  riskPercentBalance: risk X% of balance if SL hit (e.g. 0.01 = 1% risk per trade, requires stopLossPercent)
 - recurring: true if DCA / pyramid entries are requested
 - recurringPeriod: bars between recurring entries
 - recurringInvestType: same options as initialOpenPositionInvestType

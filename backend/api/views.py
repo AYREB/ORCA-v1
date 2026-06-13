@@ -1148,6 +1148,19 @@ def backtestDSLJSON(request):
             raise APIError("strategy_id must be an integer.")
         strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
+    # Guard: risk-based position sizing requires a stop loss
+    _direction = "LONG" if "LONG" in dsl else "SHORT"
+    _open_args = dsl.get(_direction, {}).get("OPEN", {}).get("ARGUMENTS", {})
+    _invest_type = _open_args.get("initialOpenPositionInvestType", "")
+    if _invest_type in ("riskFixedAmount", "riskPercentBalance"):
+        _sl = _open_args.get("stopLossPercent")
+        if not _sl or float(_sl) <= 0:
+            return JsonResponse({
+                "error": "Risk-based position sizing requires a stop loss. Set Stop Loss % > 0 in the Risk Management section.",
+                "code": "missing_stop_loss",
+                "success": False,
+            }, status=400)
+
     try:
         result = dslJSONBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
     except BacktestError as e:
