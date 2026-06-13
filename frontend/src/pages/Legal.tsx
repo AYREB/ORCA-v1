@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Helmet } from "react-helmet-async";
 import { Link, useParams, Navigate } from "react-router-dom";
 import { ArrowLeft, FileText, Shield, AlertTriangle } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
 import orcaLogo from "@/assets/orca-logo.png";
 
 const COMPANY = "Orca";
@@ -192,6 +193,8 @@ const DOCS: Record<string, LegalDoc> = {
 const Legal = () => {
   const { doc } = useParams<{ doc: string }>();
   const legal = useMemo(() => (doc ? DOCS[doc] : undefined), [doc]);
+  const { user } = useAuth();
+  const homeHref = user ? "/dashboard" : "/";
 
   if (!legal) {
     return <Navigate to="/legal/terms" replace />;
@@ -209,16 +212,16 @@ const Legal = () => {
       <div className="min-h-screen bg-background">
         <header className="border-b border-border/50">
           <div className="container mx-auto flex items-center justify-between px-4 py-4">
-            <Link to="/" className="flex items-center gap-2">
+            <Link to={homeHref} className="flex items-center gap-2">
               <img src={orcaLogo} alt="Orca Logo" className="h-8 w-8 rounded-lg" />
               <span className="text-lg font-bold tracking-tight">{COMPANY}</span>
             </Link>
             <Link
-              to="/"
+              to={homeHref}
               className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
               <ArrowLeft className="h-4 w-4" />
-              Back to home
+              {user ? "Back to dashboard" : "Back to home"}
             </Link>
           </div>
         </header>
