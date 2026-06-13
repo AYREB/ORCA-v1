@@ -1,50 +1,93 @@
-# SynthData.py - Final Version with typos, dates, close conditions
+# SynthData.py - Registry-driven synthetic training data generator
 import json
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
+from pathlib import Path
 
-# ---------------- CONFIG ----------------
-REFERENCE_DATE = datetime(2025, 6, 1)
+REGISTRY_DIR = Path(__file__).resolve().parent.parent / "registries"
 
-# ---------------- TICKER ALIASES ----------------
-TICKERS = {
-    "AAPL":    ["AAPL", "Apple", "apple", "apple stock", "AAPL stock", "appl", "appel", "aple"],
-    "TSLA":    ["TSLA", "Tesla", "tesla", "tesla stock", "telsa", "tesala", "testa"],
-    "MSFT":    ["MSFT", "Microsoft", "microsoft", "microsot", "microsfot", "mircosoft"],
-    "GOOGL":   ["GOOGL", "Google", "google", "Alphabet", "gogle", "googel"],
-    "AMZN":    ["AMZN", "Amazon", "amazon", "amazn", "amazone"],
-    "NVDA":    ["NVDA", "Nvidia", "nvidia", "nvida", "nvdia", "nividia"],
-    "META":    ["META", "Meta", "meta", "Facebook", "facebook"],
-    "SPY":     ["SPY", "S&P 500", "the S&P", "spy etf"],
-    "QQQ":     ["QQQ", "Nasdaq", "nasdaq", "tech ETF", "qqq"],
-    "BTC-USD": ["BTC-USD", "Bitcoin", "bitcoin", "BTC", "btc", "bitcon", "bitcone"],
+# ---------------- REGISTRY LOADING ----------------
+
+def _load_registry(filename: str) -> dict:
+    try:
+        with open(REGISTRY_DIR / filename) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"[WARN] {filename} not found, using empty defaults")
+        return {}
+
+_ticker_reg = _load_registry("tickerRegistry.json").get("TICKERS", {})
+_tf_reg     = _load_registry("timeframeRegistry.json").get("TIMEFRAMES", {})
+
+# Canonical timeframe → [aliases]
+TIMEFRAME_ALIASES = {
+    tf: [tf] + data.get("aliases", [])
+    for tf, data in _tf_reg.items()
+}
+ALL_TF_ALIASES = {alias: tf for tf, aliases in TIMEFRAME_ALIASES.items() for alias in aliases}
+
+# Per-ticker available timeframes
+TICKER_AVAILABLE_TFS = {
+    t: data.get("available_timeframes", list(_tf_reg.keys()))
+    for t, data in _ticker_reg.items()
 }
 
-ALL_TICKER_ALIASES = [alias for aliases in TICKERS.values() for alias in aliases]
+# Colloquial / typo aliases not in the registry but useful for training robustness
+_TICKER_EXTRA_ALIASES = {
+    "AAPL":    ["apple stock", "appl", "appel", "aple"],
+    "TSLA":    ["Tesla Motors", "telsa", "tesala", "testa"],
+    "MSFT":    ["microsot", "microsfot", "mircosoft"],
+    "GOOGL":   ["Alphabet", "gogle", "googel"],
+    "AMZN":    ["amazn", "amazone"],
+    "NVDA":    ["nvida", "nvdia", "nividia"],
+    "META":    ["Facebook"],
+    "SPY":     ["S&P 500", "the S&P", "spy etf"],
+    "QQQ":     ["Nasdaq", "nasdaq", "tech ETF", "qqq"],
+    "BTC-USD": ["Bitcoin", "bitcoin", "BTC", "btc", "bitcon", "bitcone"],
+}
 
-def canonical_ticker(alias):
+# Canonical ticker → [all aliases]
+TICKERS: dict[str, list[str]] = {}
+for _ticker, _data in _ticker_reg.items():
+    _reg_aliases  = _data.get("aliases", [])
+    _extra        = _TICKER_EXTRA_ALIASES.get(_ticker, [])
+    # deduplicate preserving order
+    seen = set()
+    combined = []
+    for a in [_ticker] + _reg_aliases + _extra:
+        if a not in seen:
+            seen.add(a)
+            combined.append(a)
+    TICKERS[_ticker] = combined
+
+
+def canonical_ticker(alias: str) -> str:
     for ticker, aliases in TICKERS.items():
         if alias in aliases:
             return ticker
     return alias
 
-# ---------------- TIMEFRAME ALIASES ----------------
-TIMEFRAME_ALIASES = {
-    "1m":  ["1m", "1 minute", "1min", "one minute", "1-minute"],
-    "5m":  ["5m", "5 minute", "5min", "five minute", "5-minute"],
-    "15m": ["15m", "15 minute", "15min", "fifteen minute", "15-minute"],
-    "1h":  ["1h", "1 hour", "hourly", "1hr", "60 minute", "one hour", "1-hour"],
-    "4h":  ["4h", "4 hour", "4hr", "four hour", "4-hour"],
-    "1D":  ["1D", "daily", "day", "1 day", "D", "one day"],
-}
 
-ALL_TF_ALIASES = {alias: tf for tf, aliases in TIMEFRAME_ALIASES.items() for alias in aliases}
-ALL_TF_ALIAS_LIST = list(ALL_TF_ALIASES.keys())
-
-def canonical_tf(alias):
+def canonical_tf(alias: str) -> str:
     return ALL_TF_ALIASES.get(alias, alias)
 
+
+def random_ticker_tf():
+    """Return (ticker_alias, canonical_ticker, tf_alias, canonical_tf) respecting per-ticker timeframes."""
+    ticker = random.choice(list(TICKERS.keys()))
+    available = TICKER_AVAILABLE_TFS.get(ticker, list(_tf_reg.keys()))
+    tf        = random.choice(available)
+    tf_alias  = random.choice(TIMEFRAME_ALIASES.get(tf, [tf]))
+    ticker_alias = random.choice(TICKERS[ticker])
+    return ticker_alias, ticker, tf_alias, tf
+
+
+# ---------------- CONFIG ----------------
+
+REFERENCE_DATE = datetime(2025, 6, 1)
+
 # ---------------- DATE EXPRESSIONS ----------------
+
 DATE_EXPRESSIONS = [
     # No date - 60% weight (6 entries)
     {"text": None, "start": "2025-01-01", "end": "2026-01-01"},
@@ -82,11 +125,13 @@ DATE_EXPRESSIONS = [
     {"text": "from June 2023 to June 2025",        "start": "2023-06-01", "end": "2025-06-01"},
 ]
 
+
 def random_date():
     expr = random.choice(DATE_EXPRESSIONS)
     return expr["text"], expr["start"], expr["end"]
 
-def inject_date(base_text, date_phrase):
+
+def inject_date(base_text: str, date_phrase) -> str:
     if not date_phrase:
         return base_text
     options = [
@@ -98,13 +143,10 @@ def inject_date(base_text, date_phrase):
     ]
     return random.choice(options)
 
+
 # ---------------- TYPO INJECTION ----------------
 
 def add_typos(text: str, rate: float = 0.2) -> str:
-    """
-    Inject realistic typos into ~20% of training examples.
-    Skips tickers, numbers, percentages, and very short words.
-    """
     if random.random() > rate:
         return text
 
@@ -114,7 +156,6 @@ def add_typos(text: str, rate: float = 0.2) -> str:
     for word in words:
         clean = word.strip(".,!?;:")
 
-        # Skip: short words, all-caps (likely tickers), numbers, percentages
         if len(clean) <= 2 or clean.isupper() or clean[0].isdigit() or '%' in clean:
             corrupted.append(word)
             continue
@@ -122,33 +163,27 @@ def add_typos(text: str, rate: float = 0.2) -> str:
         roll = random.random()
 
         if roll < 0.25 and len(clean) > 3:
-            # Swap two adjacent characters: "when" -> "wehn"
             i = random.randint(0, len(clean) - 2)
             w = list(clean)
             w[i], w[i+1] = w[i+1], w[i]
-            punct = word[len(clean):]
-            corrupted.append("".join(w) + punct)
+            corrupted.append("".join(w) + word[len(clean):])
 
         elif roll < 0.45 and len(clean) > 4:
-            # Drop a character: "drops" -> "drps"
             i = random.randint(1, len(clean) - 2)
-            punct = word[len(clean):]
-            corrupted.append(clean[:i] + clean[i+1:] + punct)
+            corrupted.append(clean[:i] + clean[i+1:] + word[len(clean):])
 
         elif roll < 0.6 and len(clean) > 3:
-            # Duplicate a character: "below" -> "beloww"
             i = random.randint(1, len(clean) - 1)
-            punct = word[len(clean):]
-            corrupted.append(clean[:i] + clean[i] + clean[i:] + punct)
+            corrupted.append(clean[:i] + clean[i] + clean[i:] + word[len(clean):])
 
         elif roll < 0.75:
-            # Wrong case
             corrupted.append(clean.lower() if random.random() < 0.5 else clean.upper())
 
         else:
             corrupted.append(word)
 
     return " ".join(corrupted)
+
 
 # ---------------- INDICATOR BUILDERS ----------------
 
@@ -200,31 +235,60 @@ def and_cond(conditions):
 def or_cond(conditions):
     return {"OR": conditions}
 
+
 # ---------------- ARGUMENT BUILDERS ----------------
 
 def open_args(tp=None, sl=None, invest_pct=None, fixed_amount=None,
               recurring=False, rec_period=None, rec_amount=None, max_rec=None):
+    """
+    Build OPEN.ARGUMENTS dict.
+    tp/sl are whole-number percentages (10 = 10%) — backtester divides by 100 internally.
+    invest_pct is a whole-number percentage (20 = 20%) stored as a fraction (0.20).
+    """
     args = {}
     if invest_pct:
-        args["initialOpenPositionInvestType"] = "percentCashBalance"
-        args["initialOpenPositionInvestAmount"] = invest_pct / 100
+        args["initialOpenPositionInvestType"]   = "percentCashBalance"
+        args["initialOpenPositionInvestAmount"] = invest_pct / 100   # 20 → 0.20 (backtester uses as-is)
     if fixed_amount:
-        args["initialOpenPositionInvestType"] = "fixedValue"
+        args["initialOpenPositionInvestType"]   = "fixedValue"
         args["initialOpenPositionInvestAmount"] = fixed_amount
     if tp:
-        args["takeProfitPercent"] = tp / 100
+        args["takeProfitPercent"] = tp           # 15 → 15 (backtester does / 100 itself)
     if sl:
-        args["stopLossPercent"] = sl / 100
+        args["stopLossPercent"]   = sl           # 5  → 5
     if recurring:
-        args["recurring"] = True
-        args["recurringPeriod"] = rec_period or random.choice([5, 10, 20])
-        args["recurringInvestType"] = "percentCashBalance"
-        args["recurringInvestAmount"] = (rec_amount or random.choice([5, 10])) / 100
-        args["maxRecurringCount"] = max_rec or random.choice([0, 3, 5])
+        args["recurring"]              = True
+        args["recurringPeriod"]        = rec_period or random.choice([5, 10, 20])
+        args["recurringInvestType"]    = "percentCashBalance"
+        args["recurringInvestAmount"]  = (rec_amount or random.choice([5, 10])) / 100
+        args["maxRecurringCount"]      = max_rec or random.choice([0, 3, 5])
     return args
 
-def close_args():
-    return {"test": 0.5}
+
+def close_args(min_hold: int = 0, max_hold: int = 0, cooldown: int = 0) -> dict:
+    """
+    Build CLOSE.ARGUMENTS dict.
+    All values are bar counts; 0 means disabled.
+    Only include non-default values to keep JSON concise.
+    """
+    args = {}
+    if min_hold:
+        args["minHoldBars"] = min_hold
+    if max_hold:
+        args["maxHoldBars"] = max_hold
+    if cooldown:
+        args["reentryCooldownBars"] = cooldown
+    return args
+
+
+def random_close_args() -> dict:
+    """Return randomly-filled close args for training variety."""
+    return close_args(
+        min_hold=random.choice([0, 0, 0, 5, 10]),
+        max_hold=random.choice([0, 0, 0, 20, 50]),
+        cooldown=random.choice([0, 0, 0, 3, 5]),
+    )
+
 
 # ---------------- LANGUAGE HELPERS ----------------
 
@@ -270,6 +334,7 @@ TF_PHRASES = [
     "on the {tf} chart", "using {tf} candles",
 ]
 
+
 def opener(direction, ticker):
     t = LONG_OPENERS if direction == "LONG" else SHORT_OPENERS
     return random.choice(t).format(t=ticker)
@@ -297,10 +362,11 @@ def only_sl(sl):
 def only_tp(tp):
     return tp_str(tp)
 
+
 # ---------------- CLOSE CONDITION HELPERS ----------------
 
-def maybe_add_close(strategy, direction, tf_canonical, open_indicator_type, tp, sl):
-    """30% chance of adding explicit CLOSE condition"""
+def maybe_add_close(strategy, direction, tf_canonical, open_indicator_type):
+    """30% chance of adding explicit CLOSE condition."""
     if random.random() > 0.3:
         return strategy
 
@@ -326,18 +392,16 @@ def maybe_add_close(strategy, direction, tf_canonical, open_indicator_type, tp, 
 
     strategy[direction]["CLOSE"] = {
         "CONDITIONS": close_condition,
-        "ARGUMENTS": close_args()
+        "ARGUMENTS":  random_close_args(),
     }
 
     return strategy, close_text
 
+
 # ---------------- GENERATORS ----------------
 
 def gen_rsi_simple(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     period = random.choice([7, 10, 14, 21])
     tp = random.choice([5, 10, 15, 20, 25, 30])
     sl = random.choice([3, 5, 7, 10, 15])
@@ -381,12 +445,12 @@ def gen_rsi_simple(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(rsi_ind(tf, period), op, val(threshold)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
 
-    result = maybe_add_close(strategy, direction, tf, "RSI", tp, sl)
+    result = maybe_add_close(strategy, direction, tf, "RSI")
     if isinstance(result, tuple):
         strategy, close_text = result
         text = text.rstrip(".") + f", close {when(close_text)}"
@@ -395,10 +459,7 @@ def gen_rsi_simple(direction):
 
 
 def gen_sma_price_cross(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     period = random.choice([20, 50, 100, 200])
     tp = random.choice([10, 15, 20, 30])
     sl = random.choice([5, 7, 10, 15])
@@ -437,12 +498,12 @@ def gen_sma_price_cross(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(price_ind("close", 0), op, sma_ind(tf, period)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
 
-    result = maybe_add_close(strategy, direction, tf, "SMA", tp, sl)
+    result = maybe_add_close(strategy, direction, tf, "SMA")
     if isinstance(result, tuple):
         strategy, close_text = result
         text = text.rstrip(".") + f", close {when(close_text)}"
@@ -451,10 +512,7 @@ def gen_sma_price_cross(direction):
 
 
 def gen_golden_cross(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     fast = random.choice([20, 50])
     slow = 200 if fast == 50 else random.choice([100, 200])
     tp = random.choice([20, 30, 40, 50])
@@ -489,7 +547,7 @@ def gen_golden_cross(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(sma_ind(tf, fast), op, sma_ind(tf, slow)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
@@ -497,10 +555,7 @@ def gen_golden_cross(direction):
 
 
 def gen_ema_cross(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     fast = random.choice([9, 12, 20])
     slow = random.choice([26, 50, 100])
     tp = random.choice([10, 15, 20, 30])
@@ -534,7 +589,7 @@ def gen_ema_cross(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(ema_ind(tf, fast), op, ema_ind(tf, slow)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
@@ -542,10 +597,7 @@ def gen_ema_cross(direction):
 
 
 def gen_gap(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     pct = random.choice([3, 5, 7, 10])
     tp = random.choice([5, 7, 10, 15, 20])
     sl = random.choice([2, 3, 5, 7])
@@ -561,7 +613,7 @@ def gen_gap(direction):
             f"there's a {pct}%+ gap up overnight",
             f"price gaps up {pct}% from previous close",
         ]
-        left = price_ind("close", 1)
+        left  = price_ind("close", 1)
         right = arith(price_ind("open", 0), "*", val(multiplier))
     else:
         multiplier = round(1 - pct / 100, 4)
@@ -573,7 +625,7 @@ def gen_gap(direction):
             f"there's a {pct}%+ gap down overnight",
             f"price gaps down {pct}% from previous close",
         ]
-        left = price_ind("open", 0)
+        left  = price_ind("open", 0)
         right = arith(price_ind("close", 1), "*", val(multiplier))
 
     cond_text = random.choice(cond_texts)
@@ -589,7 +641,7 @@ def gen_gap(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(left, open_op, right),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
@@ -597,10 +649,7 @@ def gen_gap(direction):
 
 
 def gen_macd(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     tp = random.choice([10, 15, 20, 25])
     sl = random.choice([5, 7, 10])
     date_phrase, start, end = random_date()
@@ -608,19 +657,14 @@ def gen_macd(direction):
     if direction == "LONG":
         op = ">"
         cond_texts = [
-            "MACD crosses above zero",
-            "MACD turns positive",
-            "MACD is above the zero line",
-            "MACD > 0",
-            "MACD goes positive",
+            "MACD crosses above zero", "MACD turns positive",
+            "MACD is above the zero line", "MACD > 0", "MACD goes positive",
         ]
     else:
         op = "<"
         cond_texts = [
-            "MACD crosses below zero",
-            "MACD turns negative",
-            "MACD < 0",
-            "MACD goes negative",
+            "MACD crosses below zero", "MACD turns negative",
+            "MACD < 0", "MACD goes negative",
         ]
 
     cond_text = random.choice(cond_texts)
@@ -634,12 +678,12 @@ def gen_macd(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(macd_ind(tf), op, val(0)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
 
-    result = maybe_add_close(strategy, direction, tf, "MACD", tp, sl)
+    result = maybe_add_close(strategy, direction, tf, "MACD")
     if isinstance(result, tuple):
         strategy, close_text = result
         text = text.rstrip(".") + f", close {when(close_text)}"
@@ -648,10 +692,7 @@ def gen_macd(direction):
 
 
 def gen_volume_spike(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     multiplier = random.choice([1.5, 2.0, 2.5, 3.0])
     tp = random.choice([10, 15, 20])
     sl = random.choice([5, 7, 10])
@@ -676,7 +717,7 @@ def gen_volume_spike(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(volume_ind(), ">", arith(sma_ind(tf, 20), "*", val(multiplier))),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
@@ -684,10 +725,7 @@ def gen_volume_spike(direction):
 
 
 def gen_rsi_and_macd(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     rsi_period = random.choice([7, 14, 21])
     tp = random.choice([15, 20, 25, 30])
     sl = random.choice([5, 7, 10])
@@ -730,7 +768,7 @@ def gen_rsi_and_macd(direction):
         }
     }
 
-    result = maybe_add_close(strategy, direction, tf, "RSI", tp, sl)
+    result = maybe_add_close(strategy, direction, tf, "RSI")
     if isinstance(result, tuple):
         strategy, close_text = result
         text = text.rstrip(".") + f", close {when(close_text)}"
@@ -739,10 +777,7 @@ def gen_rsi_and_macd(direction):
 
 
 def gen_price_above_sma_and_rsi(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     sma_period = random.choice([20, 50, 100, 200])
     rsi_period = random.choice([7, 14, 21])
     rsi_val = random.choice([40, 45, 50, 55])
@@ -786,10 +821,7 @@ def gen_price_above_sma_and_rsi(direction):
 
 
 def gen_bollinger(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     tp = random.choice([10, 15, 20])
     sl = random.choice([5, 7, 10])
     date_phrase, start, end = random_date()
@@ -821,7 +853,7 @@ def gen_bollinger(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(price_ind("close", 0), op, bbands_ind(tf)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
@@ -829,10 +861,7 @@ def gen_bollinger(direction):
 
 
 def gen_mean_reversion(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     pct = random.choice([3, 5, 7, 10])
     period = random.choice([20, 50, 100])
     sl = random.choice([5, 7, 10])
@@ -866,11 +895,11 @@ def gen_mean_reversion(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(price_ind("close", 0), op, arith(ema_ind(tf, period), "*", val(multiplier))),
-                "ARGUMENTS": open_args(sl=sl)
+                "ARGUMENTS":  open_args(sl=sl)
             },
             "CLOSE": {
                 "CONDITIONS": cond(price_ind("close", 0), close_op, ema_ind(tf, period)),
-                "ARGUMENTS": close_args()
+                "ARGUMENTS":  random_close_args()
             }
         }
     }
@@ -878,10 +907,7 @@ def gen_mean_reversion(direction):
 
 
 def gen_stochastic(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     tp = random.choice([10, 15, 20])
     sl = random.choice([5, 7, 10])
     date_phrase, start, end = random_date()
@@ -911,7 +937,7 @@ def gen_stochastic(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(stoch_ind(tf), op, val(threshold)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
@@ -919,10 +945,7 @@ def gen_stochastic(direction):
 
 
 def gen_cci(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     period = random.choice([14, 20])
     tp = random.choice([15, 20, 25])
     sl = random.choice([5, 7, 10])
@@ -946,7 +969,7 @@ def gen_cci(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(cci_ind(tf, period), op, val(threshold)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }
     }
@@ -954,10 +977,7 @@ def gen_cci(direction):
 
 
 def gen_obv_divergence(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     tp = random.choice([15, 20, 25])
     sl = random.choice([5, 7, 10])
     date_phrase, start, end = random_date()
@@ -991,10 +1011,7 @@ def gen_obv_divergence(direction):
 
 
 def gen_rsi_with_close(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     tp = random.choice([15, 20, 25])
     sl = random.choice([5, 7, 10])
     date_phrase, start, end = random_date()
@@ -1002,15 +1019,15 @@ def gen_rsi_with_close(direction):
     if direction == "LONG":
         open_rsi, close_rsi = random.choice([25, 30, 35]), random.choice([65, 70, 75])
         open_op, close_op = "<", ">"
-        open_texts = [f"RSI drops below {open_rsi}", f"RSI is oversold below {open_rsi}", f"RSI goes under {open_rsi}"]
+        open_texts  = [f"RSI drops below {open_rsi}", f"RSI is oversold below {open_rsi}", f"RSI goes under {open_rsi}"]
         close_texts = [f"RSI rises above {close_rsi}", f"RSI becomes overbought above {close_rsi}", f"RSI goes over {close_rsi}"]
     else:
         open_rsi, close_rsi = random.choice([65, 70, 75]), random.choice([25, 30, 35])
         open_op, close_op = ">", "<"
-        open_texts = [f"RSI rises above {open_rsi}", f"RSI is overbought above {open_rsi}"]
+        open_texts  = [f"RSI rises above {open_rsi}", f"RSI is overbought above {open_rsi}"]
         close_texts = [f"RSI drops below {close_rsi}", f"RSI becomes oversold below {close_rsi}"]
 
-    open_text = random.choice(open_texts)
+    open_text  = random.choice(open_texts)
     close_text = random.choice(close_texts)
 
     structures = [
@@ -1024,11 +1041,11 @@ def gen_rsi_with_close(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(rsi_ind(tf, 14), open_op, val(open_rsi)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             },
             "CLOSE": {
                 "CONDITIONS": cond(rsi_ind(tf, 14), close_op, val(close_rsi)),
-                "ARGUMENTS": close_args()
+                "ARGUMENTS":  random_close_args()
             }
         }
     }
@@ -1036,10 +1053,7 @@ def gen_rsi_with_close(direction):
 
 
 def gen_macd_with_close(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     period = random.choice([20, 50])
     tp = random.choice([15, 20, 25])
     sl = random.choice([5, 7, 10])
@@ -1047,14 +1061,14 @@ def gen_macd_with_close(direction):
 
     if direction == "LONG":
         macd_op, price_op = ">", "<"
-        open_texts = ["MACD turns positive", "MACD crosses above zero", "MACD goes positive"]
+        open_texts  = ["MACD turns positive", "MACD crosses above zero", "MACD goes positive"]
         close_texts = [f"price falls below {period}-SMA", f"price drops under SMA({period})"]
     else:
         macd_op, price_op = "<", ">"
-        open_texts = ["MACD turns negative", "MACD crosses below zero"]
+        open_texts  = ["MACD turns negative", "MACD crosses below zero"]
         close_texts = [f"price rises above {period}-SMA", f"price breaks above SMA({period})"]
 
-    open_text = random.choice(open_texts)
+    open_text  = random.choice(open_texts)
     close_text = random.choice(close_texts)
 
     text = inject_date(
@@ -1068,11 +1082,11 @@ def gen_macd_with_close(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(macd_ind(tf), macd_op, val(0)),
-                "ARGUMENTS": open_args(tp=tp, sl=sl)
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
             },
             "CLOSE": {
                 "CONDITIONS": cond(price_ind("close", 0), price_op, sma_ind(tf, period)),
-                "ARGUMENTS": close_args()
+                "ARGUMENTS":  random_close_args()
             }
         }
     }
@@ -1080,21 +1094,18 @@ def gen_macd_with_close(direction):
 
 
 def gen_recurring_dca(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     threshold = random.choice([25, 30, 35, 40])
-    initial = random.choice([10, 15, 20])
-    rec = random.choice([5, 10])
-    period = random.choice([5, 10, 20])
+    initial   = random.choice([10, 15, 20])
+    rec       = random.choice([5, 10])
+    period    = random.choice([5, 10, 20])
     max_count = random.choice([3, 5, 10])
     tp = random.choice([20, 30, 40])
     sl = random.choice([10, 15, 20])
     date_phrase, start, end = random_date()
 
     cond_texts = [f"RSI drops below {threshold}", f"RSI < {threshold}", f"RSI is oversold below {threshold}"]
-    cond_text = random.choice(cond_texts)
+    cond_text  = random.choice(cond_texts)
 
     text = inject_date(
         f"{opener(direction, ticker_alias)} {when(cond_text)} {tf_str(tf_alias)}, "
@@ -1107,7 +1118,7 @@ def gen_recurring_dca(direction):
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
                 "CONDITIONS": cond(rsi_ind(tf, 14), "<", val(threshold)),
-                "ARGUMENTS": open_args(
+                "ARGUMENTS":  open_args(
                     tp=tp, sl=sl, invest_pct=initial,
                     recurring=True, rec_period=period, rec_amount=rec, max_rec=max_count
                 )
@@ -1118,26 +1129,22 @@ def gen_recurring_dca(direction):
 
 
 def gen_triple_condition(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     sma_period = random.choice([20, 50, 100])
-    rsi_low = random.choice([40, 45, 50])
-    rsi_high = rsi_low + random.choice([15, 20, 25])
+    rsi_low    = random.choice([40, 45, 50])
+    rsi_high   = rsi_low + random.choice([15, 20, 25])
     tp = random.choice([20, 25, 30])
     sl = random.choice([5, 10])
     date_phrase, start, end = random_date()
 
-    price_op = ">" if direction == "LONG" else "<"
-    macd_op = ">" if direction == "LONG" else "<"
-    direction_word = "above" if direction == "LONG" else "below"
+    price_op  = ">" if direction == "LONG" else "<"
+    macd_op   = ">" if direction == "LONG" else "<"
+    d_word    = "above" if direction == "LONG" else "below"
 
-    cond_texts = [
-        f"price {direction_word} {sma_period}-SMA AND RSI between {rsi_low} and {rsi_high} AND MACD {'>' if direction == 'LONG' else '<'} 0",
-    ]
-
-    cond_text = random.choice(cond_texts)
+    cond_text = (
+        f"price {d_word} {sma_period}-SMA AND RSI between {rsi_low} and {rsi_high} "
+        f"AND MACD {'>' if direction == 'LONG' else '<'} 0"
+    )
     text = inject_date(
         f"{opener(direction, ticker_alias)} {when(cond_text)} {tf_str(tf_alias)}, {tpsl(tp, sl)}",
         date_phrase
@@ -1161,11 +1168,8 @@ def gen_triple_condition(direction):
 
 
 def gen_multi_timeframe(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
-    daily_rsi = random.choice([25, 30, 35])
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
+    daily_rsi  = random.choice([25, 30, 35])
     hourly_rsi = random.choice([40, 45, 50])
     tp = random.choice([15, 20, 25])
     sl = random.choice([5, 7, 10])
@@ -1205,11 +1209,8 @@ def gen_multi_timeframe(direction):
 
 
 def gen_price_percent_from_sma(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
-    pct = random.choice([3, 5, 7, 10])
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
+    pct    = random.choice([3, 5, 7, 10])
     period = random.choice([20, 50, 100, 200])
     tp = random.choice([10, 15, 20])
     sl = random.choice([5, 7, 10])
@@ -1252,10 +1253,7 @@ def gen_price_percent_from_sma(direction):
 
 
 def gen_rsi_or_stoch(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
     tp = random.choice([15, 20, 25])
     sl = random.choice([5, 7, 10])
     date_phrase, start, end = random_date()
@@ -1296,22 +1294,19 @@ def gen_rsi_or_stoch(direction):
 
 
 def gen_breakout_volume_confirmed(direction):
-    ticker_alias = random.choice(ALL_TICKER_ALIASES)
-    tf_alias = random.choice(ALL_TF_ALIAS_LIST)
-    tf = canonical_tf(tf_alias)
-    ticker = canonical_ticker(ticker_alias)
-    period = random.choice([20, 50, 100])
+    ticker_alias, ticker, tf_alias, tf = random_ticker_tf()
+    period  = random.choice([20, 50, 100])
     vol_mult = random.choice([1.5, 2.0, 2.5])
     tp = random.choice([15, 20, 25])
     sl = random.choice([5, 7, 10])
     date_phrase, start, end = random_date()
 
-    price_op = ">" if direction == "LONG" else "<"
-    direction_word = "above" if direction == "LONG" else "below"
+    price_op   = ">" if direction == "LONG" else "<"
+    d_word     = "above" if direction == "LONG" else "below"
     cond_texts = [
-        f"price {direction_word} {period}-SMA AND volume > {vol_mult}x average",
-        f"breakout {direction_word} SMA({period}) confirmed by {vol_mult}x volume",
-        f"price breaks {direction_word} {period}-day MA with volume spike of {vol_mult}x",
+        f"price {d_word} {period}-SMA AND volume > {vol_mult}x average",
+        f"breakout {d_word} SMA({period}) confirmed by {vol_mult}x volume",
+        f"price breaks {d_word} {period}-day MA with volume spike of {vol_mult}x",
     ]
 
     cond_text = random.choice(cond_texts)
@@ -1380,25 +1375,24 @@ GENERATORS = [
     gen_price_percent_from_sma,
 ]
 
+
 # ---------------- MAIN ----------------
 
-def generate_dataset(num_examples=2000, output_file="training_data.jsonl"):
+def generate_dataset(num_examples: int = 2000, output_file: str = "training_data.jsonl"):
     examples = []
-    errors = 0
+    errors   = 0
 
     for i in range(num_examples):
         try:
             generator = random.choice(GENERATORS)
             direction = random.choice(["LONG", "SHORT"])
             text, strategy = generator(direction)
-
-            # Apply typos to 20% of examples
             text = add_typos(text, rate=0.2)
 
             examples.append({
                 "instruction": "Convert this trading strategy to JSON",
-                "input": text,
-                "output": json.dumps(strategy)
+                "input":  text,
+                "output": json.dumps(strategy),
             })
 
         except Exception as e:
@@ -1416,16 +1410,21 @@ def generate_dataset(num_examples=2000, output_file="training_data.jsonl"):
     print(f"\n✓ Generated {len(examples)} examples ({errors} errors)")
     print(f"✓ Saved to {output_file}")
 
-    # Show samples
-    print("\n--- 5 Random Samples ---")
-    for ex in random.sample(examples, 5):
+    print("\n--- 3 Random Samples ---")
+    for ex in random.sample(examples, min(3, len(examples))):
         print(f"\nInput:  {ex['input']}")
-        out = json.loads(ex['output'])
+        out = json.loads(ex["output"])
         direction = "LONG" if "LONG" in out else "SHORT"
         has_close = "CLOSE" in out[direction]
-        print(f"Has CLOSE: {has_close}")
-        print(f"Output: {ex['output'][:150]}...")
+        args = out[direction]["OPEN"]["ARGUMENTS"]
+        print(f"Has CLOSE: {has_close} | TP: {args.get('takeProfitPercent')} | SL: {args.get('stopLossPercent')}")
+        print(f"Output: {ex['output'][:200]}...")
+
+    return examples
 
 
 if __name__ == "__main__":
-    generate_dataset(2000)
+    import sys
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
+    out = sys.argv[2] if len(sys.argv) > 2 else "training_data.jsonl"
+    generate_dataset(n, out)

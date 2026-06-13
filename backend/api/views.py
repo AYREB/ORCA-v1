@@ -1841,7 +1841,6 @@ def strategy_chat(request):
 @csrf_exempt
 @api_error_boundary
 @require_methods("GET")
-@token_required
 @rate_limit("general")
 def registry(request):
     base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
