@@ -52,7 +52,7 @@ from .indicator_sandbox import (
     run_indicator_test,
     validate_parameters,
 )
-from .models import BacktestRun, CustomIndicator, Strategy, StrategyConversation, StrategyQueryLog
+from .models import BacktestRun, CustomIndicator, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
 from core.LLM.orca_llm import parse_strategy, parse_strategy_with_context
 from core.LLM.ambiguity import (
     detect_missing_fields,
@@ -2083,3 +2083,35 @@ def backtest_run_detail(request, run_id: int):
 
     run.delete()
     return JsonResponse({"success": True})
+
+
+# Cap the stored paper-trading document so a runaway client can't bloat the DB.
+MAX_PAPER_ACCOUNTS = 50
+MAX_PAPER_ACCOUNTS_BYTES = 2_000_000  # ~2 MB of JSON per user
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET", "PUT")
+@token_required
+@rate_limit("general")
+def paper_accounts(request):
+    """Per-user paper-trading workspace, persisted as one JSON document."""
+    user = get_authenticated_user(request)
+
+    if request.method == "GET":
+        state = PaperAccountState.objects.filter(user=user).first()
+        accounts = state.accounts if state and isinstance(state.accounts, list) else []
+        return no_store(JsonResponse({"accounts": accounts}))
+
+    body = parse_body(request)
+    accounts = body.get("accounts")
+    if not isinstance(accounts, list):
+        raise APIError("accounts must be a list.")
+    if len(accounts) > MAX_PAPER_ACCOUNTS:
+        raise APIError(f"Too many paper accounts (max {MAX_PAPER_ACCOUNTS}).")
+    if len(json.dumps(accounts)) > MAX_PAPER_ACCOUNTS_BYTES:
+        raise APIError("Paper account data is too large to save.")
+
+    PaperAccountState.objects.update_or_create(user=user, defaults={"accounts": accounts})
+    return no_store(JsonResponse({"accounts": accounts}))

@@ -145,3 +145,26 @@ class StrategyQueryLog(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+
+class PaperAccountState(models.Model):
+    """
+    Server-side persistence for a user's paper-trading workspace.
+
+    The frontend manages a rich, evolving shape (accounts -> applied strategies,
+    runs, equity history), so we store the whole workspace as one JSON document
+    per user rather than normalising it into many tables. This keeps the client
+    the single source of truth for shape while guaranteeing the data survives
+    browser clears and follows the user across devices.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="paper_account_state",
+    )
+    accounts = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        count = len(self.accounts) if isinstance(self.accounts, list) else 0
+        return f"PaperAccountState({self.user_id}, {count} accounts)"

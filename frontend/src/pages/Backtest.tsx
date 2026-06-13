@@ -4,6 +4,7 @@ import { Play, Loader2, ArrowLeft, BarChart3, LineChart, Activity, Shuffle, Flas
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
+import RiskDisclaimer from "@/components/RiskDisclaimer";
 import DSLEditor from "@/components/backtest/DSLEditor";
 import BacktestForm from "@/components/backtest/BacktestForm";
 import AIStrategyBuilder from "@/components/backtest/AIStrategyBuilder";
@@ -305,6 +306,7 @@ const Backtest = () => {
                   exit={{ opacity: 0, x: 20 }}
                   transition={{ duration: 0.3 }}
                 >
+                  <RiskDisclaimer className="mb-6" />
                   <Tabs defaultValue="numerical" className="w-full" key={resultsKey}>
                     <TabsList className="mb-6 border border-border/70 bg-card/60 p-1 backdrop-blur-xl">
                       <TabsTrigger value="numerical" className="gap-2 data-[state=active]:bg-primary/20">

@@ -15,6 +15,7 @@ import CustomIndicatorDocs from "./pages/CustomIndicatorDocs";
 import PaperAccounts from "./pages/PaperAccounts";
 import History from "./pages/History";
 import Charts from "./pages/Charts";
+import Legal from "./pages/Legal";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import Help from "./pages/Help"
 import { AuthProvider } from "./context/AuthContext";
@@ -36,6 +37,7 @@ const App = () => (
               <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
                 <Routes>
                   <Route path="/" element={<Index />} />
+                  <Route path="/legal/:doc" element={<Legal />} />
                   <Route
                     path="/dashboard"
                     element={

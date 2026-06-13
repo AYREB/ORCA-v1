@@ -285,6 +285,20 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
                     <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
                   </Button>
                 </motion.div>
+
+                {mode === "signup" && (
+                  <motion.p variants={fieldVariants} className="text-center text-xs text-muted-foreground">
+                    By creating an account you agree to our{" "}
+                    <a href="/legal/terms" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                      Terms
+                    </a>{" "}
+                    and{" "}
+                    <a href="/legal/privacy" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                      Privacy Policy
+                    </a>
+                    .
+                  </motion.p>
+                )}
               </motion.form>
 
               {/* Divider */}

@@ -888,6 +888,19 @@ class DjangoAPI {
     };
   }
 
+  // Paper-trading workspace (persisted server-side as one JSON document per user)
+  async getPaperAccounts(): Promise<unknown[]> {
+    const data = await this.request<{ accounts?: unknown[] }>('/paper-accounts/');
+    return Array.isArray(data.accounts) ? data.accounts : [];
+  }
+
+  async savePaperAccounts(accounts: unknown[]): Promise<void> {
+    await this.request('/paper-accounts/', {
+      method: 'PUT',
+      body: JSON.stringify({ accounts }),
+    });
+  }
+
   // Raw OHLCV for the standalone Charts page
   async getChartData(params: {
     ticker: string;

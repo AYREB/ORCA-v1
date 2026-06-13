@@ -24,6 +24,7 @@ import {
 import { useSettings } from "@/hooks/useSettings";
 import { safeColor, colorWithAlpha } from "@/lib/chartTheme";
 import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
+import RiskDisclaimer from "@/components/RiskDisclaimer";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -489,6 +490,8 @@ const Dashboard = () => {
           </div>
         </motion.section>
       )}
+
+      <RiskDisclaimer variant="inline" className="pt-2" />
     </DashboardLayout>
   );
 };

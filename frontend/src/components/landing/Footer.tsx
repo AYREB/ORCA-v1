@@ -39,16 +39,30 @@ const Footer = () => {
             </ul>
           </div>
 
-          {/* Company */}
+          {/* Legal */}
           <div>
-            <h4 className="font-semibold mb-4">Company</h4>
+            <h4 className="font-semibold mb-4">Legal</h4>
             <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><a href="#" className="hover:text-foreground transition-colors">About</a></li>
+              <li><Link to="/legal/terms" className="hover:text-foreground transition-colors">Terms of Service</Link></li>
+              <li><Link to="/legal/privacy" className="hover:text-foreground transition-colors">Privacy Policy</Link></li>
+              <li><Link to="/legal/risk" className="hover:text-foreground transition-colors">Risk Disclosure</Link></li>
               <li><a href="#" className="hover:text-foreground transition-colors">Contact</a></li>
-              <li><a href="#" className="hover:text-foreground transition-colors">Privacy</a></li>
-              <li><a href="#" className="hover:text-foreground transition-colors">Terms</a></li>
             </ul>
           </div>
+        </div>
+
+        {/* Financial disclaimer */}
+        <div className="mb-8 rounded-lg border border-border/50 bg-card/40 p-4">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            <span className="font-semibold text-foreground/80">Disclaimer:</span> Orca is a research and
+            educational tool and does not provide financial advice. Backtested, optimized, and
+            paper-traded results are hypothetical, do not represent real trading, and are not a guarantee
+            of future performance. Trading involves substantial risk of loss.{" "}
+            <Link to="/legal/risk" className="underline hover:text-foreground">
+              Read the full risk disclosure
+            </Link>
+            .
+          </p>
         </div>
 
         <div className="pt-8 border-t border-border/50 flex flex-col md:flex-row items-center justify-between gap-4">

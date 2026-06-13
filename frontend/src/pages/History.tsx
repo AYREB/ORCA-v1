@@ -20,6 +20,7 @@ import {
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
+import RiskDisclaimer from "@/components/RiskDisclaimer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -431,6 +432,8 @@ const History = () => {
           </p>
         </div>
       )}
+
+      <RiskDisclaimer variant="inline" className="pt-2" />
 
       {/* Run detail dialog */}
       <Dialog open={detailRun !== null} onOpenChange={(open) => !open && setDetailRun(null)}>

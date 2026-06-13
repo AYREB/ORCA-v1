@@ -37,6 +37,7 @@ urlpatterns = [
     path("chart-data/", views.chart_data),
     path("backtest-runs/", views.backtest_runs),
     path("backtest-runs/<int:run_id>/", views.backtest_run_detail),
+    path("paper-accounts/", views.paper_accounts),
     path("strategy-to-dsl/", views.strategy_to_dsl),
     path('strategy/chat/', views.strategy_chat),
 ]

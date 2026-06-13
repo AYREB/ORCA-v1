@@ -32,6 +32,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
+import RiskDisclaimer from "@/components/RiskDisclaimer";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -568,27 +569,33 @@ const PaperAccounts = () => {
   const [newStrategyName, setNewStrategyName] = useState("");
   const [newStrategyDsl, setNewStrategyDsl] = useState("");
   const [isCreatingStrategy, setIsCreatingStrategy] = useState(false);
-  const storageWarningShown = useRef(false);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
+  const saveWarningShown = useRef(false);
 
   const storageKey = useMemo(() => getStorageKey(user?.id), [user?.id]);
+
+  // Persist the workspace server-side so it survives browser clears and follows
+  // the user across devices. Saves are idempotent (full-document PUT), so the
+  // occasional double-fire from a functional state update is harmless.
+  const persistAccounts = useCallback((next: PaperAccount[]) => {
+    api.savePaperAccounts(serializeAccountsForStorage(next)).catch((error) => {
+      console.warn("Unable to persist paper account history:", error);
+      if (!saveWarningShown.current) {
+        saveWarningShown.current = true;
+        toast.error("Couldn't save your paper account changes. Check your connection and try again.");
+      }
+    });
+  }, []);
 
   const updateAccounts = useCallback(
     (updater: (previous: PaperAccount[]) => PaperAccount[]) => {
       setAccounts((previous) => {
         const next = updater(previous);
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(serializeAccountsForStorage(next)));
-        } catch (error) {
-          console.warn("Unable to persist paper account history:", error);
-          if (!storageWarningShown.current) {
-            storageWarningShown.current = true;
-            toast.error("Paper account updated, but browser storage is full. Detailed run data is kept for this session only.");
-          }
-        }
+        persistAccounts(next);
         return next;
       });
     },
-    [storageKey],
+    [persistAccounts],
   );
 
   const loadStrategies = useCallback(async () => {
@@ -605,33 +612,53 @@ const PaperAccounts = () => {
   }, []);
 
   useEffect(() => {
-    const stored = localStorage.getItem(storageKey);
-    if (!stored) {
-      setAccounts([]);
-      setSelectedAccountId(null);
-      return;
-    }
+    if (!user) return;
+    let cancelled = false;
 
-    try {
-      const parsed = JSON.parse(stored);
-      if (!Array.isArray(parsed)) {
+    const load = async () => {
+      setIsLoadingAccounts(true);
+      try {
+        let raw = await api.getPaperAccounts();
+
+        // One-time migration: if the server has nothing yet but this browser
+        // still holds legacy localStorage accounts, push them up so the user's
+        // existing paper-trading history isn't lost in the move to server storage.
+        if (!raw || raw.length === 0) {
+          const legacy = localStorage.getItem(storageKey);
+          if (legacy) {
+            try {
+              const parsed = JSON.parse(legacy);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                raw = parsed;
+                await api.savePaperAccounts(parsed).catch(() => undefined);
+                localStorage.removeItem(storageKey);
+              }
+            } catch {
+              // ignore malformed legacy data
+            }
+          }
+        }
+
+        if (cancelled) return;
+        const normalized = Array.isArray(raw) ? raw.map((account) => normalizeAccount(account)) : [];
+        setAccounts(normalized);
+        setSelectedAccountId(normalized[0]?.id ?? null);
+      } catch (error) {
+        if (cancelled) return;
+        console.warn("Unable to load paper accounts:", error);
+        toast.error("Couldn't load your paper accounts. Please refresh to try again.");
         setAccounts([]);
         setSelectedAccountId(null);
-        return;
+      } finally {
+        if (!cancelled) setIsLoadingAccounts(false);
       }
-      const normalized = parsed.map((account) => normalizeAccount(account));
-      setAccounts(normalized);
-      setSelectedAccountId(normalized[0]?.id ?? null);
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(serializeAccountsForStorage(normalized)));
-      } catch (error) {
-        console.warn("Unable to compact stored paper account history:", error);
-      }
-    } catch {
-      setAccounts([]);
-      setSelectedAccountId(null);
-    }
-  }, [storageKey]);
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, storageKey]);
 
   useEffect(() => {
     loadStrategies();
@@ -1328,6 +1355,8 @@ const PaperAccounts = () => {
           }
         />
 
+            <RiskDisclaimer />
+
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
               <Card className="glass-card border-border/70">
                 <CardHeader className="pb-3">
@@ -1335,7 +1364,13 @@ const PaperAccounts = () => {
                   <CardDescription>Switch workspaces and track each simulation separately.</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {accounts.length === 0 ? (
+                  {isLoadingAccounts ? (
+                    <div className="space-y-3">
+                      {Array.from({ length: 3 }).map((_, index) => (
+                        <div key={index} className="h-20 animate-pulse rounded-xl bg-secondary/40" />
+                      ))}
+                    </div>
+                  ) : accounts.length === 0 ? (
                     <div className="space-y-3 rounded-lg border border-dashed border-border p-6 text-center">
                       <Wallet className="mx-auto h-8 w-8 text-muted-foreground" />
                       <p className="text-sm text-muted-foreground">
