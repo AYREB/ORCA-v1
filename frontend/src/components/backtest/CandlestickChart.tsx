@@ -27,6 +27,8 @@ interface CandlestickChartProps {
   trades: TradeEntry[];
   ticker: string;
   height?: number;
+  // Overrides the global chart type from settings (used by the standalone Charts page).
+  chartTypeOverride?: ChartType;
   showMarkers?: boolean;
   showTPSL?: boolean;
   useCustomTPSL?: boolean;
@@ -253,6 +255,7 @@ const CandlestickChart = ({
   trades,
   ticker,
   height = 400,
+  chartTypeOverride,
   showMarkers = true,
   showTPSL = false,
   useCustomTPSL = false,
@@ -269,7 +272,7 @@ const CandlestickChart = ({
   seekToIndex,
 }: CandlestickChartProps) => {
   const { settings } = useSettings();
-  const chartType = settings.appearance.chartType;
+  const chartType = chartTypeOverride ?? settings.appearance.chartType;
   const chartColors = settings.appearance.chartColors;
   const chartOptions = settings.appearance.chartOptions;
   const INDICATOR_COLORS = COLOR_SCHEMES[settings.appearance.chartColorScheme] || COLOR_SCHEMES.classic;
@@ -1060,19 +1063,25 @@ const CandlestickChart = ({
       >
         <div className="flex items-center gap-4">
           <h3 className="text-lg font-semibold font-mono text-foreground">{ticker}</h3>
-          <span className="text-sm text-muted-foreground">
-            {trades.filter((t) => t.ticker === ticker).length} trades
-          </span>
+          {trades.length > 0 && (
+            <span className="text-sm text-muted-foreground">
+              {trades.filter((t) => t.ticker === ticker).length} trades
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-b-[10px] border-l-transparent border-r-transparent border-b-success" />
-            <span className="text-muted-foreground">Entry ({buyCount})</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[10px] border-l-transparent border-r-transparent border-t-destructive" />
-            <span className="text-muted-foreground">Exit ({sellCount})</span>
-          </div>
+          {trades.length > 0 && (
+            <>
+              <div className="flex items-center gap-2">
+                <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-b-[10px] border-l-transparent border-r-transparent border-b-success" />
+                <span className="text-muted-foreground">Entry ({buyCount})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[10px] border-l-transparent border-r-transparent border-t-destructive" />
+                <span className="text-muted-foreground">Exit ({sellCount})</span>
+              </div>
+            </>
+          )}
           {indicators.length > 0 && (
             <div className="flex items-center gap-2 pl-2 border-l border-border">
               {indicators.map((ind) => (

@@ -83,6 +83,13 @@ export interface BacktestHistoryResponse {
   offset: number;
 }
 
+export interface ChartDataResponse {
+  ticker: string;
+  name: string;
+  timeframe: string;
+  candles: OHLCData[];
+}
+
 export interface ParameterChoice {
   mode: 'nochange' | 'auto' | 'manual' | 'range';
   indicator?: string;
@@ -427,6 +434,17 @@ export type StrategyChatResponse =
   | StrategyChatErrorResponse;
 
 
+// Error that preserves the backend's machine-readable `code` (e.g. "no_data")
+// so callers can branch on failure type instead of string-matching messages.
+export class ApiError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+  }
+}
+
 class DjangoAPI {
   private baseUrl: string;
   private token: string | null = null;
@@ -453,7 +471,8 @@ class DjangoAPI {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `API Error: ${response.statusText}`);
+      const error = new ApiError(errorData.error || `API Error: ${response.statusText}`, errorData.code);
+      throw error;
     }
 
     return response.json();
@@ -867,6 +886,19 @@ class DjangoAPI {
         created_at: run.created_at ?? "",
       })),
     };
+  }
+
+  // Raw OHLCV for the standalone Charts page
+  async getChartData(params: {
+    ticker: string;
+    timeframe: string;
+    start?: string;
+    end?: string;
+  }): Promise<ChartDataResponse> {
+    const query = new URLSearchParams({ ticker: params.ticker, timeframe: params.timeframe });
+    if (params.start) query.set('start', params.start);
+    if (params.end) query.set('end', params.end);
+    return this.request<ChartDataResponse>(`/chart-data/?${query.toString()}`);
   }
 
   // Backtest run history

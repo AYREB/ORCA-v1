@@ -53,7 +53,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { api, BacktestResult, SavedStrategy, TradeEntry } from "@/lib/api";
+import { api, ApiError, BacktestResult, SavedStrategy, TradeEntry } from "@/lib/api";
 import BacktestResults from "@/components/backtest/BacktestResults";
 import ChartView from "@/components/backtest/ChartView";
 import { toast } from "sonner";
@@ -162,10 +162,23 @@ const getDateKeyFromTimestamp = (timestamp: string, fallback = formatLocalDate(n
   return Number.isFinite(date.getTime()) ? formatLocalDate(date) : fallback;
 };
 
-const getDateframeTimestamp = (timestamp: string, fallback = new Date().toISOString()) => {
+// The day AFTER the given timestamp, as a YYYY-MM-DD key. Used as an exclusive
+// end bound so "today" is included even though the backend treats date-only ends
+// as exclusive — a same-day intraday window has no daily/4h bars and errors out.
+const getNextDayDateKey = (timestamp: string) => {
   const date = new Date(timestamp);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : fallback;
+  const base = Number.isFinite(date.getTime()) ? date : new Date();
+  base.setDate(base.getDate() + 1);
+  return formatLocalDate(base);
 };
+
+// Backend BacktestError codes that mean "the window simply had no market data"
+// — a benign outcome for a live update (e.g. applied today before any new bar).
+const NO_DATA_BACKTEST_CODES = new Set([
+  "no_data",
+  "no_data_after_clip",
+  "data_fetch_error",
+]);
 
 const formatWindowLabel = (timestamp?: string) => {
   if (!timestamp) return "";
@@ -211,9 +224,6 @@ const getAppliedStrategyDelta = (strategy: AppliedPaperStrategy) =>
 
 const getActiveAppliedStrategies = (account: PaperAccount) =>
   account.appliedStrategies.filter((strategy) => strategy.active);
-
-const getAppliedStrategyWindowStart = (strategy: AppliedPaperStrategy) =>
-  strategy.lastUpdatedAt ?? strategy.appliedAt;
 
 const getBalanceAfterStrategyValueChanges = (
   account: PaperAccount,
@@ -747,6 +757,26 @@ const PaperAccounts = () => {
     });
   }, [selectedAccount]);
 
+  // Tighten the Y-axis to the actual equity range (with a little padding) instead of
+  // anchoring at $0 — small day-to-day moves are otherwise squashed into a flat line.
+  const equityDomain = useMemo<[number, number]>(() => {
+    const values = equityChartData
+      .map((point) => point.equity)
+      .filter((value) => Number.isFinite(value));
+    if (values.length === 0) return [0, 1];
+
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+
+    if (min === max) {
+      const padding = Math.max(1, Math.abs(min) * 0.02);
+      return [min - padding, max + padding];
+    }
+
+    const padding = (max - min) * 0.08;
+    return [Math.max(0, min - padding), max + padding];
+  }, [equityChartData]);
+
   const runReturnsData = useMemo(() => {
     if (!selectedAccount || selectedAccount.runs.length === 0) return [];
     const dailyHistory = compactEquityHistoryByDay(selectedAccount.performanceHistory);
@@ -1040,8 +1070,11 @@ const PaperAccounts = () => {
       windowEndAt: string,
       liveToToday: boolean,
     ) => {
-      const windowStart = getDateframeTimestamp(windowStartAt);
-      const windowEnd = liveToToday ? getDateframeTimestamp(windowEndAt) : undefined;
+      // Use whole-day bounds: market data is daily/4h, so an intraday window
+      // (e.g. applying then refreshing the same hour) contains no bars and errors.
+      // Start at the application day; end at tomorrow (exclusive) to include today.
+      const windowStart = getDateKeyFromTimestamp(windowStartAt);
+      const windowEnd = liveToToday ? getNextDayDateKey(windowEndAt) : undefined;
       const requestOptions = {
         strategyId: liveToToday ? undefined : strategy.id,
         strategyName: strategy.name,
@@ -1081,8 +1114,10 @@ const PaperAccounts = () => {
 
     try {
       const now = new Date().toISOString();
-      const windowStartAt = getAppliedStrategyWindowStart(appliedStrategy);
-      const windowStartingEquity = appliedStrategy.currentValue;
+      // Re-simulate the whole life of this strategy sleeve (application day → today)
+      // from its original equity. Idempotent, so repeated refreshes don't compound.
+      const windowStartAt = appliedStrategy.appliedAt;
+      const windowStartingEquity = appliedStrategy.startingEquity;
       const { result, windowEnd } = await runStrategyBacktest(
         strategy,
         windowStartingEquity,
@@ -1133,8 +1168,12 @@ const PaperAccounts = () => {
         `Updated "${strategy.name}" from ${formatWindowLabel(windowStartAt)} through ${formatWindowLabel(windowEnd) || "now"}`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to execute strategy";
-      toast.error(message);
+      if (error instanceof ApiError && error.code && NO_DATA_BACKTEST_CODES.has(error.code)) {
+        toast.info("No new market data since this strategy was applied. Try again after the next market close.");
+      } else {
+        const message = error instanceof Error ? error.message : "Unable to execute strategy";
+        toast.error(message);
+      }
     } finally {
       setRunningKey(null);
     }
@@ -1167,18 +1206,30 @@ const PaperAccounts = () => {
     try {
       let nextAppliedStrategies = account.appliedStrategies;
       const newRuns: PaperStrategyRun[] = [];
+      let skippedNoData = 0;
 
       for (const { appliedStrategy, strategy } of runnableStrategies) {
         const executedAt = new Date().toISOString();
-        const windowStartAt = getAppliedStrategyWindowStart(appliedStrategy);
-        const windowStartingEquity = appliedStrategy.currentValue;
-        const { result, windowEnd } = await runStrategyBacktest(
-          strategy,
-          windowStartingEquity,
-          windowStartAt,
-          executedAt,
-          true,
-        );
+        // Full idempotent re-simulation from the application day to today.
+        const windowStartAt = appliedStrategy.appliedAt;
+        const windowStartingEquity = appliedStrategy.startingEquity;
+        let result: BacktestResult;
+        let windowEnd: string | undefined;
+        try {
+          ({ result, windowEnd } = await runStrategyBacktest(
+            strategy,
+            windowStartingEquity,
+            windowStartAt,
+            executedAt,
+            true,
+          ));
+        } catch (error) {
+          if (error instanceof ApiError && error.code && NO_DATA_BACKTEST_CODES.has(error.code)) {
+            skippedNoData += 1;
+            continue;
+          }
+          throw error;
+        }
         const updatedAppliedStrategy: AppliedPaperStrategy = {
           ...appliedStrategy,
           strategyName: strategy.name,
@@ -1202,6 +1253,15 @@ const PaperAccounts = () => {
         newRuns.push(run);
       }
 
+      if (newRuns.length === 0) {
+        toast.info(
+          skippedNoData > 0
+            ? "No new market data since these strategies were applied. Try again after the next market close."
+            : "Nothing to update yet.",
+        );
+        return;
+      }
+
       const updatedAt = new Date().toISOString();
       updateAccounts((previous) =>
         previous.map((item) => {
@@ -1222,7 +1282,8 @@ const PaperAccounts = () => {
       );
       setSelectedRunId(newRuns[newRuns.length - 1]?.id ?? null);
       toast.success(
-        `Updated ${runnableStrategies.length} ${runnableStrategies.length === 1 ? "strategy" : "strategies"} to today.`,
+        `Updated ${newRuns.length} ${newRuns.length === 1 ? "strategy" : "strategies"} to today.` +
+          (skippedNoData > 0 ? ` ${skippedNoData} had no new data.` : ""),
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to update paper account";
@@ -1589,6 +1650,8 @@ const PaperAccounts = () => {
                                   tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
                                 />
                                 <YAxis
+                                  domain={equityDomain}
+                                  allowDecimals={false}
                                   stroke="hsl(var(--muted-foreground))"
                                   tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
                                   tickFormatter={(value) => `$${Math.round(value).toLocaleString()}`}

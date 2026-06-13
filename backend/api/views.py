@@ -4,6 +4,7 @@ import logging
 import re
 import ssl
 import threading
+from datetime import timedelta
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,7 +33,9 @@ from core.analysis.parameter_optimiser import (
     genetic_optimizer,
     optimizer,
 )
-from core.main import dslJSONBacktest, dslTextToJsonBacktest, BacktestError
+from core.main import dslJSONBacktest, dslTextToJsonBacktest, BacktestError, dataframe_to_response_records
+from core.data_pulling.datapull import get_data_with_indicator
+from .assistant import _market_csv_path, _load_market_csv
 from .assistant import (
     INDICATOR_KNOWLEDGE,
     AssistantError,
@@ -1919,6 +1922,106 @@ def dashboard_summary(request):
     }
 
     return JsonResponse(response)
+
+
+# yfinance interval codes differ from our internal timeframe ids (used only when
+# there is no pre-pulled CSV to fall back on; yfinance has no native 4h bar).
+_TIMEFRAME_TO_YF_INTERVAL = {
+    "1m": "1m",
+    "5m": "5m",
+    "15m": "15m",
+    "1h": "1h",
+    "1D": "1d",
+}
+
+
+def _load_ticker_registry() -> dict:
+    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
+    with open(base / "tickerRegistry.json", encoding="utf-8") as f:
+        return json.load(f).get("TICKERS", {})
+
+
+def _load_chart_dataframe(ticker: str, timeframe: str):
+    """
+    Prefer the pre-pulled CSVs in core/data_csvs (the same source backtests use,
+    and the only source with 4h bars). Fall back to live yfinance otherwise.
+    Returns (dataframe_or_None, error_message_or_None).
+    """
+    # CSV filenames are inconsistent in case (e.g. AAPL_1d.csv but registry id "1D").
+    for tf_variant in dict.fromkeys([timeframe, timeframe.lower(), timeframe.upper()]):
+        path = _market_csv_path(ticker, tf_variant)
+        if path is not None:
+            try:
+                df = _load_market_csv(path)
+                if df is not None and not df.empty:
+                    # _load_market_csv keeps the original datetime as both a column and
+                    # the index; keep only OHLCV so reset_index() doesn't collide.
+                    ohlcv = [c for c in ("Open", "High", "Low", "Close", "Volume") if c in df.columns]
+                    return df[ohlcv], None
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("chart_data CSV load failed for %s %s: %s", ticker, tf_variant, exc)
+
+    yf_interval = _TIMEFRAME_TO_YF_INTERVAL.get(timeframe)
+    if yf_interval is None:
+        return None, f"No stored data for {ticker} on the {timeframe} timeframe."
+
+    today = timezone.now().date()
+    # yfinance caps intraday history (~730 days for 1h, ~60 for minute bars);
+    # asking from 2020 just returns nothing, so clamp the start for those.
+    if yf_interval == "1d":
+        start = "2020-01-01"
+    elif yf_interval in ("1m", "5m", "15m"):
+        start = (today - timedelta(days=55)).isoformat()
+    else:
+        start = (today - timedelta(days=700)).isoformat()
+
+    try:
+        df = get_data_with_indicator(ticker, start, today.isoformat(), interval=yf_interval)
+        if df is None or df.empty:
+            return None, "No market data is available for that selection."
+        return df, None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chart_data yfinance fetch failed for %s %s: %s", ticker, timeframe, exc)
+        return None, "Could not load market data for that selection."
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def chart_data(request):
+    """Raw OHLCV for a single ticker/timeframe, for the standalone Charts page."""
+    ticker = (request.GET.get("ticker") or "").strip().upper()
+    timeframe = (request.GET.get("timeframe") or "1D").strip()
+
+    if not ticker:
+        raise APIError("ticker is required.")
+
+    registry = _load_ticker_registry()
+    ticker_config = registry.get(ticker)
+    if ticker_config is None:
+        raise APIError(f"Unknown ticker '{ticker}'.", status_code=404)
+
+    available = ticker_config.get("available_timeframes", [])
+    if timeframe not in available:
+        raise APIError(
+            f"Timeframe '{timeframe}' is not available for {ticker}. "
+            f"Available: {', '.join(available) or 'none'}."
+        )
+
+    df, error_message = _load_chart_dataframe(ticker, timeframe)
+    if error_message:
+        raise APIError(error_message)
+
+    records = dataframe_to_response_records(df)
+
+    return no_store(JsonResponse({
+        "ticker": ticker,
+        "name": ticker_config.get("name", ticker),
+        "timeframe": timeframe,
+        "candles": records,
+    }))
 
 
 def serialize_backtest_run_full(run: BacktestRun):

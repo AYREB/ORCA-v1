@@ -9,7 +9,8 @@ import {
   ChevronLeft,
   Sliders,
   Wallet,
-  Sigma
+  Sigma,
+  CandlestickChart
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ interface DashboardSidebarProps {
 
 const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
+  { icon: CandlestickChart, label: "Charts", path: "/dashboard/charts" },
   { icon: FlaskConical, label: "New Backtest", path: "/dashboard/backtest" },
   { icon: Sliders, label: "Optimizers", path: "/dashboard/optimizers" },
   { icon: LineChart, label: "Strategies", path: "/dashboard/strategies" },
