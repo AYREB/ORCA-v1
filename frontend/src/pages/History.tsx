@@ -17,7 +17,7 @@ import {
   TrendingUp,
   Trophy,
 } from "lucide-react";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import RiskDisclaimer from "@/components/RiskDisclaimer";
@@ -229,6 +229,8 @@ const History = () => {
       })
       .filter((point): point is { equity: number; label: string } => point !== null);
   }, [detailRun]);
+
+  const detailStartEquity = detailCurve.length > 0 ? detailCurve[0].equity : null;
 
   const statCards = [
     { label: "Total Runs", value: `${stats.total}`, icon: BarChart3, accent: "text-foreground" },
@@ -467,64 +469,91 @@ const History = () => {
                 ))}
               </div>
 
-              <div className="h-[260px] rounded-xl border border-border bg-background/50 p-3">
-                {detailCurve.length >= 2 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={detailCurve} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="historyDetailFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop
-                            offset="5%"
-                            stopColor={safeColor(chartColors.areaTop, "hsl(var(--primary))")}
-                            stopOpacity={0.35}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between px-0.5">
+                  <p className="text-xs text-muted-foreground">Portfolio value at each trade event</p>
+                  {detailStartEquity !== null && (
+                    <p className="text-xs text-muted-foreground">
+                      Start:{" "}
+                      <span className="font-mono font-medium text-foreground">
+                        {formatCurrency(detailStartEquity)}
+                      </span>
+                    </p>
+                  )}
+                </div>
+                <div className="h-[240px] rounded-xl border border-border bg-background/50 p-3">
+                  {detailCurve.length >= 2 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={detailCurve} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="historyDetailFill" x1="0" y1="0" x2="0" y2="1">
+                            <stop
+                              offset="5%"
+                              stopColor={safeColor(chartColors.areaTop, "hsl(var(--primary))")}
+                              stopOpacity={0.35}
+                            />
+                            <stop
+                              offset="95%"
+                              stopColor={safeColor(chartColors.areaBottom, "hsl(var(--primary))")}
+                              stopOpacity={0.02}
+                            />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          stroke={colorWithAlpha(chartColors.grid, 0.5, "hsl(var(--border))")}
+                        />
+                        <XAxis
+                          dataKey="label"
+                          stroke="hsl(var(--muted-foreground))"
+                          tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                          minTickGap={32}
+                        />
+                        <YAxis
+                          stroke="hsl(var(--muted-foreground))"
+                          tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                          tickFormatter={(value) => `$${Math.round(value).toLocaleString()}`}
+                          width={76}
+                          domain={["auto", "auto"]}
+                        />
+                        {detailStartEquity !== null && (
+                          <ReferenceLine
+                            y={detailStartEquity}
+                            stroke="hsl(var(--muted-foreground))"
+                            strokeDasharray="4 3"
+                            strokeOpacity={0.5}
+                            label={{
+                              value: "Start",
+                              position: "insideTopRight",
+                              fontSize: 10,
+                              fill: "hsl(var(--muted-foreground))",
+                            }}
                           />
-                          <stop
-                            offset="95%"
-                            stopColor={safeColor(chartColors.areaBottom, "hsl(var(--primary))")}
-                            stopOpacity={0.02}
-                          />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke={colorWithAlpha(chartColors.grid, 0.5, "hsl(var(--border))")}
-                      />
-                      <XAxis
-                        dataKey="label"
-                        stroke="hsl(var(--muted-foreground))"
-                        tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                        minTickGap={32}
-                      />
-                      <YAxis
-                        stroke="hsl(var(--muted-foreground))"
-                        tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                        tickFormatter={(value) => `$${Math.round(value).toLocaleString()}`}
-                        width={72}
-                        domain={["auto", "auto"]}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "10px",
-                        }}
-                        formatter={(value: number) => [formatCurrency(value), "Equity"]}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="equity"
-                        stroke={safeColor(chartColors.line, "hsl(var(--primary))")}
-                        strokeWidth={2}
-                        fill="url(#historyDetailFill)"
-                        dot={false}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                    This run has no stored equity curve.
-                  </div>
-                )}
+                        )}
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "hsl(var(--card))",
+                            border: "1px solid hsl(var(--border))",
+                            borderRadius: "10px",
+                          }}
+                          formatter={(value: number) => [formatCurrency(value), "Portfolio Value"]}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="equity"
+                          stroke={safeColor(chartColors.line, "hsl(var(--primary))")}
+                          strokeWidth={2}
+                          fill="url(#historyDetailFill)"
+                          dot={false}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                      This run has no stored equity curve.
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-wrap justify-end gap-2">

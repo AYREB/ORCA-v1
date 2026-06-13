@@ -445,46 +445,94 @@ def calculate_backtest_metrics(result: Dict[str, Any]):
     if not isinstance(trades, list):
         trades = []
 
-    open_positions: Dict[str, Dict[str, float]] = {}
     equity_curve: List[Dict[str, Any]] = []
     winning_trades = 0
     losing_trades = 0
 
-    for trade in trades:
-        try:
-            equity = float(trade.get("balance", 0) or 0) + float(trade.get("open_positions_value", 0) or 0)
-            ts = trade.get("timestamp")
-            if ts:
-                equity_curve.append({"timestamp": ts, "equity": equity})
-        except (TypeError, ValueError):
-            pass
+    # Signed cost basis per ticker. Positive = long position cost (cash spent).
+    # Negative = short obligation (cash received but owed back).
+    # True portfolio equity = cash_balance + sum(position_cost.values()).
+    # This keeps equity flat when a position opens (cash out = position value in)
+    # and only moves equity at close events (when P&L is realised).
+    position_cost: Dict[str, float] = {}
 
+    # Separate tracker for win/loss: avg entry cost per ticker.
+    entry_tracker: Dict[str, Dict[str, float]] = {}
+
+    for trade in trades:
         ttype = trade.get("type")
         ticker = trade.get("ticker")
-        if ttype in ("BUY", "RECURRING_BUY") and ticker:
-            try:
-                price = float(trade.get("price") or 0)
-                shares = float(trade.get("shares") or 0)
-            except (TypeError, ValueError):
-                continue
-            pos = open_positions.get(ticker, {"shares": 0.0, "cost": 0.0})
-            pos["shares"] += shares
-            pos["cost"] += shares * price
-            open_positions[ticker] = pos
-        elif ttype == "SELL" and ticker:
-            try:
-                price = float(trade.get("price") or 0)
-                shares = float(trade.get("shares") or 0)
-            except (TypeError, ValueError):
-                continue
-            pos = open_positions.get(ticker, {"shares": 0.0, "cost": 0.0})
-            avg_cost = (pos["cost"] / pos["shares"]) if pos["shares"] else price
-            profit = (price - avg_cost) * shares
-            if profit >= 0:
-                winning_trades += 1
-            else:
-                losing_trades += 1
-            open_positions[ticker] = {"shares": 0.0, "cost": 0.0}
+
+        try:
+            price = float(trade.get("price") or 0)
+            shares = float(trade.get("shares") or 0)
+            cash = float(trade.get("balance") or 0)
+        except (TypeError, ValueError):
+            continue
+
+        if ticker and ttype:
+            cost = position_cost.get(ticker, 0.0)
+
+            if ttype == "BUY":
+                if cost >= -0.001:
+                    # Opening a LONG position
+                    cost += shares * price
+                    pos = entry_tracker.get(ticker, {"shares": 0.0, "cost": 0.0})
+                    pos["shares"] += shares
+                    pos["cost"] += shares * price
+                    entry_tracker[ticker] = pos
+                else:
+                    # Covering a SHORT position (buying back)
+                    pos = entry_tracker.get(ticker, {"shares": 0.0, "cost": 0.0})
+                    avg_entry = (pos["cost"] / pos["shares"]) if pos["shares"] else price
+                    # For short: profit when buy_price < sell_price (entry)
+                    profit = (avg_entry - price) * shares
+                    if profit >= 0:
+                        winning_trades += 1
+                    else:
+                        losing_trades += 1
+                    cost = 0.0
+                    entry_tracker[ticker] = {"shares": 0.0, "cost": 0.0}
+
+            elif ttype == "SELL":
+                if cost <= 0.001:
+                    # Opening a SHORT position
+                    cost -= shares * price
+                    pos = entry_tracker.get(ticker, {"shares": 0.0, "cost": 0.0})
+                    pos["shares"] += shares
+                    pos["cost"] += shares * price
+                    entry_tracker[ticker] = pos
+                else:
+                    # Closing a LONG position
+                    pos = entry_tracker.get(ticker, {"shares": 0.0, "cost": 0.0})
+                    avg_entry = (pos["cost"] / pos["shares"]) if pos["shares"] else price
+                    profit = (price - avg_entry) * shares
+                    if profit >= 0:
+                        winning_trades += 1
+                    else:
+                        losing_trades += 1
+                    cost = 0.0
+                    entry_tracker[ticker] = {"shares": 0.0, "cost": 0.0}
+
+            elif ttype == "Recurring_Entry":
+                if cost >= 0:
+                    cost += shares * price  # LONG DCA
+                else:
+                    cost -= shares * price  # SHORT DCA
+                pos = entry_tracker.get(ticker, {"shares": 0.0, "cost": 0.0})
+                pos["shares"] += shares
+                pos["cost"] += shares * price
+                entry_tracker[ticker] = pos
+
+            position_cost[ticker] = cost
+
+        # True equity: cash in hand + cost basis of all open positions.
+        total_open = sum(position_cost.values())
+        equity = cash + total_open
+
+        ts = trade.get("timestamp")
+        if ts and equity >= 0:
+            equity_curve.append({"timestamp": ts, "equity": round(equity, 4)})
 
     closed_trades = winning_trades + losing_trades
     win_rate = (winning_trades / closed_trades * 100) if closed_trades else 0.0
