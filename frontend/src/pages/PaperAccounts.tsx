@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Activity,
   BarChart3,
+  CheckCircle2,
   Clock3,
   LineChart,
   Loader2,
+  MoreHorizontal,
   Pencil,
   Play,
   Plus,
   RefreshCw,
   Rocket,
-  Sparkles,
   Target,
   Trash2,
   TrendingDown,
@@ -54,6 +56,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api, ApiError, BacktestResult, SavedStrategy, TradeEntry } from "@/lib/api";
 import BacktestResults from "@/components/backtest/BacktestResults";
 import ChartView from "@/components/backtest/ChartView";
@@ -172,6 +181,37 @@ const getNextDayDateKey = (timestamp: string) => {
   const base = Number.isFinite(date.getTime()) ? date : new Date();
   base.setDate(base.getDate() + 1);
   return formatLocalDate(base);
+};
+
+// Returns a human-readable age label and whether the data is stale (from a previous day).
+const getDataAge = (timestamp: string): { label: string; isStale: boolean } => {
+  const then = new Date(timestamp);
+  if (!Number.isFinite(then.getTime())) return { label: "unknown", isStale: true };
+  const now = new Date();
+  const diffMs = now.getTime() - then.getTime();
+  const diffMins = diffMs / 60_000;
+  const diffHours = diffMs / 3_600_000;
+  const isStale = formatLocalDate(then) < formatLocalDate(now);
+  let label: string;
+  if (diffMins < 2) label = "just now";
+  else if (diffHours < 1) label = `${Math.floor(diffMins)} min ago`;
+  else if (diffHours < 2) label = "1 hr ago";
+  else if (diffHours < 24) label = `${Math.floor(diffHours)} hrs ago`;
+  else if (Math.floor(diffHours / 24) === 1) label = "yesterday";
+  else label = `${Math.floor(diffHours / 24)} days ago`;
+  return { label, isStale };
+};
+
+// An account needs a background refresh if it has active runnable strategies and
+// the last refresh happened before today (or it has never been refreshed but was
+// committed on a prior day, meaning there's real data to pull).
+const isAccountDataStale = (account: PaperAccount): boolean => {
+  const active = getActiveAppliedStrategies(account);
+  if (active.length === 0) return false;
+  const today = formatLocalDate(new Date());
+  const lastRun = account.runs[0];
+  if (!lastRun) return active.some((as) => getDateKeyFromTimestamp(as.appliedAt) < today);
+  return getDateKeyFromTimestamp(lastRun.executedAt) < today;
 };
 
 // Backend BacktestError codes that mean "the window simply had no market data"
@@ -562,6 +602,7 @@ const PaperAccounts = () => {
   const [selectedApplyStrategyId, setSelectedApplyStrategyId] = useState<string>("");
   const [runningKey, setRunningKey] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [activeAccountTab, setActiveAccountTab] = useState("overview");
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
   const [accountDialogMode, setAccountDialogMode] = useState<"create" | "edit">("create");
   const [accountName, setAccountName] = useState("");
@@ -571,8 +612,12 @@ const PaperAccounts = () => {
   const [newStrategyDsl, setNewStrategyDsl] = useState("");
   const [isCreatingStrategy, setIsCreatingStrategy] = useState(false);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
+  const [justRefreshedId, setJustRefreshedId] = useState<string | null>(null);
   const saveWarningShown = useRef(false);
+  const autoRefreshedRef = useRef(new Set<string>());
+  const justRefreshedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const navigate = useNavigate();
   const storageKey = useMemo(() => getStorageKey(user?.id), [user?.id]);
 
   // Persist the workspace server-side so it survives browser clears and follows
@@ -683,6 +728,7 @@ const PaperAccounts = () => {
   );
 
   useEffect(() => {
+    setActiveAccountTab("overview");
     if (!selectedAccount) {
       setSelectedRunId(null);
       return;
@@ -691,7 +737,21 @@ const PaperAccounts = () => {
     if (!runExists) {
       setSelectedRunId(selectedAccount.runs[0]?.id ?? null);
     }
-  }, [selectedAccount, selectedRunId]);
+  }, [selectedAccount?.id]);
+
+  // Silently auto-refresh stale accounts when the user selects them or when
+  // loading finishes. Runs at most once per account per page session (tracked via
+  // autoRefreshedRef) so navigating away and back doesn't re-trigger.
+  useEffect(() => {
+    if (isLoadingAccounts || isLoadingStrategies || !selectedAccount || runningKey !== null) return;
+    if (autoRefreshedRef.current.has(selectedAccount.id)) return;
+    autoRefreshedRef.current.add(selectedAccount.id);
+    if (!isAccountDataStale(selectedAccount)) return;
+    const strategyById = new Map(strategies.map((s) => [s.id, s]));
+    const hasRunnable = getActiveAppliedStrategies(selectedAccount).some((as) => strategyById.has(as.strategyId));
+    if (hasRunnable) handleUpdateAccountToToday(selectedAccount.id, true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAccount?.id, isLoadingAccounts, isLoadingStrategies]);
 
   const selectedRun = useMemo(() => {
     if (!selectedAccount) return null;
@@ -960,7 +1020,7 @@ const PaperAccounts = () => {
       ),
     );
     setSelectedApplyStrategyId("");
-    toast.success("Strategy added from today");
+    toast.success("Strategy committed — your forward test starts from today. Hit Refresh to Today to see results.");
   };
 
   const handleRemoveAppliedStrategy = (appliedStrategyId: string) => {
@@ -1197,7 +1257,20 @@ const PaperAccounts = () => {
       );
     } catch (error) {
       if (error instanceof ApiError && error.code && NO_DATA_BACKTEST_CODES.has(error.code)) {
-        toast.info("No new market data since this strategy was applied. Try again after the next market close.");
+        // No market data yet — still stamp lastUpdatedAt so the "Not yet refreshed" nudge clears.
+        const now = new Date().toISOString();
+        updateAccounts((previous) =>
+          previous.map((item) => {
+            if (item.id !== accountId) return item;
+            return {
+              ...item,
+              appliedStrategies: item.appliedStrategies.map((s) =>
+                s.id === appliedStrategyId ? { ...s, lastUpdatedAt: now } : s,
+              ),
+            };
+          }),
+        );
+        toast.info("No new market data yet. Results will appear after the next market close.");
       } else {
         const message = error instanceof Error ? error.message : "Unable to execute strategy";
         toast.error(message);
@@ -1207,7 +1280,7 @@ const PaperAccounts = () => {
     }
   };
 
-  const handleUpdateAccountToToday = async (accountId: string) => {
+  const handleUpdateAccountToToday = async (accountId: string, silent = false) => {
     const account = accounts.find((item) => item.id === accountId);
     if (!account) return;
 
@@ -1254,6 +1327,10 @@ const PaperAccounts = () => {
         } catch (error) {
           if (error instanceof ApiError && error.code && NO_DATA_BACKTEST_CODES.has(error.code)) {
             skippedNoData += 1;
+            // Still stamp lastUpdatedAt so the "Not yet refreshed" nudge clears.
+            nextAppliedStrategies = nextAppliedStrategies.map((s) =>
+              s.id === appliedStrategy.id ? { ...s, lastUpdatedAt: executedAt } : s,
+            );
             continue;
           }
           throw error;
@@ -1282,10 +1359,27 @@ const PaperAccounts = () => {
       }
 
       if (newRuns.length === 0) {
-        toast.info(
+        // Even with no new data, persist the lastUpdatedAt stamps so nudges clear.
+        if (skippedNoData > 0) {
+          updateAccounts((previous) =>
+            previous.map((item) =>
+              item.id !== accountId
+                ? item
+                : { ...item, appliedStrategies: nextAppliedStrategies, updatedAt: new Date().toISOString() },
+            ),
+          );
+        }
+        if (!silent) toast.info(
           skippedNoData > 0
-            ? "No new market data since these strategies were applied. Try again after the next market close."
+            ? "No new market data yet. Results will appear after the next market close."
             : "Nothing to update yet.",
+        );
+        // Still flip the button to "✓ Up to date" so it doesn't sit there.
+        if (justRefreshedTimerRef.current) clearTimeout(justRefreshedTimerRef.current);
+        setJustRefreshedId(accountId);
+        justRefreshedTimerRef.current = setTimeout(
+          () => setJustRefreshedId((prev) => (prev === accountId ? null : prev)),
+          3000,
         );
         return;
       }
@@ -1309,9 +1403,16 @@ const PaperAccounts = () => {
         }),
       );
       setSelectedRunId(newRuns[newRuns.length - 1]?.id ?? null);
-      toast.success(
+      if (!silent) toast.success(
         `Forward test refreshed for ${newRuns.length} ${newRuns.length === 1 ? "strategy" : "strategies"} through today.` +
           (skippedNoData > 0 ? ` ${skippedNoData} had no new market data yet.` : ""),
+      );
+      // Drive the "✓ Up to date" button state for 3 s after a successful refresh.
+      if (justRefreshedTimerRef.current) clearTimeout(justRefreshedTimerRef.current);
+      setJustRefreshedId(accountId);
+      justRefreshedTimerRef.current = setTimeout(
+        () => setJustRefreshedId((prev) => (prev === accountId ? null : prev)),
+        3000,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to update paper account";
@@ -1334,25 +1435,10 @@ const PaperAccounts = () => {
           title="Paper Accounts"
           description="Commit strategies from a set date, refresh to pull in real market data, and track your forward-tested equity over time."
           actions={
-            <>
-              <Button variant="outline" onClick={loadStrategies} disabled={isLoadingStrategies}>
-                {isLoadingStrategies ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Refreshing
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="mr-2 h-4 w-4" />
-                    Refresh Strategies
-                  </>
-                )}
-              </Button>
-              <Button variant="hero" onClick={openCreateAccountDialog}>
-                <Plus className="mr-2 h-4 w-4" />
-                New Paper Account
-              </Button>
-            </>
+            <Button variant="hero" onClick={openCreateAccountDialog}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Account
+            </Button>
           }
         />
 
@@ -1372,14 +1458,32 @@ const PaperAccounts = () => {
                       ))}
                     </div>
                   ) : accounts.length === 0 ? (
-                    <div className="space-y-3 rounded-lg border border-dashed border-border p-6 text-center">
-                      <Wallet className="mx-auto h-8 w-8 text-muted-foreground" />
-                      <p className="text-sm text-muted-foreground">
-                        No paper accounts yet. Create one to start your simulation workflow.
-                      </p>
-                      <Button size="sm" onClick={openCreateAccountDialog}>
+                    <div className="space-y-4 rounded-xl border border-dashed border-border p-5">
+                      <div className="text-center">
+                        <Rocket className="mx-auto mb-2 h-8 w-8 text-primary/70" />
+                        <p className="font-semibold text-sm">Start forward testing</p>
+                        <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                          Run your backtested strategies on real market data — from a date you commit to, forward through today.
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        {[
+                          { n: 1, label: "Create an account", sub: "Set a name and starting balance" },
+                          { n: 2, label: "Apply a saved strategy", sub: "Commits it from today's date" },
+                          { n: 3, label: "Refresh to Today", sub: "Pulls real market data through now" },
+                        ].map(({ n, label, sub }) => (
+                          <div key={n} className="flex items-start gap-3 rounded-lg bg-secondary/30 px-3 py-2">
+                            <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${n === 1 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{n}</span>
+                            <div>
+                              <p className="text-xs font-medium">{label}</p>
+                              <p className="text-xs text-muted-foreground">{sub}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <Button size="sm" className="w-full" onClick={openCreateAccountDialog}>
                         <Plus className="mr-2 h-4 w-4" />
-                        Create Account
+                        Create Your First Account
                       </Button>
                     </div>
                   ) : (
@@ -1408,11 +1512,16 @@ const PaperAccounts = () => {
                               }`}
                             >
                               <div className="mb-2 flex items-start justify-between gap-2">
-                                <div>
-                                  <p className="line-clamp-1 font-semibold">{account.name}</p>
-                                  <p className="line-clamp-1 text-xs text-muted-foreground">
-                                    {account.description || "No description"}
-                                  </p>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    {isAccountDataStale(account) && (
+                                      <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" title="Data is stale — will auto-refresh when selected" />
+                                    )}
+                                    <p className="line-clamp-1 font-semibold">{account.name}</p>
+                                  </div>
+                                  {account.description && (
+                                    <p className="line-clamp-1 text-xs text-muted-foreground">{account.description}</p>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-1">
                                   <Button
@@ -1460,8 +1569,8 @@ const PaperAccounts = () => {
                                 </div>
                               </div>
                               <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-                                <span>{getActiveAppliedStrategies(account).length} live strategies</span>
-                                <span>{account.runs.length} runs</span>
+                                <span>{getActiveAppliedStrategies(account).length} {getActiveAppliedStrategies(account).length === 1 ? "strategy" : "strategies"} active</span>
+                                <span>{account.runs.length} {account.runs.length === 1 ? "refresh" : "refreshes"}</span>
                               </div>
                             </div>
                           );
@@ -1474,10 +1583,11 @@ const PaperAccounts = () => {
 
               {!selectedAccount || !selectedAccountMetrics ? (
                 <Card className="border-dashed bg-card/40">
-                  <CardContent className="space-y-3 py-20 text-center">
+                  <CardContent className="space-y-2 py-20 text-center">
                     <Rocket className="mx-auto h-10 w-10 text-muted-foreground" />
-                    <p className="text-muted-foreground">
-                      Select an account to run strategies and inspect the full performance workspace.
+                    <p className="text-sm font-medium">Select an account to get started</p>
+                    <p className="mx-auto max-w-sm text-sm text-muted-foreground">
+                      Choose an account on the left to view its equity curve, applied strategies, and forward test results.
                     </p>
                   </CardContent>
                 </Card>
@@ -1491,10 +1601,7 @@ const PaperAccounts = () => {
                           <div className="flex flex-wrap items-center gap-2">
                             <CardTitle className="text-2xl">{selectedAccount.name}</CardTitle>
                             <Badge variant="outline" className="text-xs">
-                              Started {new Date(selectedAccount.createdAt).toLocaleDateString()}
-                            </Badge>
-                            <Badge variant="outline" className="text-xs">
-                              {selectedAccount.runs.length} runs
+                              Active since {new Date(selectedAccount.createdAt).toLocaleDateString()}
                             </Badge>
                           </div>
                           <CardDescription>
@@ -1502,168 +1609,176 @@ const PaperAccounts = () => {
                           </CardDescription>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Button
-                            onClick={() => handleUpdateAccountToToday(selectedAccount.id)}
-                            disabled={
-                              isSelectedAccountLiveUpdating ||
-                              runningKey !== null ||
-                              selectedAccountStrategies.length === 0
-                            }
-                          >
-                            {isSelectedAccountLiveUpdating ? (
+                          {(() => {
+                            const lastRun = selectedAccount.runs[0];
+                            const age = lastRun ? getDataAge(lastRun.executedAt) : null;
+                            const isJustRefreshed = justRefreshedId === selectedAccount.id;
+                            return (
                               <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Updating
+                                {age && (
+                                  <span className={`hidden text-xs sm:inline ${age.isStale && !isSelectedAccountLiveUpdating && !isJustRefreshed ? "text-amber-500" : "text-muted-foreground"}`}>
+                                    {isSelectedAccountLiveUpdating ? "Refreshing…" : isJustRefreshed ? "✓ Up to date" : `Data from ${age.label}`}
+                                  </span>
+                                )}
+                                <Button
+                                  onClick={() => handleUpdateAccountToToday(selectedAccount.id)}
+                                  disabled={isSelectedAccountLiveUpdating || runningKey !== null || selectedAccountStrategies.length === 0 || isJustRefreshed}
+                                  variant={isJustRefreshed ? "outline" : "default"}
+                                  title="Re-runs all committed strategies against real market data from their commitment date through today"
+                                >
+                                  {isSelectedAccountLiveUpdating ? (
+                                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Refreshing…</>
+                                  ) : isJustRefreshed ? (
+                                    <><CheckCircle2 className="mr-2 h-4 w-4 text-success" />Up to date</>
+                                  ) : (
+                                    <><RefreshCw className="mr-2 h-4 w-4" />Refresh to Today</>
+                                  )}
+                                </Button>
                               </>
-                            ) : (
-                              <>
-                                <RefreshCw className="mr-2 h-4 w-4" />
-                                Refresh to Today
-                              </>
-                            )}
-                          </Button>
-                          <Button variant="outline" onClick={() => openEditAccountDialog(selectedAccount)}>
-                            <Pencil className="mr-2 h-4 w-4" />
-                            Edit Account
-                          </Button>
-                          <Button
-                            variant="outline"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => handleDeleteAccount(selectedAccount.id)}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Delete Account
-                          </Button>
+                            );
+                          })()}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="outline" size="icon" title="Account options">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => openEditAccountDialog(selectedAccount)}>
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Edit account
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="text-destructive focus:text-destructive"
+                                onClick={() => handleDeleteAccount(selectedAccount.id)}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete account
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                       </div>
                     </CardHeader>
-                    <CardContent className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <Wallet className="h-3.5 w-3.5" />
-                          Current Equity
-                        </p>
-                        <p className="font-mono text-lg font-semibold">{formatMoney(selectedAccount.currentBalance)}</p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <TrendingUp className="h-3.5 w-3.5" />
-                          Total Return
-                        </p>
-                        <p
-                          className={`font-mono text-lg font-semibold ${
-                            selectedAccountMetrics.totalReturnPct >= 0 ? "text-success" : "text-destructive"
-                          }`}
-                        >
-                          {selectedAccountMetrics.totalReturnPct >= 0 ? "+" : ""}
-                          {selectedAccountMetrics.totalReturnPct.toFixed(2)}%
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <Activity className="h-3.5 w-3.5" />
-                          Today's P&L
-                        </p>
-                        <p
-                          className={`font-mono text-lg font-semibold ${
-                            selectedAccountMetrics.todayPnl >= 0 ? "text-success" : "text-destructive"
-                          }`}
-                        >
-                          {formatSignedMoney(selectedAccountMetrics.todayPnl)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <RefreshCw className="h-3.5 w-3.5" />
-                          Today Return
-                        </p>
-                        <p
-                          className={`font-mono text-lg font-semibold ${
-                            selectedAccountMetrics.todayReturnPct >= 0 ? "text-success" : "text-destructive"
-                          }`}
-                        >
-                          {selectedAccountMetrics.todayReturnPct >= 0 ? "+" : ""}
-                          {selectedAccountMetrics.todayReturnPct.toFixed(2)}%
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <LineChart className="h-3.5 w-3.5" />
-                          All-Time High
-                        </p>
-                        <p className="font-mono text-lg font-semibold">{formatMoney(selectedAccountMetrics.allTimeHigh)}</p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <TrendingDown className="h-3.5 w-3.5" />
-                          Drawdown
-                        </p>
-                        <p className="font-mono text-lg font-semibold text-destructive">
-                          {selectedAccountMetrics.drawdownPct.toFixed(2)}%
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <Target className="h-3.5 w-3.5" />
-                          Best / Worst
-                        </p>
-                        <p className="font-mono text-sm font-semibold">
-                          <span className="text-success">+{selectedAccountMetrics.bestRun.toFixed(2)}%</span>
-                          {" / "}
-                          <span className="text-destructive">{selectedAccountMetrics.worstRun.toFixed(2)}%</span>
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <BarChart3 className="h-3.5 w-3.5" />
-                          Total Runs
-                        </p>
-                        <p className="font-mono text-lg font-semibold">{selectedAccountMetrics.totalRuns}</p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <Activity className="h-3.5 w-3.5" />
-                          Trades / Win Rate
-                        </p>
-                        <p className="font-mono text-sm font-semibold">
-                          {selectedAccountMetrics.totalTrades} / {selectedAccountMetrics.allTimeWinRate.toFixed(1)}%
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <RefreshCw className="h-3.5 w-3.5" />
-                          Refreshed Today
-                        </p>
-                        <p className="font-mono text-lg font-semibold">{selectedAccountMetrics.todayLiveRuns}</p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-background/60 p-3">
-                        <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <Clock3 className="h-3.5 w-3.5" />
-                          Last Refreshed
-                        </p>
-                        <p className="font-mono text-xs font-semibold">
-                          {selectedAccountMetrics.lastLiveUpdateAt
-                            ? new Date(selectedAccountMetrics.lastLiveUpdateAt).toLocaleString()
-                            : "Not yet refreshed"}
-                        </p>
-                      </div>
+                    <CardContent>
+                      {(() => {
+                        const hasData = selectedAccount.runs.length > 0;
+                        const lastRun = selectedAccount.runs[0];
+                        const age = lastRun ? getDataAge(lastRun.executedAt) : null;
+                        const m = selectedAccountMetrics;
+                        const Stat = ({ icon: Icon, label, value, sub, color }: { icon: React.ElementType; label: string; value: string; sub?: string; color?: string }) => (
+                          <div className="rounded-lg border border-border bg-background/60 p-3">
+                            <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
+                              <Icon className="h-3.5 w-3.5" />{label}
+                            </p>
+                            <p className={`font-mono text-lg font-semibold ${color ?? ""}`}>{value}</p>
+                            {sub && <p className="mt-0.5 text-[10px] text-muted-foreground">{sub}</p>}
+                          </div>
+                        );
+                        return (
+                          <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+                            <div className="rounded-lg border border-border bg-background/60 p-3">
+                              <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
+                                <Wallet className="h-3.5 w-3.5" />Equity
+                              </p>
+                              <p className="font-mono text-lg font-semibold">{formatMoney(selectedAccount.currentBalance)}</p>
+                              {age && (
+                                <p className={`mt-0.5 text-[10px] ${age.isStale && !isSelectedAccountLiveUpdating ? "text-amber-500" : "text-muted-foreground"}`}>
+                                  {isSelectedAccountLiveUpdating ? "updating…" : age.isStale ? `${age.label} — stale` : `as of ${new Date(lastRun!.executedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+                                </p>
+                              )}
+                            </div>
+                            <Stat
+                              icon={TrendingUp}
+                              label="Total Return"
+                              value={hasData ? `${m.totalReturnPct >= 0 ? "+" : ""}${m.totalReturnPct.toFixed(2)}%` : "—"}
+                              color={hasData ? (m.totalReturnPct > 0 ? "text-success" : m.totalReturnPct < 0 ? "text-destructive" : "") : "text-muted-foreground"}
+                            />
+                            <Stat
+                              icon={Activity}
+                              label="Today's P&L"
+                              value={hasData && m.todayPnl !== 0 ? formatSignedMoney(m.todayPnl) : hasData ? "—" : "—"}
+                              sub={hasData && m.todayPnl !== 0 ? `${m.todayReturnPct >= 0 ? "+" : ""}${m.todayReturnPct.toFixed(2)}%` : undefined}
+                              color={hasData && m.todayPnl !== 0 ? (m.todayPnl > 0 ? "text-success" : "text-destructive") : "text-muted-foreground"}
+                            />
+                            <Stat
+                              icon={LineChart}
+                              label="All-Time High"
+                              value={hasData ? formatMoney(m.allTimeHigh) : "—"}
+                              color={hasData ? "" : "text-muted-foreground"}
+                            />
+                            <Stat
+                              icon={TrendingDown}
+                              label="Drawdown"
+                              value={hasData ? `${m.drawdownPct.toFixed(2)}%` : "—"}
+                              color={hasData && m.drawdownPct < 0 ? "text-destructive" : hasData ? "" : "text-muted-foreground"}
+                            />
+                            <Stat
+                              icon={Target}
+                              label="Win Rate"
+                              value={hasData && m.totalTrades > 0 ? `${m.allTimeWinRate.toFixed(1)}%` : "—"}
+                              sub={hasData && m.totalTrades > 0 ? `${m.totalTrades} trades` : undefined}
+                              color={hasData && m.totalTrades > 0 ? (m.allTimeWinRate >= 50 ? "text-success" : "text-destructive") : "text-muted-foreground"}
+                            />
+                          </div>
+                        );
+                      })()}
                     </CardContent>
                   </Card>
 
-                  <Tabs defaultValue="overview" className="w-full" key={selectedAccount.id}>
+                  <Tabs value={activeAccountTab} onValueChange={setActiveAccountTab} className="w-full" key={selectedAccount.id}>
                     <TabsList className="mb-4 border border-border bg-card/50 p-1">
                       <TabsTrigger value="overview" className="data-[state=active]:bg-primary/20">
-                        Command Desk
+                        Overview
                       </TabsTrigger>
                       <TabsTrigger value="strategies" className="data-[state=active]:bg-primary/20">
-                        Strategy Deck
+                        Strategies
                       </TabsTrigger>
                       <TabsTrigger value="activity" className="data-[state=active]:bg-primary/20">
-                        Forward Test Log
+                        Results
                       </TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="overview" className="space-y-6">
+                      {/* Contextual setup guide — disappears once the account has been refreshed */}
+                      {selectedAccount.runs.length === 0 && (
+                        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+                          <p className="mb-3 text-sm font-semibold text-primary">
+                            {selectedAccountStrategies.length === 0 ? "Step 1 of 2 — Apply a strategy" : "Step 2 of 2 — Refresh to see your results"}
+                          </p>
+                          {selectedAccountStrategies.length === 0 ? (
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <p className="text-sm text-muted-foreground">
+                                Go to the <span className="font-medium text-foreground">Strategy Deck</span> tab to apply one of your saved backtested strategies. That locks in today as the commitment date — all forward test results will measure from that point.
+                              </p>
+                              <Button size="sm" className="shrink-0" onClick={() => setActiveAccountTab("strategies")}>
+                                Go to Strategy Deck →
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <p className="text-sm text-muted-foreground">
+                                You have {selectedAccountStrategies.length} {selectedAccountStrategies.length === 1 ? "strategy" : "strategies"} committed. Hit <span className="font-medium text-foreground">Refresh to Today</span> above to run it against real market data and see your first forward test result.
+                              </p>
+                              <Button
+                                size="sm"
+                                className="shrink-0"
+                                onClick={() => handleUpdateAccountToToday(selectedAccount.id)}
+                                disabled={isSelectedAccountLiveUpdating || runningKey !== null || justRefreshedId === selectedAccount.id}
+                              >
+                                {isSelectedAccountLiveUpdating ? (
+                                  <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />Refreshing…</>
+                                ) : justRefreshedId === selectedAccount.id ? (
+                                  <><CheckCircle2 className="mr-2 h-3.5 w-3.5 text-success" />Up to date</>
+                                ) : (
+                                  <><RefreshCw className="mr-2 h-3.5 w-3.5" />Refresh to Today</>
+                                )}
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                         <Card className="border-border bg-card/60">
                           <CardHeader>
@@ -1716,13 +1831,13 @@ const PaperAccounts = () => {
 
                         <Card className="border-border bg-card/60">
                           <CardHeader>
-                            <CardTitle className="text-lg">Run Return Ladder</CardTitle>
-                            <CardDescription>Daily account returns from the latest saved update on each day.</CardDescription>
+                            <CardTitle className="text-lg">Daily P&L</CardTitle>
+                            <CardDescription>Day-by-day return across the full forward test period.</CardDescription>
                           </CardHeader>
                           <CardContent className="h-[340px]">
                             {runReturnsData.length === 0 ? (
                               <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
-                                Run an applied strategy to populate daily returns.
+                                Refresh a strategy to start building your forward test record.
                               </div>
                             ) : (
                               <ResponsiveContainer width="100%" height="100%">
@@ -1764,102 +1879,123 @@ const PaperAccounts = () => {
                         </Card>
                       </div>
 
-                      <Card className="border-border bg-card/60">
-                        <CardHeader>
-                          <CardTitle className="text-lg">Forward Test History</CardTitle>
-                          <CardDescription>Real-market results from each strategy's commitment date — tap any entry to inspect trades and charts.</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          {recentRuns.length === 0 ? (
-                            <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                              No forward tests yet. Refresh a strategy below to see real-market results from its commitment date.
-                            </div>
-                          ) : (
-                            <div className="space-y-3">
-                              {recentRuns.map((run) => (
-                                <button
-                                  key={run.id}
-                                  onClick={() => setSelectedRunId(run.id)}
-                                  className={`w-full rounded-lg border p-3 text-left transition-colors ${
-                                    selectedRunId === run.id
-                                      ? "border-primary/40 bg-primary/10"
-                                      : "border-border bg-background/50 hover:bg-background/75"
-                                  }`}
+                      {(() => {
+                        const latestRun = selectedAccount.runs[0] ?? null;
+                        return (
+                          <Card className="border-border bg-card/60">
+                            <CardHeader className="flex flex-row items-start justify-between space-y-0">
+                              <div>
+                                <CardTitle className="text-lg">Current Forward Test</CardTitle>
+                                <CardDescription>
+                                  {latestRun
+                                    ? `Last refreshed ${new Date(latestRun.executedAt).toLocaleString()}${latestRun.windowEnd ? ` · through ${formatWindowLabel(latestRun.windowEnd)}` : ""}`
+                                    : "Refresh a strategy to see your live forward test results here."}
+                                </CardDescription>
+                              </div>
+                              {latestRun && (
+                                <Badge
+                                  variant="outline"
+                                  className={latestRun.pctChange >= 0 ? "border-success/40 bg-success/10 text-success text-sm font-semibold" : "border-destructive/40 bg-destructive/10 text-destructive text-sm font-semibold"}
                                 >
-                                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                    <div>
-                                      <p className="font-medium">{run.strategyName}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(run.executedAt).toLocaleString()}</p>
-                                    </div>
-                                    <div className="flex items-center gap-2 text-xs">
-                                      <Badge
-                                        variant="outline"
-                                        className={
-                                          run.pctChange >= 0
-                                            ? "border-success/40 bg-success/10 text-success"
-                                            : "border-destructive/40 bg-destructive/10 text-destructive"
-                                        }
-                                      >
-                                        {run.pctChange >= 0 ? "+" : ""}
-                                        {run.pctChange.toFixed(2)}%
-                                      </Badge>
-                                      {run.mode === "live" && run.windowEnd && (
-                                        <Badge variant="secondary" className="text-xs">
-                                          Through {formatWindowLabel(run.windowEnd)}
-                                        </Badge>
-                                      )}
-                                      <span className="text-muted-foreground">{run.tradeCount} trades</span>
-                                      <span className="text-muted-foreground">{run.winRate.toFixed(1)}% win</span>
-                                    </div>
+                                  {latestRun.pctChange >= 0 ? "+" : ""}{latestRun.pctChange.toFixed(2)}%
+                                </Badge>
+                              )}
+                            </CardHeader>
+                            <CardContent>
+                              {latestRun ? (
+                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                                  <div className="rounded-lg border border-border bg-background/60 p-3">
+                                    <p className="text-xs text-muted-foreground">Strategy</p>
+                                    <p className="font-semibold text-sm truncate">{latestRun.strategyName}</p>
                                   </div>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </CardContent>
-                      </Card>
+                                  <div className="rounded-lg border border-border bg-background/60 p-3">
+                                    <p className="text-xs text-muted-foreground">Trades</p>
+                                    <p className="font-mono font-semibold">{latestRun.tradeCount}</p>
+                                  </div>
+                                  <div className="rounded-lg border border-border bg-background/60 p-3">
+                                    <p className="text-xs text-muted-foreground">Win Rate</p>
+                                    <p className={`font-mono font-semibold ${latestRun.winRate >= 50 ? "text-success" : "text-destructive"}`}>
+                                      {latestRun.winRate.toFixed(1)}%
+                                    </p>
+                                  </div>
+                                  <div className="rounded-lg border border-border bg-background/60 p-3">
+                                    <p className="text-xs text-muted-foreground">Full Detail</p>
+                                    <button
+                                      className="text-sm font-medium text-primary underline-offset-2 hover:underline"
+                                      onClick={() => setActiveAccountTab("activity")}
+                                    >
+                                      View in log →
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                                  {(() => {
+                                    const active = getActiveAppliedStrategies(selectedAccount);
+                                    if (active.length === 0) return <>Go to the <span className="font-medium text-foreground">Strategies</span> tab to commit a strategy to this account.</>;
+                                    if (active.some((s) => s.lastUpdatedAt)) return <>No trades taken yet — your strategy is tracking live and results will appear once entry conditions are met.</>;
+                                    return <>Hit <span className="font-medium text-foreground">Refresh to Today</span> above to run your first forward test.</>;
+                                  })()}
+                                </div>
+                              )}
+                            </CardContent>
+                          </Card>
+                        );
+                      })()}
                     </TabsContent>
 
                     <TabsContent value="strategies" className="space-y-6">
                       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                         <Card className="border-border bg-card/60">
                           <CardHeader>
-                            <CardTitle className="text-lg">Apply Saved Strategy</CardTitle>
-                            <CardDescription>Add a saved strategy to this account from today onward.</CardDescription>
+                            <CardTitle className="text-lg">Apply a Saved Strategy</CardTitle>
+                            <CardDescription>
+                              Commits a strategy from today — all forward test results measure from this date onward.
+                            </CardDescription>
                           </CardHeader>
                           <CardContent className="space-y-3">
-                            <Select value={selectedApplyStrategyId} onValueChange={setSelectedApplyStrategyId}>
-                              <SelectTrigger>
-                                <SelectValue placeholder="Choose a saved strategy" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {availableStrategiesToApply.length === 0 ? (
-                                  <SelectItem value="__none" disabled>
-                                    No available strategies
-                                  </SelectItem>
-                                ) : (
-                                  availableStrategiesToApply.map((strategy) => (
-                                    <SelectItem key={strategy.id} value={strategy.id.toString()}>
-                                      {strategy.name}
-                                    </SelectItem>
-                                  ))
-                                )}
-                              </SelectContent>
-                            </Select>
-                            <Button
-                              onClick={handleApplyStrategy}
-                              disabled={!selectedApplyStrategyId || availableStrategiesToApply.length === 0}
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Apply Strategy
-                            </Button>
+                            {availableStrategiesToApply.length === 0 ? (
+                              <div className="rounded-lg border border-dashed border-border p-4 text-center space-y-2">
+                                <p className="text-sm text-muted-foreground">No saved strategies yet.</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Run a backtest on the <span className="font-medium text-foreground">Backtest</span> page, save it as a strategy, then come back here to apply it.
+                                </p>
+                                <Button size="sm" variant="outline" onClick={() => navigate("/dashboard/strategies")}>
+                                  Go to Strategies →
+                                </Button>
+                              </div>
+                            ) : (
+                              <>
+                                <Select value={selectedApplyStrategyId} onValueChange={setSelectedApplyStrategyId}>
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Choose a saved strategy" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {availableStrategiesToApply.map((strategy) => (
+                                      <SelectItem key={strategy.id} value={strategy.id.toString()}>
+                                        {strategy.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <Button onClick={handleApplyStrategy} disabled={!selectedApplyStrategyId}>
+                                  <Plus className="mr-2 h-4 w-4" />
+                                  Commit Strategy from Today
+                                </Button>
+                              </>
+                            )}
                           </CardContent>
                         </Card>
 
                         <Card className="border-border bg-card/60">
                           <CardHeader>
-                            <CardTitle className="text-lg">Create Strategy Here</CardTitle>
-                            <CardDescription>Draft a strategy, save it, and start tracking it from today.</CardDescription>
+                            <CardTitle className="text-lg flex items-center gap-2">
+                              Advanced — Paste Raw Strategy
+                              <Badge variant="secondary" className="text-xs font-normal">Power users</Badge>
+                            </CardTitle>
+                            <CardDescription>
+                              Paste a strategy DSL directly if you have one. Most users should use the Strategies page and apply from there.
+                            </CardDescription>
                           </CardHeader>
                           <CardContent className="space-y-3">
                             <Input
@@ -1868,7 +2004,7 @@ const PaperAccounts = () => {
                               onChange={(event) => setNewStrategyName(event.target.value)}
                             />
                             <Textarea
-                              placeholder='Paste DSL text or JSON DSL (e.g. {"strategy": {...}})'
+                              placeholder='Paste the strategy JSON from a saved backtest (e.g. {"LONG": {...}})'
                               value={newStrategyDsl}
                               onChange={(event) => setNewStrategyDsl(event.target.value)}
                               className="min-h-[120px] font-mono text-xs"
@@ -1882,7 +2018,7 @@ const PaperAccounts = () => {
                               ) : (
                                 <>
                                   <Plus className="mr-2 h-4 w-4" />
-                                  Create & Apply
+                                  Save & Apply
                                 </>
                               )}
                             </Button>
@@ -1897,8 +2033,9 @@ const PaperAccounts = () => {
                         </CardHeader>
                         <CardContent>
                           {selectedAccountStrategies.length === 0 ? (
-                            <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                              No strategies applied yet.
+                            <div className="rounded-lg border border-dashed border-border p-6 text-center space-y-1">
+                              <p className="text-sm font-medium">No strategies committed yet</p>
+                              <p className="text-xs text-muted-foreground">Use "Apply a Saved Strategy" above to commit one from today. Your forward test starts the moment you apply it.</p>
                             </div>
                           ) : (
                             <div className="space-y-3">
@@ -1921,11 +2058,11 @@ const PaperAccounts = () => {
                                     <div className="min-w-0 flex-1 space-y-3">
                                       <div className="flex flex-wrap items-center gap-2">
                                         <p className="font-semibold">{strategyName}</p>
-                                        <Badge variant="secondary" className="text-xs">
-                                          Live
+                                        <Badge variant="secondary" className="text-xs bg-primary/10 text-primary border-primary/20">
+                                          Tracking
                                         </Badge>
                                         <Badge variant="outline" className="text-xs">
-                                          From {new Date(appliedStrategy.appliedAt).toLocaleDateString()}
+                                          Committed {new Date(appliedStrategy.appliedAt).toLocaleDateString()}
                                         </Badge>
                                         {lastResult?.pct_change !== undefined && (
                                           <Badge
@@ -1943,27 +2080,27 @@ const PaperAccounts = () => {
                                       </div>
                                       <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
                                         <div className="rounded-md border border-border bg-background/70 p-2">
-                                          <p className="text-muted-foreground">Baseline</p>
+                                          <p className="text-muted-foreground">Started with</p>
                                           <p className="font-mono font-semibold">
                                             {formatMoney(appliedStrategy.startingEquity)}
                                           </p>
                                         </div>
                                         <div className="rounded-md border border-border bg-background/70 p-2">
-                                          <p className="text-muted-foreground">Live Value</p>
+                                          <p className="text-muted-foreground">Current value</p>
                                           <p className="font-mono font-semibold">
-                                            {formatMoney(appliedStrategy.currentValue)}
+                                            {appliedStrategy.lastUpdatedAt ? formatMoney(appliedStrategy.currentValue) : "—"}
                                           </p>
                                         </div>
                                         <div className="rounded-md border border-border bg-background/70 p-2">
                                           <p className="text-muted-foreground">P&L</p>
-                                          <p
-                                            className={`font-mono font-semibold ${
-                                              sleevePnl >= 0 ? "text-success" : "text-destructive"
-                                            }`}
-                                          >
-                                            {formatSignedMoney(sleevePnl)} ({sleeveReturn >= 0 ? "+" : ""}
-                                            {sleeveReturn.toFixed(2)}%)
-                                          </p>
+                                          {appliedStrategy.lastUpdatedAt ? (
+                                            <p className={`font-mono font-semibold ${sleevePnl > 0 ? "text-success" : sleevePnl < 0 ? "text-destructive" : ""}`}>
+                                              {formatSignedMoney(sleevePnl)}{" "}
+                                              <span className="text-muted-foreground">({sleeveReturn >= 0 ? "+" : ""}{sleeveReturn.toFixed(2)}%)</span>
+                                            </p>
+                                          ) : (
+                                            <p className="font-mono font-semibold text-muted-foreground">—</p>
+                                          )}
                                         </div>
                                       </div>
                                       {strategy ? (
@@ -1973,14 +2110,12 @@ const PaperAccounts = () => {
                                       ) : (
                                         <p className="text-xs text-muted-foreground">Saved strategy is no longer available.</p>
                                       )}
-                                      {appliedStrategy.lastUpdatedAt && (
-                                        <p className="text-xs text-muted-foreground">
-                                          Last updated {new Date(appliedStrategy.lastUpdatedAt).toLocaleString()}
-                                          {appliedStrategy.lastWindowEnd
-                                            ? ` through ${formatWindowLabel(appliedStrategy.lastWindowEnd)}`
-                                            : ""}
-                                        </p>
-                                      )}
+                                      <p className="text-xs text-muted-foreground">
+                                        {appliedStrategy.lastUpdatedAt
+                                          ? <>Last refreshed {new Date(appliedStrategy.lastUpdatedAt).toLocaleString()}{appliedStrategy.lastWindowEnd ? ` · through ${formatWindowLabel(appliedStrategy.lastWindowEnd)}` : ""}</>
+                                          : <span className="text-amber-500/80">Not yet refreshed — hit <span className="font-medium">Refresh to Today</span> above to see results</span>
+                                        }
+                                      </p>
                                     </div>
 
                                     <div className="flex flex-wrap items-center gap-2">
@@ -1997,7 +2132,7 @@ const PaperAccounts = () => {
                                         ) : (
                                           <>
                                             <RefreshCw className="mr-2 h-4 w-4" />
-                                            Update
+                                            {appliedStrategy.lastUpdatedAt ? "Refresh" : "Run First Test"}
                                           </>
                                         )}
                                       </Button>
@@ -2006,7 +2141,7 @@ const PaperAccounts = () => {
                                         variant="outline"
                                         onClick={() => handleRemoveAppliedStrategy(appliedStrategy.id)}
                                       >
-                                        Stop
+                                        Stop Tracking
                                       </Button>
                                       {strategy && (
                                         <Button
@@ -2030,89 +2165,111 @@ const PaperAccounts = () => {
                     </TabsContent>
 
                     <TabsContent value="activity" className="space-y-4">
-                      {selectedAccount.runs.length === 0 ? (
-                        <Card className="border-border bg-card/60">
-                          <CardContent className="space-y-3 py-16 text-center">
-                            <Play className="mx-auto h-10 w-10 text-muted-foreground" />
-                            <p className="text-sm text-muted-foreground">
-                              Refresh a strategy to see its forward test results — trade logs, chart replay, and analytics.
-                            </p>
-                          </CardContent>
-                        </Card>
-                      ) : selectedRun ? (
-                        <>
-                          <Card className="border-border bg-card/60">
-                            <CardContent className="pt-6">
-                              <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-                                <div className="space-y-2 lg:col-span-2">
-                                  <p className="text-xs text-muted-foreground">Forward test run</p>
-                                  <Select value={selectedRun.id} onValueChange={setSelectedRunId}>
-                                    <SelectTrigger>
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {selectedAccount.runs.map((run) => (
-                                        <SelectItem key={run.id} value={run.id}>
-                                          {new Date(run.executedAt).toLocaleString()} - {run.strategyName}
-                                          {run.mode === "live" && run.windowEnd
-                                            ? ` · through ${formatWindowLabel(run.windowEnd)}`
-                                            : ""}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                                <div className="rounded-lg border border-border bg-background/70 p-3">
-                                  <p className="text-xs text-muted-foreground">Return</p>
-                                  <p
-                                    className={`font-mono font-semibold ${
-                                      selectedRun.pctChange >= 0 ? "text-success" : "text-destructive"
-                                    }`}
-                                  >
-                                    {selectedRun.pctChange >= 0 ? "+" : ""}
-                                    {selectedRun.pctChange.toFixed(2)}%
-                                  </p>
-                                </div>
-                                <div className="rounded-lg border border-border bg-background/70 p-3">
-                                  <p className="text-xs text-muted-foreground">Trades / Win Rate</p>
-                                  <p className="font-mono font-semibold">
-                                    {selectedRun.tradeCount} / {selectedRun.winRate.toFixed(1)}%
-                                  </p>
-                                </div>
-                              </div>
-                            </CardContent>
-                          </Card>
-
-                          {selectedRun.result ? (
-                            <Tabs defaultValue="numerical" className="w-full" key={selectedRun.id}>
-                              <TabsList className="border border-border bg-card/50 p-1">
-                                <TabsTrigger value="numerical" className="data-[state=active]:bg-primary/20">
-                                  Numerical + Trades
-                                </TabsTrigger>
-                                <TabsTrigger value="chart" className="data-[state=active]:bg-primary/20">
-                                  Chart + Trade Markers
-                                </TabsTrigger>
-                              </TabsList>
-                              <TabsContent value="numerical">
-                                <BacktestResults results={selectedRun.result} />
-                              </TabsContent>
-                              <TabsContent value="chart">
-                                <ChartView results={selectedRun.result} />
-                              </TabsContent>
-                            </Tabs>
-                          ) : (
-                            <Card className="border-dashed bg-card/40">
-                              <CardContent className="space-y-2 py-10 text-center">
-                                <BarChart3 className="mx-auto h-8 w-8 text-muted-foreground" />
-                                <p className="text-sm font-medium">Full results not stored for this entry</p>
-                                <p className="mx-auto max-w-xl text-sm text-muted-foreground">
-                                  Summary stats (return, trade count, win rate) are kept for every forward test. Refresh the strategy again to inspect full trade tables and chart markers for the latest period.
-                                </p>
+                      {(() => {
+                        const latestRun = selectedAccount.runs[0] ?? null;
+                        if (!latestRun) {
+                          const activeStrategies = getActiveAppliedStrategies(selectedAccount);
+                          const hasEverRefreshed = activeStrategies.some((s) => s.lastUpdatedAt);
+                          return (
+                            <Card className="border-border bg-card/60">
+                              <CardContent className="space-y-3 py-16 text-center">
+                                <Play className="mx-auto h-10 w-10 text-muted-foreground" />
+                                {activeStrategies.length === 0 ? (
+                                  <>
+                                    <p className="text-sm font-medium">No strategies committed yet</p>
+                                    <p className="text-sm text-muted-foreground">
+                                      Go to the <span className="font-medium text-foreground">Strategies</span> tab to commit a strategy to this account, then hit{" "}
+                                      <span className="font-medium text-foreground">Refresh to Today</span> to start tracking.
+                                    </p>
+                                  </>
+                                ) : hasEverRefreshed ? (
+                                  <>
+                                    <p className="text-sm font-medium">No trades taken yet</p>
+                                    <p className="text-sm text-muted-foreground">
+                                      Your strategy is tracking live but hasn't triggered any entries yet. Results will appear here once the entry conditions are met.
+                                    </p>
+                                  </>
+                                ) : (
+                                  <>
+                                    <p className="text-sm font-medium">Ready to start tracking</p>
+                                    <p className="text-sm text-muted-foreground">
+                                      Hit <span className="font-medium text-foreground">Refresh to Today</span> above to run your first forward test and see the trade log here.
+                                    </p>
+                                  </>
+                                )}
                               </CardContent>
                             </Card>
-                          )}
-                        </>
-                      ) : null}
+                          );
+                        }
+                        return (
+                          <>
+                            <Card className="border-border bg-card/60">
+                              <CardHeader className="pb-3">
+                                <CardTitle className="text-base">{latestRun.strategyName}</CardTitle>
+                                <CardDescription>
+                                  Forward test covering <span className="text-foreground font-medium">{latestRun.startDate ? formatWindowLabel(latestRun.startDate) : "commitment date"}</span> through <span className="text-foreground font-medium">{latestRun.windowEnd ? formatWindowLabel(latestRun.windowEnd) : "today"}</span>
+                                  {" · "}last refreshed {new Date(latestRun.executedAt).toLocaleString()}
+                                </CardDescription>
+                              </CardHeader>
+                              <CardContent>
+                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                                  <div className="rounded-lg border border-border bg-background/70 p-3">
+                                    <p className="text-xs text-muted-foreground">Total Return</p>
+                                    <p className={`font-mono font-semibold ${latestRun.pctChange >= 0 ? "text-success" : "text-destructive"}`}>
+                                      {latestRun.pctChange >= 0 ? "+" : ""}{latestRun.pctChange.toFixed(2)}%
+                                    </p>
+                                  </div>
+                                  <div className="rounded-lg border border-border bg-background/70 p-3">
+                                    <p className="text-xs text-muted-foreground">Trades</p>
+                                    <p className="font-mono font-semibold">{latestRun.tradeCount}</p>
+                                  </div>
+                                  <div className="rounded-lg border border-border bg-background/70 p-3">
+                                    <p className="text-xs text-muted-foreground">Win Rate</p>
+                                    <p className={`font-mono font-semibold ${latestRun.winRate >= 50 ? "text-success" : "text-destructive"}`}>
+                                      {latestRun.winRate.toFixed(1)}%
+                                    </p>
+                                  </div>
+                                  <div className="rounded-lg border border-border bg-background/70 p-3">
+                                    <p className="text-xs text-muted-foreground">P&L</p>
+                                    <p className={`font-mono font-semibold ${(latestRun.pnl ?? 0) >= 0 ? "text-success" : "text-destructive"}`}>
+                                      {(latestRun.pnl ?? 0) >= 0 ? "+" : ""}{formatMoney(latestRun.pnl ?? 0)}
+                                    </p>
+                                  </div>
+                                </div>
+                              </CardContent>
+                            </Card>
+
+                            {latestRun.result ? (
+                              <Tabs defaultValue="numerical" className="w-full" key={latestRun.id}>
+                                <TabsList className="border border-border bg-card/50 p-1">
+                                  <TabsTrigger value="numerical" className="data-[state=active]:bg-primary/20">
+                                    Trades & Stats
+                                  </TabsTrigger>
+                                  <TabsTrigger value="chart" className="data-[state=active]:bg-primary/20">
+                                    Chart Replay
+                                  </TabsTrigger>
+                                </TabsList>
+                                <TabsContent value="numerical">
+                                  <BacktestResults results={latestRun.result} />
+                                </TabsContent>
+                                <TabsContent value="chart">
+                                  <ChartView results={latestRun.result} />
+                                </TabsContent>
+                              </Tabs>
+                            ) : (
+                              <Card className="border-dashed bg-card/40">
+                                <CardContent className="space-y-2 py-10 text-center">
+                                  <BarChart3 className="mx-auto h-8 w-8 text-muted-foreground" />
+                                  <p className="text-sm font-medium">Full results not stored for this entry</p>
+                                  <p className="mx-auto max-w-xl text-sm text-muted-foreground">
+                                    Summary stats are kept for every refresh. Hit <span className="font-medium text-foreground">Refresh to Today</span> again to load the full trade table and chart replay for the current period.
+                                  </p>
+                                </CardContent>
+                              </Card>
+                            )}
+                          </>
+                        );
+                      })()}
                     </TabsContent>
                   </Tabs>
                 </div>
