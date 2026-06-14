@@ -319,7 +319,7 @@ const Backtest = () => {
                       </TabsTrigger>
                       <TabsTrigger value="garch" className="gap-2 data-[state=active]:bg-primary/20">
                         <Activity className="h-4 w-4" />
-                        GARCH
+                        Risk
                       </TabsTrigger>
                       <TabsTrigger value="montecarlo" className="gap-2 data-[state=active]:bg-primary/20">
                         <Shuffle className="h-4 w-4" />
@@ -340,7 +340,7 @@ const Backtest = () => {
                     </TabsContent>
 
                     <TabsContent value="garch">
-                      <GarchAnalysis />
+                      <GarchAnalysis results={results} />
                     </TabsContent>
 
                     <TabsContent value="montecarlo">

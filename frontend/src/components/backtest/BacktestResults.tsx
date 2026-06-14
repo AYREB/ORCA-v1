@@ -1,10 +1,10 @@
 import { useState, useMemo } from "react";
 import { motion } from "framer-motion";
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  BarChart3, 
-  DollarSign, 
+import {
+  TrendingUp,
+  TrendingDown,
+  BarChart3,
+  DollarSign,
   Wallet,
   Percent,
   Scale,
@@ -12,10 +12,22 @@ import {
   XCircle,
   ArrowLeftRight,
   FolderOpen,
-  Filter
+  Filter,
 } from "lucide-react";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  ReferenceLine,
+} from "recharts";
 import { BacktestResult } from "@/lib/api";
-import { detectDirection, isEntryTrade, isExitTrade } from "@/lib/tradeUtils";
+import { detectDirection, isEntryTrade, isExitTrade, buildDailyEquityCurve } from "@/lib/tradeUtils";
+import { useSettings } from "@/hooks/useSettings";
+import { safeColor, colorWithAlpha } from "@/lib/chartTheme";
 import TradesTable from "./TradesTable";
 import {
   Select,
@@ -30,7 +42,16 @@ interface BacktestResultsProps {
 }
 
 const BacktestResults = ({ results }: BacktestResultsProps) => {
+  const { settings } = useSettings();
+  const chartColors = settings.appearance.chartColors;
   const [selectedTicker, setSelectedTicker] = useState<string>("all");
+
+  const equitySeries = useMemo(() => {
+    if (results.trades.length === 0) return null;
+    const startEquity = results.total_portfolio / (1 + results.pct_change / 100);
+    const points = buildDailyEquityCurve(results.trades, startEquity);
+    return { points, startEquity };
+  }, [results.trades, results.total_portfolio, results.pct_change]);
 
   // Extract unique tickers
   const availableTickers = useMemo(() => {
@@ -196,6 +217,11 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
     ];
   }, [results, detailedMetrics]);
 
+  const positiveRun = results.pct_change >= 0;
+  const runColor = positiveRun
+    ? safeColor(chartColors.candleUp, "#22c55e")
+    : safeColor(chartColors.candleDown, "#ef4444");
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -203,6 +229,120 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
       transition={{ duration: 0.5, delay: 0.2 }}
       className="space-y-6"
     >
+      {/* Equity curve — chart left, key stats right */}
+      {equitySeries && equitySeries.points.length > 1 && (
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          className="rounded-xl border border-border bg-card/50 backdrop-blur-sm overflow-hidden"
+        >
+          <div className="flex flex-col sm:flex-row">
+            {/* Chart */}
+            <div className="flex-1 min-w-0 p-4 pb-3">
+              <p className="text-sm font-semibold mb-3">Equity Curve</p>
+              <div className="h-[220px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart
+                    data={equitySeries.points}
+                    margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+                  >
+                    <defs>
+                      <linearGradient id="numEquityFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={runColor} stopOpacity={0.28} />
+                        <stop offset="95%" stopColor={runColor} stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke={colorWithAlpha(chartColors.grid, 0.35, "hsl(var(--border))")}
+                    />
+                    <XAxis
+                      dataKey="label"
+                      stroke="hsl(var(--muted-foreground))"
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
+                      minTickGap={30}
+                    />
+                    <YAxis
+                      stroke="hsl(var(--muted-foreground))"
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
+                      tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`}
+                      width={80}
+                    />
+                    <ReferenceLine
+                      y={equitySeries.startEquity}
+                      strokeDasharray="4 4"
+                      stroke="hsl(var(--muted-foreground))"
+                      strokeWidth={1}
+                      label={{
+                        value: "Start",
+                        position: "insideTopLeft",
+                        fontSize: 10,
+                        fill: "hsl(var(--muted-foreground))",
+                      }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "8px",
+                        fontSize: 12,
+                      }}
+                      formatter={(v: number) => [
+                        `$${v.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}`,
+                        "Portfolio",
+                      ]}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="portfolio"
+                      stroke={runColor}
+                      strokeWidth={2}
+                      fill="url(#numEquityFill)"
+                      dot={false}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Stats sidebar */}
+            <div className="sm:w-[180px] shrink-0 border-t sm:border-t-0 sm:border-l border-border/50 p-4 flex flex-col justify-center gap-4">
+              {[
+                {
+                  label: "Starting",
+                  value: `$${equitySeries.startEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                  color: "",
+                },
+                {
+                  label: "Final",
+                  value: `$${results.total_portfolio.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                  color: "",
+                },
+                {
+                  label: "Return",
+                  value: `${positiveRun ? "+" : ""}${results.pct_change.toFixed(2)}%`,
+                  color: positiveRun ? "text-success" : "text-destructive",
+                },
+                {
+                  label: "Completed trades",
+                  value: detailedMetrics.completedTrades.toString(),
+                  color: "",
+                },
+              ].map((s) => (
+                <div key={s.label}>
+                  <p className="text-xs text-muted-foreground mb-0.5">{s.label}</p>
+                  <p className={`font-mono font-semibold text-sm ${s.color}`}>{s.value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* Ticker Filter */}
       {availableTickers.length > 1 && (
         <div className="flex items-center gap-3">
