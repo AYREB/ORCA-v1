@@ -117,7 +117,12 @@ def no_store(response: JsonResponse) -> JsonResponse:
 
 
 def user_payload(user) -> dict[str, Any]:
-    return {"id": user.id, "email": user.email, "name": user.first_name or user.username}
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.first_name or user.username,
+        "date_joined": user.date_joined.isoformat() if hasattr(user, "date_joined") else None,
+    }
 
 
 def error_response(exc: Exception) -> JsonResponse:
@@ -779,11 +784,18 @@ def logout(request):
 
 @csrf_exempt
 @api_error_boundary
-@require_methods("GET")
+@require_methods("GET", "PATCH")
 @token_required
 @rate_limit("general")
 def me(request):
     user = get_authenticated_user(request)
+    if request.method == "PATCH":
+        body = parse_body(request)
+        name = str(body.get("name", "")).strip()[:100]
+        if not name:
+            raise APIError("Name cannot be empty.")
+        user.first_name = name
+        user.save(update_fields=["first_name"])
     return no_store(JsonResponse(user_payload(user)))
 
 

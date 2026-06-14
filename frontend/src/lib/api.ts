@@ -389,6 +389,7 @@ export interface AuthUser {
   id: number;
   email: string;
   name?: string;
+  date_joined?: string;
 }
 
 export interface AuthResponse {
@@ -547,6 +548,10 @@ class DjangoAPI {
 
   async getCurrentUser(): Promise<AuthUser> {
     return this.request<AuthUser>('/me/');
+  }
+
+  async updateProfile(name: string): Promise<AuthUser> {
+    return this.request<AuthUser>('/me/', { method: 'PATCH', body: JSON.stringify({ name }) });
   }
 
   // Health check

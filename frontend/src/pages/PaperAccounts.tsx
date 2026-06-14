@@ -57,6 +57,7 @@ import {
 import { api, ApiError, BacktestResult, SavedStrategy, TradeEntry } from "@/lib/api";
 import BacktestResults from "@/components/backtest/BacktestResults";
 import ChartView from "@/components/backtest/ChartView";
+import StrategySummary from "@/components/backtest/StrategySummary";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { useSettings } from "@/hooks/useSettings";
@@ -1121,7 +1122,7 @@ const PaperAccounts = () => {
           requestOptions,
         );
       } else {
-        throw new Error("This strategy has no runnable DSL.");
+        throw new Error("This strategy has no runnable conditions saved.");
       }
 
       await persistStrategyResult(strategy.id, result);
@@ -1192,7 +1193,7 @@ const PaperAccounts = () => {
       );
       setSelectedRunId(run.id);
       toast.success(
-        `Updated "${strategy.name}" from ${formatWindowLabel(windowStartAt)} through ${formatWindowLabel(windowEnd) || "now"}`,
+        `Forward test updated for "${strategy.name}" — ${formatWindowLabel(windowStartAt)} through ${formatWindowLabel(windowEnd) || "today"}`,
       );
     } catch (error) {
       if (error instanceof ApiError && error.code && NO_DATA_BACKTEST_CODES.has(error.code)) {
@@ -1223,7 +1224,7 @@ const PaperAccounts = () => {
       );
 
     if (runnableStrategies.length === 0) {
-      toast.error("Apply at least one strategy before updating live.");
+      toast.error("Add at least one strategy before refreshing your forward test.");
       return;
     }
 
@@ -1309,8 +1310,8 @@ const PaperAccounts = () => {
       );
       setSelectedRunId(newRuns[newRuns.length - 1]?.id ?? null);
       toast.success(
-        `Updated ${newRuns.length} ${newRuns.length === 1 ? "strategy" : "strategies"} to today.` +
-          (skippedNoData > 0 ? ` ${skippedNoData} had no new data.` : ""),
+        `Forward test refreshed for ${newRuns.length} ${newRuns.length === 1 ? "strategy" : "strategies"} through today.` +
+          (skippedNoData > 0 ? ` ${skippedNoData} had no new market data yet.` : ""),
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to update paper account";
@@ -1329,9 +1330,9 @@ const PaperAccounts = () => {
       >
         <PageHeader
           icon={Rocket}
-          eyebrow="Sim execution lab"
+          eyebrow="Forward testing"
           title="Paper Accounts"
-          description="Add strategies to a paper account from now on, update manually to current market data, and keep the equity trail."
+          description="Commit strategies from a set date, refresh to pull in real market data, and track your forward-tested equity over time."
           actions={
             <>
               <Button variant="outline" onClick={loadStrategies} disabled={isLoadingStrategies}>
@@ -1361,7 +1362,7 @@ const PaperAccounts = () => {
               <Card className="glass-card border-border/70">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-lg">Account Book</CardTitle>
-                  <CardDescription>Switch workspaces and track each simulation separately.</CardDescription>
+                  <CardDescription>Each account runs independently — commit different strategies and track their real-market performance separately.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   {isLoadingAccounts ? (
@@ -1497,7 +1498,7 @@ const PaperAccounts = () => {
                             </Badge>
                           </div>
                           <CardDescription>
-                            {selectedAccount.description || "Simulated environment for strategy execution and risk analysis."}
+                            {selectedAccount.description || "Forward testing account — strategies track real market performance from the day they were committed."}
                           </CardDescription>
                         </div>
                         <div className="flex items-center gap-2">
@@ -1517,7 +1518,7 @@ const PaperAccounts = () => {
                             ) : (
                               <>
                                 <RefreshCw className="mr-2 h-4 w-4" />
-                                Update Live
+                                Refresh to Today
                               </>
                             )}
                           </Button>
@@ -1631,19 +1632,19 @@ const PaperAccounts = () => {
                       <div className="rounded-lg border border-border bg-background/60 p-3">
                         <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <RefreshCw className="h-3.5 w-3.5" />
-                          Today Updates
+                          Refreshed Today
                         </p>
                         <p className="font-mono text-lg font-semibold">{selectedAccountMetrics.todayLiveRuns}</p>
                       </div>
                       <div className="rounded-lg border border-border bg-background/60 p-3">
                         <p className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
                           <Clock3 className="h-3.5 w-3.5" />
-                          Last Live Update
+                          Last Refreshed
                         </p>
                         <p className="font-mono text-xs font-semibold">
                           {selectedAccountMetrics.lastLiveUpdateAt
                             ? new Date(selectedAccountMetrics.lastLiveUpdateAt).toLocaleString()
-                            : "No runs yet"}
+                            : "Not yet refreshed"}
                         </p>
                       </div>
                     </CardContent>
@@ -1658,7 +1659,7 @@ const PaperAccounts = () => {
                         Strategy Deck
                       </TabsTrigger>
                       <TabsTrigger value="activity" className="data-[state=active]:bg-primary/20">
-                        Run Journal
+                        Forward Test Log
                       </TabsTrigger>
                     </TabsList>
 
@@ -1765,13 +1766,13 @@ const PaperAccounts = () => {
 
                       <Card className="border-border bg-card/60">
                         <CardHeader>
-                          <CardTitle className="text-lg">Recent Executions</CardTitle>
-                          <CardDescription>Latest strategy runs with quick access to full backtest detail.</CardDescription>
+                          <CardTitle className="text-lg">Forward Test History</CardTitle>
+                          <CardDescription>Real-market results from each strategy's commitment date — tap any entry to inspect trades and charts.</CardDescription>
                         </CardHeader>
                         <CardContent>
                           {recentRuns.length === 0 ? (
                             <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                              No executions yet. Run an applied strategy to populate this feed.
+                              No forward tests yet. Refresh a strategy below to see real-market results from its commitment date.
                             </div>
                           ) : (
                             <div className="space-y-3">
@@ -1802,9 +1803,9 @@ const PaperAccounts = () => {
                                         {run.pctChange >= 0 ? "+" : ""}
                                         {run.pctChange.toFixed(2)}%
                                       </Badge>
-                                      {run.mode === "live" && (
+                                      {run.mode === "live" && run.windowEnd && (
                                         <Badge variant="secondary" className="text-xs">
-                                          Live {formatWindowLabel(run.windowEnd)}
+                                          Through {formatWindowLabel(run.windowEnd)}
                                         </Badge>
                                       )}
                                       <span className="text-muted-foreground">{run.tradeCount} trades</span>
@@ -1892,7 +1893,7 @@ const PaperAccounts = () => {
                       <Card className="border-border bg-card/60">
                         <CardHeader>
                           <CardTitle className="text-lg">Applied Strategy Deck</CardTitle>
-                          <CardDescription>Each active strategy tracks its own live P&L from the day it was added.</CardDescription>
+                          <CardDescription>Each strategy is forward-tested from its commitment date using real market data. Refresh to update through today.</CardDescription>
                         </CardHeader>
                         <CardContent>
                           {selectedAccountStrategies.length === 0 ? (
@@ -1965,9 +1966,13 @@ const PaperAccounts = () => {
                                           </p>
                                         </div>
                                       </div>
-                                      <p className="line-clamp-2 text-xs text-muted-foreground">
-                                        {strategy?.dsl || "Saved strategy is no longer available."}
-                                      </p>
+                                      {strategy ? (
+                                        <div className="overflow-hidden rounded-lg">
+                                          <StrategySummary dsl={getStrategyDslJson(strategy)} />
+                                        </div>
+                                      ) : (
+                                        <p className="text-xs text-muted-foreground">Saved strategy is no longer available.</p>
+                                      )}
                                       {appliedStrategy.lastUpdatedAt && (
                                         <p className="text-xs text-muted-foreground">
                                           Last updated {new Date(appliedStrategy.lastUpdatedAt).toLocaleString()}
@@ -2030,7 +2035,7 @@ const PaperAccounts = () => {
                           <CardContent className="space-y-3 py-16 text-center">
                             <Play className="mx-auto h-10 w-10 text-muted-foreground" />
                             <p className="text-sm text-muted-foreground">
-                              Execute an applied strategy to unlock trade logs, chart replay, and analytics.
+                              Refresh a strategy to see its forward test results — trade logs, chart replay, and analytics.
                             </p>
                           </CardContent>
                         </Card>
@@ -2040,7 +2045,7 @@ const PaperAccounts = () => {
                             <CardContent className="pt-6">
                               <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
                                 <div className="space-y-2 lg:col-span-2">
-                                  <p className="text-xs text-muted-foreground">Selected run</p>
+                                  <p className="text-xs text-muted-foreground">Forward test run</p>
                                   <Select value={selectedRun.id} onValueChange={setSelectedRunId}>
                                     <SelectTrigger>
                                       <SelectValue />
@@ -2050,7 +2055,7 @@ const PaperAccounts = () => {
                                         <SelectItem key={run.id} value={run.id}>
                                           {new Date(run.executedAt).toLocaleString()} - {run.strategyName}
                                           {run.mode === "live" && run.windowEnd
-                                            ? ` (live ${formatWindowLabel(run.windowEnd)})`
+                                            ? ` · through ${formatWindowLabel(run.windowEnd)}`
                                             : ""}
                                         </SelectItem>
                                       ))}
@@ -2099,10 +2104,9 @@ const PaperAccounts = () => {
                             <Card className="border-dashed bg-card/40">
                               <CardContent className="space-y-2 py-10 text-center">
                                 <BarChart3 className="mx-auto h-8 w-8 text-muted-foreground" />
-                                <p className="text-sm font-medium">Detailed run payload not stored after refresh</p>
+                                <p className="text-sm font-medium">Full results not stored for this entry</p>
                                 <p className="mx-auto max-w-xl text-sm text-muted-foreground">
-                                  The account keeps historical equity, return, trade count, and win-rate progression.
-                                  Re-run an update to inspect full trade tables and chart markers for the latest session.
+                                  Summary stats (return, trade count, win rate) are kept for every forward test. Refresh the strategy again to inspect full trade tables and chart markers for the latest period.
                                 </p>
                               </CardContent>
                             </Card>

@@ -31,6 +31,7 @@ import ChartView from "@/components/backtest/ChartView";
 import GarchAnalysis from "@/components/backtest/GarchAnalysis";
 import MonteCarloAnalysis from "@/components/backtest/MonteCarloAnalysis";
 import BacktestForm from "@/components/backtest/BacktestForm";
+import StrategySummary from "@/components/backtest/StrategySummary";
 import { api as djangoApi } from "@/lib/api";
 
 const Strategies = () => {
@@ -282,10 +283,24 @@ const Strategies = () => {
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        <div className="p-3 rounded-lg border border-border bg-secondary/30 min-h-[64px]">
-                          <p className="text-sm text-muted-foreground line-clamp-3">
-                            {strategy.dsl || "No DSL text saved yet."}
-                          </p>
+                        <div className="rounded-lg border border-border bg-secondary/30 min-h-[64px] overflow-hidden">
+                          {(() => {
+                            const dslJson =
+                              strategy.dslJson ||
+                              (() => {
+                                try {
+                                  const p = JSON.parse(strategy.dsl || "");
+                                  return p && typeof p === "object" ? p : null;
+                                } catch {
+                                  return null;
+                                }
+                              })();
+                            return dslJson ? (
+                              <StrategySummary dsl={dslJson} />
+                            ) : (
+                              <p className="p-3 text-sm text-muted-foreground">No strategy saved yet.</p>
+                            );
+                          })()}
                         </div>
                         <div className="flex items-center justify-between text-sm">
                           <div className="flex items-center gap-2 text-muted-foreground">

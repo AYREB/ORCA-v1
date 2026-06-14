@@ -24,10 +24,6 @@ export interface ChartOptions {
 }
 
 export interface AppSettings {
-  profile: {
-    displayName: string;
-    email: string;
-  };
   appearance: {
     theme: "dark" | "light" | "system";
     chartColorScheme: ChartColorScheme;
@@ -92,10 +88,6 @@ export const CHART_COLOR_PRESETS: Record<ChartColorScheme, ChartColors> = {
 };
 
 const DEFAULT_SETTINGS: AppSettings = {
-  profile: {
-    displayName: "",
-    email: "",
-  },
   appearance: {
     theme: "dark",
     chartColorScheme: "classic",
@@ -138,10 +130,6 @@ const mergeSettings = (raw: unknown): AppSettings => {
   const chartOptions = isRecord(appearance.chartOptions) ? appearance.chartOptions : {};
 
   return {
-    profile: {
-      ...DEFAULT_SETTINGS.profile,
-      ...(isRecord(raw.profile) ? (raw.profile as Partial<AppSettings["profile"]>) : {}),
-    },
     appearance: {
       ...DEFAULT_SETTINGS.appearance,
       ...(appearance as Partial<AppSettings["appearance"]>),
@@ -250,7 +238,6 @@ export const SettingsProvider = ({ children }: { children: ReactNode }) => {
   const updateSettings = useCallback((partial: DeepPartial<AppSettings>) => {
     setSettings((prev) => {
       const next = { ...prev };
-      if (partial.profile) next.profile = { ...prev.profile, ...partial.profile };
       if (partial.appearance) {
         const { chartColors, chartOptions, ...appearancePatch } = partial.appearance;
         next.appearance = {

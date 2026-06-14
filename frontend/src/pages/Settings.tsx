@@ -1,614 +1,921 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  User,
-  Palette,
-  SlidersHorizontal,
-  Save,
-  Moon,
-  Sun,
-  Monitor,
-  Bell,
-  Check,
-  ChartCandlestick,
-  ChartLine,
-  ChartArea,
-  Grid3x3,
-  MousePointer2,
-  Target,
+  User, Palette, SlidersHorizontal, Moon, Sun, Monitor, Bell,
+  Check, ChartCandlestick, ChartLine, ChartArea, Grid3x3,
+  MousePointer2, Target, LogOut, Shield, Database, Calendar,
+  Mail, RotateCcw, AlertTriangle, Volume2, VolumeX, Zap,
+  Activity, Plus, Minus, ChevronRight,
 } from "lucide-react";
 import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import {
-  CHART_COLOR_PRESETS,
-  useSettings,
-  type AppSettings,
-  type ChartColorScheme,
-  type ChartColors,
-  type ChartType,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
+  CHART_COLOR_PRESETS, useSettings,
+  type AppSettings, type ChartColorScheme, type ChartColors, type ChartType,
 } from "@/hooks/useSettings";
-import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/context/AuthContext";
+import { api } from "@/lib/api";
+import { toast } from "sonner";
 
-const chartTypeOptions: Array<{ value: ChartType; label: string; icon: typeof ChartCandlestick }> = [
-  { value: "candles", label: "Candles", icon: ChartCandlestick },
-  { value: "line", label: "Line", icon: ChartLine },
-  { value: "area", label: "Area", icon: ChartArea },
+// ─── Types ───────────────────────────────────────────────────────────────────
+type SectionId = "profile" | "appearance" | "defaults" | "notifications" | "account";
+
+const NAV: Array<{ id: SectionId; label: string; icon: typeof User; shortcut: string }> = [
+  { id: "profile",       label: "Profile",           icon: User,             shortcut: "1" },
+  { id: "appearance",    label: "Appearance",         icon: Palette,          shortcut: "2" },
+  { id: "defaults",      label: "Backtest Defaults",  icon: SlidersHorizontal, shortcut: "3" },
+  { id: "notifications", label: "Notifications",      icon: Bell,             shortcut: "4" },
+  { id: "account",       label: "Account",            icon: Shield,           shortcut: "5" },
 ];
 
-const colorFields: Array<{ key: keyof ChartColors; label: string }> = [
-  { key: "candleUp", label: "Candle Up" },
+const CHART_TYPES: Array<{ value: ChartType; label: string; icon: typeof ChartCandlestick }> = [
+  { value: "candles", label: "Candles", icon: ChartCandlestick },
+  { value: "line",    label: "Line",    icon: ChartLine },
+  { value: "area",    label: "Area",    icon: ChartArea },
+];
+
+const CHART_COLORS: Array<{ key: keyof ChartColors; label: string }> = [
+  { key: "candleUp",   label: "Candle Up" },
   { key: "candleDown", label: "Candle Down" },
-  { key: "wickUp", label: "Wick Up" },
-  { key: "wickDown", label: "Wick Down" },
-  { key: "line", label: "Line" },
-  { key: "areaTop", label: "Area Top" },
+  { key: "wickUp",     label: "Wick Up" },
+  { key: "wickDown",   label: "Wick Down" },
+  { key: "line",       label: "Line" },
+  { key: "areaTop",    label: "Area Top" },
   { key: "areaBottom", label: "Area Base" },
   { key: "background", label: "Background" },
-  { key: "grid", label: "Grid" },
-  { key: "crosshair", label: "Crosshair" },
+  { key: "grid",       label: "Grid" },
+  { key: "crosshair",  label: "Crosshair" },
 ];
 
-const chartSchemeLabels: Record<ChartColorScheme, string> = {
-  classic: "Classic",
-  neon: "Neon",
-  muted: "Muted",
+const SCHEME_LABELS: Record<ChartColorScheme, string> = { classic: "Classic", neon: "Neon", muted: "Muted" };
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const hexAlpha = (hex: string, a: number) => {
+  const h = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : "#38bdf8";
+  return `${h}${Math.round(a * 255).toString(16).padStart(2, "0")}`;
+};
+const safeHex = (v: string) => (/^#[0-9a-fA-F]{6}$/.test(v) ? v : "#000000");
+
+// Debounce hook
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
+// ─── Saved Pill ───────────────────────────────────────────────────────────────
+const SavedPill = ({ show }: { show: boolean }) => (
+  <AnimatePresence>
+    {show && (
+      <motion.span
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.8 }}
+        transition={{ duration: 0.18 }}
+        className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary border border-primary/20"
+      >
+        <Check className="h-3 w-3" /> Saved
+      </motion.span>
+    )}
+  </AnimatePresence>
+);
+
+// Pending dot shown on nav when a section has unsaved work
+const PendingDot = () => (
+  <span className="ml-auto h-1.5 w-1.5 rounded-full bg-warning shrink-0" />
+);
+
+// ─── Number Stepper ──────────────────────────────────────────────────────────
+const Stepper = ({
+  value, onChange, step = 1, min, max, className = "",
+}: {
+  value: number; onChange: (v: number) => void;
+  step?: number; min?: number; max?: number; className?: string;
+}) => {
+  const clamp = (v: number) => {
+    if (min !== undefined && v < min) return min;
+    if (max !== undefined && v > max) return max;
+    return v;
+  };
+  return (
+    <div className={`flex items-center rounded-lg border border-border/50 overflow-hidden bg-secondary/50 ${className}`}>
+      <button
+        type="button"
+        onClick={() => onChange(clamp(parseFloat((value - step).toFixed(10))))}
+        className="flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
+      >
+        <Minus className="h-3 w-3" />
+      </button>
+      <input
+        type="number"
+        value={value}
+        step={step}
+        min={min}
+        max={max}
+        onChange={(e) => {
+          const v = parseFloat(e.target.value);
+          if (!isNaN(v)) onChange(clamp(v));
+        }}
+        className="w-20 bg-transparent text-center text-sm outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      <button
+        type="button"
+        onClick={() => onChange(clamp(parseFloat((value + step).toFixed(10))))}
+        className="flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
+      >
+        <Plus className="h-3 w-3" />
+      </button>
+    </div>
+  );
 };
 
-const withAlpha = (hex: string, alpha: number) => {
-  const normalized = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : "#38bdf8";
-  const value = Math.round(alpha * 255).toString(16).padStart(2, "0");
-  return `${normalized}${value}`;
-};
+// ─── Row ────────────────────────────────────────────────────────────────────
+const Row = ({
+  icon: Icon, label, sub, control, last = false,
+}: {
+  icon?: typeof User; label: string; sub?: string; control: React.ReactNode; last?: boolean;
+}) => (
+  <div className={`flex items-center justify-between gap-6 px-4 py-3.5 ${!last ? "border-b border-border/40" : ""}`}>
+    <div className="flex items-start gap-3 min-w-0">
+      {Icon && <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+      <div className="min-w-0">
+        <p className="text-sm font-medium leading-snug">{label}</p>
+        {sub && <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{sub}</p>}
+      </div>
+    </div>
+    <div className="shrink-0">{control}</div>
+  </div>
+);
 
-const colorInputValue = (value: string) => (/^#[0-9a-fA-F]{6}$/.test(value) ? value : "#000000");
+// ─── Block ──────────────────────────────────────────────────────────────────
+const Block = ({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) => (
+  <div className="space-y-3">
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/70">{title}</p>
+      {sub && <p className="mt-0.5 text-xs text-muted-foreground">{sub}</p>}
+    </div>
+    {children}
+  </div>
+);
 
-/* ─── Appearance Preview ─── */
-const AppearancePreview = ({ appearance }: { appearance: AppSettings["appearance"] }) => {
-  const { theme, chartColors, chartOptions, chartType, layoutDensity } = appearance;
+// ─── Chart Preview ───────────────────────────────────────────────────────────
+const ChartPreview = ({ app }: { app: AppSettings["appearance"] }) => {
+  const { theme, chartColors: c, chartOptions, chartType, layoutDensity } = app;
   const isDark =
     theme === "dark" ||
-    (theme === "system" &&
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches);
-  const isCompact = layoutDensity === "compact";
+    (theme === "system" && typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const compact = layoutDensity === "compact";
+  const bg = isDark ? "#0a0a0f" : "#f0f2f5";
+  const border = isDark ? "#1e1e2a" : "#e2e4ea";
+  const muted = isDark ? "#52525b" : "#a1a1aa";
+  const pts = "8,26 20,20 32,22 44,16 56,17 68,12 80,14 92,9 104,11";
 
-  const bg = isDark ? "#0a0a0f" : "#f8f9fa";
-  const cardBg = chartColors.background;
-  const border = isDark ? "#1e1e2a" : "#e2e2e8";
-  const textMuted = isDark ? "#71717a" : "#a1a1aa";
-  const linePoints = "8,24 20,18 32,20 44,15 56,16 68,12 80,14 92,9 104,11";
-  const candlePreview = [
-    { x: 8, o: 28, c: 14, h: 10, l: 32 },
-    { x: 20, o: 14, c: 20, h: 10, l: 24 },
-    { x: 32, o: 22, c: 12, h: 8, l: 26 },
-    { x: 44, o: 12, c: 18, h: 6, l: 22 },
-    { x: 56, o: 18, c: 10, h: 6, l: 22 },
-    { x: 68, o: 10, c: 16, h: 6, l: 20 },
-    { x: 80, o: 16, c: 8, h: 4, l: 20 },
-    { x: 92, o: 8, c: 14, h: 4, l: 18 },
-    { x: 104, o: 14, c: 6, h: 2, l: 18 },
+  const candles = [
+    { x:8,  o:28, cl:14, h:10, l:32 }, { x:20, o:14, cl:20, h:10, l:24 },
+    { x:32, o:22, cl:12, h:8,  l:26 }, { x:44, o:12, cl:18, h:6,  l:22 },
+    { x:56, o:18, cl:10, h:6,  l:22 }, { x:68, o:10, cl:16, h:6,  l:20 },
+    { x:80, o:16, cl:8,  h:4,  l:20 }, { x:92, o:8,  cl:14, h:4,  l:18 },
+    { x:104,o:14, cl:6,  h:2,  l:18 },
   ];
 
   return (
-    <div
-      className="rounded-lg border overflow-hidden transition-all duration-300"
-      style={{ borderColor: border, backgroundColor: bg }}
-    >
-      <div className="px-3 py-1.5 text-[10px] font-medium" style={{ color: textMuted, borderBottom: `1px solid ${border}` }}>
-        Preview
+    <div className="overflow-hidden rounded-xl border transition-all duration-300" style={{ borderColor: border, background: bg }}>
+      <div className="border-b px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{ borderColor: border, color: muted }}>
+        Live preview
       </div>
-      <div className="p-3 flex gap-3" style={{ padding: isCompact ? "8px" : "12px" }}>
-        {/* Mini chart */}
-        <div
-          className="flex-1 rounded-md border"
-          style={{ borderColor: border, backgroundColor: cardBg, padding: isCompact ? "6px" : "10px" }}
-        >
-          <div className="text-[9px] font-medium mb-1.5" style={{ color: textMuted }}>BTC/USD</div>
-          <svg viewBox="0 0 120 40" className="w-full" style={{ height: isCompact ? 28 : 36 }}>
+      <div className="flex gap-3" style={{ padding: compact ? 10 : 14 }}>
+        {/* Chart */}
+        <div className="flex-1 overflow-hidden rounded-lg border" style={{ borderColor: border, background: c.background, padding: compact ? 8 : 12 }}>
+          <div className="mb-1.5 text-[9px] font-semibold" style={{ color: muted }}>AAPL · 1H</div>
+          <svg viewBox="0 0 120 40" className="w-full" style={{ height: compact ? 30 : 40 }}>
             {chartOptions.showGrid && (
-              <g opacity="0.45">
-                <line x1="0" x2="120" y1="12" y2="12" stroke={chartColors.grid} strokeWidth="0.5" />
-                <line x1="0" x2="120" y1="24" y2="24" stroke={chartColors.grid} strokeWidth="0.5" />
-                <line x1="30" x2="30" y1="0" y2="40" stroke={chartColors.grid} strokeWidth="0.5" />
-                <line x1="72" x2="72" y1="0" y2="40" stroke={chartColors.grid} strokeWidth="0.5" />
+              <g opacity="0.4">
+                {[12, 26].map(y => <line key={y} x1="0" x2="120" y1={y} y2={y} stroke={c.grid} strokeWidth="0.5" />)}
+                {[30, 72].map(x => <line key={x} x1={x} x2={x} y1="0" y2="40" stroke={c.grid} strokeWidth="0.5" />)}
               </g>
             )}
             {chartType === "area" && (
               <>
-                <polygon points={`8,40 ${linePoints} 104,40`} fill={withAlpha(chartColors.areaTop, 0.3)} />
-                <polyline points={linePoints} fill="none" stroke={chartColors.areaTop} strokeWidth="1.7" strokeLinecap="round" />
+                <polygon points={`8,40 ${pts} 104,40`} fill={hexAlpha(c.areaTop, 0.26)} />
+                <polyline points={pts} fill="none" stroke={c.areaTop} strokeWidth="1.7" strokeLinecap="round" />
               </>
             )}
-            {chartType === "line" && (
-              <polyline points={linePoints} fill="none" stroke={chartColors.line} strokeWidth="1.8" strokeLinecap="round" />
-            )}
-            {chartType === "candles" &&
-              candlePreview.map((c, i) => {
-                const isUp = c.c < c.o;
-                const fill = isUp ? chartColors.candleUp : chartColors.candleDown;
-                const wick = isUp ? chartColors.wickUp : chartColors.wickDown;
-                const top = Math.min(c.o, c.c);
-                const height = Math.abs(c.o - c.c) || 1;
-                return (
-                  <g key={i}>
-                    <line x1={c.x} x2={c.x} y1={c.h} y2={c.l} stroke={wick} strokeWidth="1" />
-                    <rect x={c.x - 3} y={top} width="6" height={height} fill={fill} rx="0.5" />
-                  </g>
-                );
-              })}
-            <line x1="74" x2="74" y1="4" y2="36" stroke={chartColors.crosshair} strokeWidth="0.75" opacity="0.6" />
+            {chartType === "line" && <polyline points={pts} fill="none" stroke={c.line} strokeWidth="1.8" strokeLinecap="round" />}
+            {chartType === "candles" && candles.map((cd, i) => {
+              const up = cd.cl < cd.o;
+              return (
+                <g key={i}>
+                  <line x1={cd.x} x2={cd.x} y1={cd.h} y2={cd.l} stroke={up ? c.wickUp : c.wickDown} strokeWidth="1" />
+                  <rect x={cd.x - 3} y={Math.min(cd.o, cd.cl)} width="6" height={Math.abs(cd.o - cd.cl) || 1} fill={up ? c.candleUp : c.candleDown} rx="0.5" />
+                </g>
+              );
+            })}
+            <line x1="74" x2="74" y1="3" y2="37" stroke={c.crosshair} strokeWidth="0.8" opacity="0.6" strokeDasharray="2 2" />
           </svg>
         </div>
-        {/* Mini stat card */}
-        <div
-          className="rounded-md border flex flex-col justify-between"
-          style={{
-            borderColor: border,
-            backgroundColor: cardBg,
-            padding: isCompact ? "6px 8px" : "10px 12px",
-            minWidth: 80,
-          }}
-        >
-          <div className="text-[9px]" style={{ color: textMuted }}>Win Rate</div>
-          <div className="font-bold" style={{ color: chartColors.candleUp, fontSize: isCompact ? 14 : 18 }}>68.2%</div>
-          <div className="text-[8px]" style={{ color: textMuted }}>24 trades</div>
+        {/* Stat cards */}
+        <div className="flex flex-col gap-2">
+          {[
+            { label: "Win Rate", value: "68%", color: c.candleUp },
+            { label: "P&L",      value: "+12.4%", color: c.candleUp },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="flex flex-col justify-between rounded-lg border" style={{ borderColor: border, background: c.background, padding: compact ? "6px 8px" : "8px 10px", minWidth: 68 }}>
+              <div className="text-[8px] uppercase tracking-wider" style={{ color: muted }}>{label}</div>
+              <div className="font-bold tabular-nums" style={{ color, fontSize: compact ? 13 : 16 }}>{value}</div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
   );
 };
 
-/* ─── Main Settings Page ─── */
+// ─── Option Pill row ────────────────────────────────────────────────────────
+const Pills = <T extends string>({
+  options, value, onChange, renderLabel,
+}: {
+  options: readonly T[];
+  value: T;
+  onChange: (v: T) => void;
+  renderLabel?: (v: T) => React.ReactNode;
+}) => (
+  <div className="flex gap-1.5 flex-wrap">
+    {options.map((opt) => (
+      <button
+        key={opt}
+        type="button"
+        onClick={() => onChange(opt)}
+        className={`relative flex items-center gap-1.5 rounded-lg border px-4 py-2 text-sm font-medium transition-all duration-150 ${
+          value === opt
+            ? "border-primary/40 bg-primary/10 text-primary"
+            : "border-border/50 bg-muted/20 text-muted-foreground hover:bg-muted/50 hover:text-foreground hover:border-border"
+        }`}
+      >
+        {value === opt && <Check className="h-3 w-3 shrink-0" />}
+        {renderLabel ? renderLabel(opt) : <span className="capitalize">{opt}</span>}
+      </button>
+    ))}
+  </div>
+);
+
+// ─── Main ────────────────────────────────────────────────────────────────────
 const Settings = () => {
   const { settings, updateSettings } = useSettings();
-  const { toast } = useToast();
+  const { user, logout, refreshUser } = useAuth();
 
-  const [profile, setProfile] = useState(settings.profile);
-  const [appearance, setAppearance] = useState(settings.appearance);
-  const [defaults, setDefaults] = useState(settings.backtestDefaults);
+  const [section, setSection] = useState<SectionId>("profile");
+
+  // Profile: local edit state synced from auth
+  const [nameInput, setNameInput] = useState(user?.name ?? "");
+  const [nameSaving, setNameSaving] = useState(false);
+  const nameChanged = nameInput.trim() !== (user?.name ?? "");
+
+  // Other sections
+  const [appearance, setAppearance]       = useState(settings.appearance);
+  const [defaults, setDefaults]           = useState(settings.backtestDefaults);
   const [notifications, setNotifications] = useState(settings.notifications);
 
-  // Auto-save appearance
-  const isFirstRender = useRef(true);
-  const [showSaved, setShowSaved] = useState(false);
+  // Saved flash
+  const [savedSection, setSavedSection] = useState<SectionId | null>(null);
+  const flashSaved = useCallback((id: SectionId) => {
+    setSavedSection(id);
+    setTimeout(() => setSavedSection(null), 2000);
+  }, []);
 
-  useEffect(() => {
-    if (isFirstRender.current) {
-      isFirstRender.current = false;
-      return;
+  const defaultsChanged = JSON.stringify(defaults) !== JSON.stringify(settings.backtestDefaults);
+
+  // ── Save name to backend ──
+  const saveName = useCallback(async () => {
+    const trimmed = nameInput.trim();
+    if (!trimmed || trimmed === user?.name) return;
+    setNameSaving(true);
+    try {
+      await api.updateProfile(trimmed);
+      await refreshUser();
+      flashSaved("profile");
+    } catch {
+      toast.error("Failed to save name");
+    } finally {
+      setNameSaving(false);
     }
+  }, [nameInput, user?.name, refreshUser, flashSaved]);
+
+  // Keep nameInput in sync if user changes elsewhere
+  useEffect(() => {
+    setNameInput(user?.name ?? "");
+  }, [user?.name]);
+
+  // ── Auto-save: defaults (700ms debounce) ──
+  const dDefaults = useDebounce(defaults, 700);
+  const defaultsSaveInit = useRef(true);
+  useEffect(() => {
+    if (defaultsSaveInit.current) { defaultsSaveInit.current = false; return; }
+    updateSettings({ backtestDefaults: dDefaults });
+    flashSaved("defaults");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dDefaults]);
+
+  // ── Auto-save: appearance (immediate) ──
+  const appearanceInit = useRef(true);
+  useEffect(() => {
+    if (appearanceInit.current) { appearanceInit.current = false; return; }
     updateSettings({ appearance });
-    setShowSaved(true);
-    const t = setTimeout(() => setShowSaved(false), 1500);
-    return () => clearTimeout(t);
-  }, [appearance, updateSettings]);
+    flashSaved("appearance");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appearance]);
 
-  // Auto-save notifications
-  const notifFirstRender = useRef(true);
+  // ── Auto-save: notifications (immediate) ──
+  const notifsInit = useRef(true);
   useEffect(() => {
-    if (notifFirstRender.current) {
-      notifFirstRender.current = false;
-      return;
-    }
+    if (notifsInit.current) { notifsInit.current = false; return; }
     updateSettings({ notifications });
-  }, [notifications, updateSettings]);
+    flashSaved("notifications");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notifications]);
 
-  const initials = profile.displayName
-    ? profile.displayName.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)
-    : profile.email ? profile.email[0].toUpperCase() : "?";
+  // ── Keyboard shortcuts: 1-5 to switch sections ──
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const idx = parseInt(e.key, 10) - 1;
+      if (idx >= 0 && idx < NAV.length) setSection(NAV[idx].id);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
-  const saveSection = (section: "profile" | "backtestDefaults") => {
-    if (section === "profile") {
-      updateSettings({ profile });
-    } else {
-      updateSettings({ backtestDefaults: defaults });
-    }
-    toast({ title: "Settings saved", description: "Your changes have been saved." });
+  // ── Derived ──
+  const initials = (user?.name || user?.email || "?")
+    .split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
+
+  const memberSince = user?.date_joined
+    ? new Date(user.date_joined).toLocaleDateString("en-US", { month: "long", year: "numeric" })
+    : null;
+
+  const patchAppearance = (patch: Partial<AppSettings["appearance"]>) =>
+    setAppearance((p) => ({ ...p, ...patch }));
+
+  const patchChartColor = (key: keyof ChartColors, val: string) =>
+    setAppearance((p) => ({ ...p, chartColors: { ...p.chartColors, [key]: val } }));
+
+  const patchChartOptions = (patch: Partial<AppSettings["appearance"]["chartOptions"]>) =>
+    setAppearance((p) => ({ ...p, chartOptions: { ...p.chartOptions, ...patch } }));
+
+  const applyPreset = (scheme: ChartColorScheme) =>
+    setAppearance((p) => ({ ...p, chartColorScheme: scheme, chartColors: CHART_COLOR_PRESETS[scheme] }));
+
+  const resetAllSettings = () => {
+    localStorage.removeItem("orca-settings");
+    window.location.reload();
   };
 
-  const themeOptions = [
-    { value: "dark", label: "Dark", icon: Moon },
-    { value: "light", label: "Light", icon: Sun },
-    { value: "system", label: "System", icon: Monitor },
-  ] as const;
-
-  const chartSchemes = (Object.keys(CHART_COLOR_PRESETS) as ChartColorScheme[]).map((value) => ({
-    value,
-    label: chartSchemeLabels[value],
-    colors: [
-      CHART_COLOR_PRESETS[value].candleUp,
-      CHART_COLOR_PRESETS[value].line,
-      CHART_COLOR_PRESETS[value].candleDown,
-    ],
-  }));
-
-  const updateChartColors = (patch: Partial<ChartColors>) => {
-    setAppearance({
-      ...appearance,
-      chartColors: {
-        ...appearance.chartColors,
-        ...patch,
-      },
-    });
+  const handleLogout = () => {
+    logout();
+    window.location.href = "/";
   };
 
-  const updateChartColor = (key: keyof ChartColors, value: string) => {
-    updateChartColors({ [key]: value } as Partial<ChartColors>);
+  const pending: Partial<Record<SectionId, boolean>> = {
+    profile: nameChanged,
+    defaults: defaultsChanged,
   };
 
-  const updateChartOptions = (patch: Partial<AppSettings["appearance"]["chartOptions"]>) => {
-    setAppearance({
-      ...appearance,
-      chartOptions: {
-        ...appearance.chartOptions,
-        ...patch,
-      },
-    });
+  // ── Section content ──────────────────────────────────────────────────────
+  const sections: Record<SectionId, React.ReactNode> = {
+
+    // ── PROFILE ──────────────────────────────────────────────────────────
+    profile: (
+      <div className="space-y-7">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold">Profile</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">Your name appears in the sidebar and across the platform.</p>
+          </div>
+          <SavedPill show={savedSection === "profile" && !nameChanged} />
+        </div>
+
+        {/* Avatar card */}
+        <div className="flex items-center gap-5 rounded-xl border border-border/50 bg-muted/10 px-5 py-4">
+          <div className="relative shrink-0">
+            <div className="absolute inset-0 rounded-full bg-gradient-to-br from-primary/40 to-accent/30 blur-md" />
+            <Avatar className="relative h-16 w-16 border-2 border-primary/30">
+              <AvatarFallback className="bg-gradient-to-br from-primary/20 to-accent/20 text-xl font-bold text-primary">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+          </div>
+          <div className="min-w-0">
+            <p className="truncate font-semibold">{user?.name || "—"}</p>
+            <p className="truncate text-sm text-muted-foreground">{user?.email}</p>
+            {memberSince && (
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <Calendar className="h-3 w-3 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">Member since {memberSince}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Name field */}
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Name</Label>
+            <div className="flex gap-2">
+              <Input
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveName()}
+                placeholder="Your name"
+                className="bg-secondary/40 border-border/50"
+              />
+              <Button
+                onClick={saveName}
+                disabled={!nameChanged || nameSaving}
+                size="sm"
+                className="shrink-0 px-4"
+              >
+                {nameSaving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground/60">
+              This updates your name everywhere — sidebar, dashboard greeting, and profile.
+            </p>
+          </div>
+
+          {/* Email read-only */}
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Email</Label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                type="email"
+                value={user?.email || ""}
+                readOnly
+                className="cursor-not-allowed pl-9 bg-secondary/20 border-border/30 text-muted-foreground"
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground/60">Email is bound to your account and cannot be changed here.</p>
+          </div>
+        </div>
+      </div>
+    ),
+
+    // ── APPEARANCE ───────────────────────────────────────────────────────
+    appearance: (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold">Appearance</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">Theme, charts, and layout — saves instantly.</p>
+          </div>
+          <SavedPill show={savedSection === "appearance"} />
+        </div>
+
+        <ChartPreview app={appearance} />
+
+        <Block title="Display">
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground">Theme</p>
+              <Pills
+                options={["dark", "light", "system"] as const}
+                value={appearance.theme}
+                onChange={(v) => patchAppearance({ theme: v })}
+                renderLabel={(v) => {
+                  const Icon = v === "dark" ? Moon : v === "light" ? Sun : Monitor;
+                  return <><Icon className="h-3.5 w-3.5" /><span className="capitalize">{v}</span></>;
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground">Layout density</p>
+              <Pills
+                options={["comfortable", "compact"] as const}
+                value={appearance.layoutDensity}
+                onChange={(v) => patchAppearance({ layoutDensity: v })}
+              />
+            </div>
+          </div>
+        </Block>
+
+        <Block title="Chart style" sub="Default chart type for the Charts page.">
+          <div className="grid grid-cols-3 gap-2">
+            {CHART_TYPES.map(({ value, label, icon: Icon }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => patchAppearance({ chartType: value })}
+                className={`flex items-center justify-center gap-2 rounded-xl border py-3 text-sm font-medium transition-all ${
+                  appearance.chartType === value
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border/50 bg-muted/20 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </button>
+            ))}
+          </div>
+        </Block>
+
+        <Block title="Color preset" sub="Applies a full palette — you can fine-tune below.">
+          <div className="flex gap-2 flex-wrap">
+            {(Object.keys(CHART_COLOR_PRESETS) as ChartColorScheme[]).map((scheme) => {
+              const p = CHART_COLOR_PRESETS[scheme];
+              const active = appearance.chartColorScheme === scheme;
+              return (
+                <button
+                  key={scheme}
+                  type="button"
+                  onClick={() => applyPreset(scheme)}
+                  className={`flex flex-col items-center gap-2 rounded-xl border px-5 py-3 text-sm transition-all ${
+                    active ? "border-primary/40 bg-primary/10" : "border-border/50 bg-muted/20 hover:bg-muted/50"
+                  }`}
+                >
+                  <div className="flex gap-1">
+                    {[p.candleUp, p.line, p.candleDown].map((col, i) => (
+                      <div key={i} className="h-4 w-4 rounded-full" style={{ background: col }} />
+                    ))}
+                  </div>
+                  <span className={`text-xs font-medium ${active ? "text-primary" : "text-muted-foreground"}`}>
+                    {SCHEME_LABELS[scheme]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </Block>
+
+        <Block title="Chart colors" sub="Fine-tune individual chart colors.">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {CHART_COLORS.map(({ key, label }) => (
+              <div key={key} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-muted/15 px-3 py-2.5">
+                <span className="text-xs text-muted-foreground">{label}</span>
+                <div className="flex items-center gap-2">
+                  <label className="relative cursor-pointer">
+                    <input
+                      type="color"
+                      value={safeHex(appearance.chartColors[key])}
+                      onChange={(e) => patchChartColor(key, e.target.value)}
+                      className="sr-only"
+                    />
+                    <div
+                      className="h-7 w-7 rounded-md border border-border/50 transition-transform hover:scale-110"
+                      style={{ background: appearance.chartColors[key] }}
+                    />
+                  </label>
+                  <Input
+                    value={appearance.chartColors[key]}
+                    onChange={(e) => patchChartColor(key, e.target.value)}
+                    className="h-7 w-24 font-mono text-xs bg-secondary/40 border-border/40"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Block>
+
+        <Block title="Chart overlays" sub="Default display state when you open a chart.">
+          <div className="rounded-xl border border-border/40 overflow-hidden bg-card/30 divide-y divide-border/30">
+            <Row icon={Grid3x3}     label="Grid lines"     sub="Horizontal and vertical price grid"            control={<Switch checked={appearance.chartOptions.showGrid}          onCheckedChange={(v) => patchChartOptions({ showGrid: v })} />} />
+            <Row icon={MousePointer2} label="Trade markers" sub="Entry and exit arrows on the chart"           control={<Switch checked={appearance.chartOptions.defaultShowMarkers} onCheckedChange={(v) => patchChartOptions({ defaultShowMarkers: v })} />} />
+            <Row icon={Target}      label="TP / SL zones"  sub="Take profit and stop loss shading"             control={<Switch checked={appearance.chartOptions.defaultShowTPSL}   onCheckedChange={(v) => patchChartOptions({ defaultShowTPSL: v })} />} />
+            <Row icon={Zap} label="Replay speed" sub="Bars per second during chart replay" last control={
+              <Stepper
+                value={appearance.chartOptions.replaySpeed}
+                onChange={(v) => patchChartOptions({ replaySpeed: v })}
+                step={1} min={1} max={60}
+              />
+            } />
+          </div>
+        </Block>
+      </div>
+    ),
+
+    // ── DEFAULTS ─────────────────────────────────────────────────────────
+    defaults: (
+      <div className="space-y-7">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold">Backtest Defaults</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">Pre-fill values when creating a new backtest.</p>
+          </div>
+          <SavedPill show={savedSection === "defaults" && !defaultsChanged} />
+        </div>
+
+        <Block title="Account & Risk">
+          <div className="rounded-xl border border-border/40 overflow-hidden bg-card/30 divide-y divide-border/30">
+            <Row label="Starting Balance" sub="Initial cash available to the strategy" icon={Database} control={
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">$</span>
+                <Stepper value={defaults.initialBalance} onChange={(v) => setDefaults((p) => ({ ...p, initialBalance: v }))} step={500} min={0} />
+              </div>
+            } />
+            <Row label="Take Profit %" sub="Default distance from entry — 0 disables it" icon={Target} control={
+              <div className="flex items-center gap-2">
+                <Stepper value={defaults.takeProfitPercent} onChange={(v) => setDefaults((p) => ({ ...p, takeProfitPercent: v }))} step={0.5} min={0} />
+                <span className="text-xs text-muted-foreground">%</span>
+              </div>
+            } />
+            <Row label="Stop Loss %" sub="Default SL distance — 0 disables it" icon={AlertTriangle} control={
+              <div className="flex items-center gap-2">
+                <Stepper value={defaults.stopLossPercent} onChange={(v) => setDefaults((p) => ({ ...p, stopLossPercent: v }))} step={0.5} min={0} />
+                <span className="text-xs text-muted-foreground">%</span>
+              </div>
+            } />
+            <Row label="Spread %" sub="Simulated bid/ask spread on entries and exits" icon={Activity} last control={
+              <div className="flex items-center gap-2">
+                <Stepper value={defaults.spread} onChange={(v) => setDefaults((p) => ({ ...p, spread: v }))} step={0.001} min={0} />
+                <span className="text-xs text-muted-foreground">%</span>
+              </div>
+            } />
+          </div>
+        </Block>
+
+        <Block title="Execution">
+          <div className="rounded-xl border border-border/40 overflow-hidden bg-card/30">
+            <Row label="Default Timeframe" sub="Pre-selected timeframe in the strategy builder" icon={Zap} last control={
+              <Select value={defaults.timeframe} onValueChange={(v) => setDefaults((p) => ({ ...p, timeframe: v }))}>
+                <SelectTrigger className="w-28 h-8 bg-secondary/40 border-border/40 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
+                    <SelectItem key={tf} value={tf} className="font-mono">{tf}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            } />
+          </div>
+        </Block>
+
+        <p className="text-[11px] text-muted-foreground/50">Changes save automatically after a short pause.</p>
+      </div>
+    ),
+
+    // ── NOTIFICATIONS ────────────────────────────────────────────────────
+    notifications: (
+      <div className="space-y-7">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold">Notifications</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">In-app alerts and sounds — no emails sent.</p>
+          </div>
+          <SavedPill show={savedSection === "notifications"} />
+        </div>
+
+        <Block title="Alerts">
+          <div className="rounded-xl border border-border/40 overflow-hidden bg-card/30 divide-y divide-border/30">
+            <Row icon={Activity} label="Backtest complete"     sub="Toast when a backtest finishes"          control={<Switch checked={notifications.backtestComplete}    onCheckedChange={(v) => setNotifications((p) => ({ ...p, backtestComplete: v }))} />} />
+            <Row icon={Zap}      label="Optimization complete" sub="Toast when the optimizer finishes"       control={<Switch checked={notifications.optimizationComplete} onCheckedChange={(v) => setNotifications((p) => ({ ...p, optimizationComplete: v }))} />} last />
+          </div>
+        </Block>
+
+        <Block title="Sound">
+          <div className="rounded-xl border border-border/40 overflow-hidden bg-card/30">
+            <Row
+              icon={notifications.soundEnabled ? Volume2 : VolumeX}
+              label="Sound effects"
+              sub="Chime when tasks complete"
+              last
+              control={<Switch checked={notifications.soundEnabled} onCheckedChange={(v) => setNotifications((p) => ({ ...p, soundEnabled: v }))} />}
+            />
+          </div>
+        </Block>
+
+        <div className="flex items-start gap-3 rounded-xl border border-border/30 bg-muted/10 px-4 py-3.5">
+          <Bell className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Orca only sends in-app notifications. No email or push notifications are sent. All changes save immediately.
+          </p>
+        </div>
+      </div>
+    ),
+
+    // ── ACCOUNT ──────────────────────────────────────────────────────────
+    account: (
+      <div className="space-y-7">
+        <div>
+          <h2 className="text-base font-semibold">Account</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">Your account details and security options.</p>
+        </div>
+
+        <Block title="Details">
+          <div className="rounded-xl border border-border/40 overflow-hidden bg-card/30 divide-y divide-border/30">
+            {[
+              { label: "Account ID",    value: user?.id ? `#${user.id}` : "—", mono: true },
+              { label: "Email",         value: user?.email ?? "—", badge: <Badge variant="secondary" className="text-[10px] px-1.5 py-0.5">Verified</Badge> },
+              ...(memberSince ? [{ label: "Member since", value: memberSince }] : []),
+              { label: "Plan",          value: "Free", badge: <Badge className="text-[10px] px-1.5 py-0.5 bg-primary/15 text-primary border-primary/20">Active</Badge> },
+            ].map(({ label, value, mono, badge }, i, arr) => (
+              <div key={label} className={`flex items-center justify-between px-4 py-3 ${i < arr.length - 1 ? "border-b border-border/30" : ""}`}>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">{label}</p>
+                <div className="flex items-center gap-2">
+                  <span className={`text-sm ${mono ? "font-mono" : "font-medium"}`}>{value}</span>
+                  {badge}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Block>
+
+        <Block title="Session">
+          <div className="rounded-xl border border-border/40 overflow-hidden bg-card/30">
+            <div className="flex items-center justify-between px-4 py-4">
+              <div className="flex items-center gap-3">
+                <LogOut className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">Sign out</p>
+                  <p className="text-xs text-muted-foreground">End your session on this device</p>
+                </div>
+              </div>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" size="sm" className="gap-1.5">
+                    <LogOut className="h-3.5 w-3.5" /> Sign out
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Sign out?</AlertDialogTitle>
+                    <AlertDialogDescription>You'll need to sign in again to access your account.</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleLogout}>Sign out</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          </div>
+        </Block>
+
+        <Block title="Data & settings">
+          <div className="rounded-xl border border-border/40 overflow-hidden bg-card/30">
+            <div className="flex items-center justify-between px-4 py-4">
+              <div className="flex items-center gap-3">
+                <RotateCcw className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">Reset local settings</p>
+                  <p className="text-xs text-muted-foreground">Restore theme, colors, and defaults. No data is deleted.</p>
+                </div>
+              </div>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" size="sm" className="gap-1.5">
+                    <RotateCcw className="h-3.5 w-3.5" /> Reset
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Reset all settings?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This restores all appearance and default backtest settings to factory values. Your strategies, history, and indicators are not affected.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={resetAllSettings} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                      Reset settings
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          </div>
+        </Block>
+
+        <Block title="Danger zone">
+          <div className="rounded-xl border border-destructive/25 bg-destructive/5 overflow-hidden">
+            <div className="flex items-start justify-between gap-4 px-4 py-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <div>
+                  <p className="text-sm font-medium text-destructive">Delete account</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Permanently removes your account, strategies, and all associated data.
+                  </p>
+                </div>
+              </div>
+              <Button variant="outline" size="sm" disabled className="border-destructive/30 text-destructive/60 shrink-0">
+                Contact support
+              </Button>
+            </div>
+          </div>
+        </Block>
+      </div>
+    ),
   };
 
   return (
-    <DashboardLayout
-      title="Settings"
-      metaDescription="Configure your ORCA trading platform settings"
-      maxWidth="max-w-3xl"
-    >
+    <DashboardLayout title="Settings" metaDescription="Configure your Orca workspace" maxWidth="max-w-5xl">
       <PageHeader
         icon={SlidersHorizontal}
-        eyebrow="Your workspace"
+        eyebrow="Workspace"
         title="Settings"
-        description="Manage your profile, appearance, and backtest defaults."
+        description="Profile, appearance, backtest defaults, and account management."
       />
 
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
-            <Tabs defaultValue="profile" className="space-y-6">
-              <TabsList className="border border-border/70 bg-card/60 backdrop-blur-xl">
-                <TabsTrigger value="profile" className="gap-1.5 text-xs">
-                  <User className="h-3.5 w-3.5" /> Profile
-                </TabsTrigger>
-                <TabsTrigger value="appearance" className="gap-1.5 text-xs">
-                  <Palette className="h-3.5 w-3.5" /> Appearance
-                </TabsTrigger>
-                <TabsTrigger value="defaults" className="gap-1.5 text-xs">
-                  <SlidersHorizontal className="h-3.5 w-3.5" /> Backtest Defaults
-                </TabsTrigger>
-                <TabsTrigger value="notifications" className="gap-1.5 text-xs">
-                  <Bell className="h-3.5 w-3.5" /> Notifications
-                </TabsTrigger>
-              </TabsList>
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.28 }}
+        className="flex gap-6"
+      >
+        {/* ── Left nav (desktop) ── */}
+        <aside className="hidden md:flex flex-col w-52 shrink-0">
+          <nav className="sticky top-6 space-y-0.5">
+            {NAV.map(({ id, label, icon: Icon, shortcut }) => {
+              const active = section === id;
+              const hasPending = !!pending[id];
+              return (
+                <button
+                  key={id}
+                  onClick={() => setSection(id)}
+                  className={`group relative flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all duration-150 ${
+                    active
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                  }`}
+                >
+                  {/* active accent strip */}
+                  <span
+                    className={`absolute left-0 top-1/2 -translate-y-1/2 w-0.5 rounded-r-full transition-all duration-200 ${
+                      active ? "h-5 bg-primary" : "h-0"
+                    }`}
+                  />
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="flex-1 text-left">{label}</span>
+                  {/* keyboard shortcut badge */}
+                  <kbd className={`hidden rounded px-1.5 py-0.5 text-[10px] font-mono transition-opacity group-hover:flex ${active ? "hidden" : ""}`}
+                    style={{ opacity: 0.4 }}>
+                    {shortcut}
+                  </kbd>
+                  {hasPending && <PendingDot />}
+                </button>
+              );
+            })}
 
-              {/* ─── Profile ─── */}
-              <TabsContent value="profile">
-                <Card className="glass-card border-border/70">
-                  <CardHeader>
-                    <CardTitle className="text-lg">Profile</CardTitle>
-                    <CardDescription>Your display name and email.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
-                    <div className="flex items-center gap-4">
-                      <Avatar className="h-16 w-16 border-2 border-primary/20">
-                        <AvatarFallback className="bg-primary/10 text-primary text-lg font-semibold">
-                          {initials}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="text-sm text-muted-foreground">Avatar is generated from your initials.</div>
-                    </div>
-                    <div className="grid gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="displayName">Display Name</Label>
-                        <Input id="displayName" value={profile.displayName} onChange={(e) => setProfile({ ...profile, displayName: e.target.value })} placeholder="Your name" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="email">Email</Label>
-                        <Input id="email" type="email" value={profile.email} onChange={(e) => setProfile({ ...profile, email: e.target.value })} placeholder="you@example.com" />
-                      </div>
-                    </div>
-                    <Button onClick={() => saveSection("profile")} className="gap-1.5">
-                      <Save className="h-3.5 w-3.5" /> Save Profile
-                    </Button>
-                  </CardContent>
-                </Card>
-              </TabsContent>
+            {/* Keyboard hint */}
+            <div className="mt-4 rounded-lg border border-border/30 bg-muted/10 px-3 py-2.5">
+              <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
+                Press <kbd className="rounded bg-muted/40 px-1 font-mono text-[9px]">1</kbd>–<kbd className="rounded bg-muted/40 px-1 font-mono text-[9px]">5</kbd> to jump between sections
+              </p>
+            </div>
+          </nav>
+        </aside>
 
-              {/* ─── Appearance ─── */}
-              <TabsContent value="appearance">
-                <Card className="glass-card border-border/70">
-                  <CardHeader className="flex flex-row items-center justify-between">
-                    <div>
-                      <CardTitle className="text-lg">Appearance</CardTitle>
-                      <CardDescription>Theme, chart colors, and layout density.</CardDescription>
-                    </div>
-                    <AnimatePresence>
-                      {showSaved && (
-                        <motion.div
-                          initial={{ opacity: 0, x: 8 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          exit={{ opacity: 0 }}
-                          className="flex items-center gap-1 text-xs text-primary"
-                        >
-                          <Check className="h-3.5 w-3.5" /> Saved
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
-                    {/* Live Preview */}
-                    <AppearancePreview appearance={appearance} />
+        {/* ── Mobile scroll nav ── */}
+        <div className="md:hidden flex gap-1 overflow-x-auto pb-2 w-full shrink-0 -mx-1 px-1">
+          {NAV.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setSection(id)}
+              className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium whitespace-nowrap transition-all ${
+                section === id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted/40"
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+              {!!pending[id] && <span className="h-1.5 w-1.5 rounded-full bg-warning" />}
+            </button>
+          ))}
+        </div>
 
-                    {/* Theme */}
-                    <div className="space-y-3">
-                      <Label>Theme</Label>
-                      <div className="flex gap-2">
-                        {themeOptions.map(({ value, label, icon: Icon }) => (
-                          <button
-                            key={value}
-                            onClick={() => setAppearance({ ...appearance, theme: value })}
-                            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-all ${
-                              appearance.theme === value
-                                ? "border-primary bg-primary/10 text-primary"
-                                : "border-border bg-muted/30 text-muted-foreground hover:bg-muted/50"
-                            }`}
-                          >
-                            <Icon className="h-4 w-4" />
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+        {/* ── Content panel ── */}
+        <div className="flex-1 min-w-0">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={section}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
+              className="glass-card p-6"
+            >
+              {sections[section]}
+            </motion.div>
+          </AnimatePresence>
 
-                    {/* Chart Type */}
-                    <div className="space-y-3">
-                      <Label>Chart Type</Label>
-                      <div className="grid grid-cols-3 gap-2">
-                        {chartTypeOptions.map(({ value, label, icon: Icon }) => (
-                          <button
-                            key={value}
-                            onClick={() => setAppearance({ ...appearance, chartType: value })}
-                            className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all ${
-                              appearance.chartType === value
-                                ? "border-primary bg-primary/10 text-primary"
-                                : "border-border bg-muted/30 text-muted-foreground hover:bg-muted/50"
-                            }`}
-                          >
-                            <Icon className="h-4 w-4" />
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Chart Color Scheme */}
-                    <div className="space-y-3">
-                      <Label>Chart Preset</Label>
-                      <div className="flex gap-3">
-                        {chartSchemes.map(({ value, label, colors }) => (
-                          <button
-                            key={value}
-                            onClick={() =>
-                              setAppearance({
-                                ...appearance,
-                                chartColorScheme: value,
-                                chartColors: CHART_COLOR_PRESETS[value],
-                              })
-                            }
-                            className={`flex flex-col items-center gap-2 px-4 py-3 rounded-lg border text-sm transition-all ${
-                              appearance.chartColorScheme === value
-                                ? "border-primary bg-primary/10"
-                                : "border-border bg-muted/30 hover:bg-muted/50"
-                            }`}
-                          >
-                            <div className="flex gap-1">
-                              {colors.map((c, i) => (
-                                <div key={i} className="w-5 h-5 rounded-full" style={{ backgroundColor: c }} />
-                              ))}
-                            </div>
-                            <span className={appearance.chartColorScheme === value ? "text-primary font-medium" : "text-muted-foreground"}>
-                              {label}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Chart Colors */}
-                    <div className="space-y-3">
-                      <Label>Chart Colors</Label>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {colorFields.map(({ key, label }) => (
-                          <div key={key} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3">
-                            <Label htmlFor={`chart-${key}`} className="text-xs text-muted-foreground">
-                              {label}
-                            </Label>
-                            <div className="flex items-center gap-2">
-                              <Input
-                                id={`chart-${key}`}
-                                type="color"
-                                value={colorInputValue(appearance.chartColors[key])}
-                                onChange={(e) => updateChartColor(key, e.target.value)}
-                                className="h-9 w-12 cursor-pointer p-1"
-                              />
-                              <Input
-                                value={appearance.chartColors[key]}
-                                onChange={(e) => updateChartColor(key, e.target.value)}
-                                className="h-9 w-24 font-mono text-xs"
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Chart Defaults */}
-                    <div className="space-y-3">
-                      <Label>Chart Defaults</Label>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="flex items-center justify-between rounded-lg border border-border bg-muted/20 p-3">
-                          <div className="flex items-center gap-2 text-sm">
-                            <Grid3x3 className="h-4 w-4 text-muted-foreground" />
-                            Grid
-                          </div>
-                          <Switch
-                            checked={appearance.chartOptions.showGrid}
-                            onCheckedChange={(v) => updateChartOptions({ showGrid: v })}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between rounded-lg border border-border bg-muted/20 p-3">
-                          <div className="flex items-center gap-2 text-sm">
-                            <MousePointer2 className="h-4 w-4 text-muted-foreground" />
-                            Trade Markers
-                          </div>
-                          <Switch
-                            checked={appearance.chartOptions.defaultShowMarkers}
-                            onCheckedChange={(v) => updateChartOptions({ defaultShowMarkers: v })}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between rounded-lg border border-border bg-muted/20 p-3">
-                          <div className="flex items-center gap-2 text-sm">
-                            <Target className="h-4 w-4 text-muted-foreground" />
-                            TP/SL Zones
-                          </div>
-                          <Switch
-                            checked={appearance.chartOptions.defaultShowTPSL}
-                            onCheckedChange={(v) => updateChartOptions({ defaultShowTPSL: v })}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3">
-                          <Label htmlFor="replay-speed" className="text-sm">
-                            Replay Speed
-                          </Label>
-                          <Input
-                            id="replay-speed"
-                            type="number"
-                            min={1}
-                            max={60}
-                            value={appearance.chartOptions.replaySpeed}
-                            onChange={(e) => {
-                              const value = Math.max(1, Math.min(60, Number(e.target.value) || 1));
-                              updateChartOptions({ replaySpeed: value });
-                            }}
-                            className="h-9 w-20"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Layout Density */}
-                    <div className="space-y-3">
-                      <Label>Layout Density</Label>
-                      <div className="flex gap-2">
-                        {(["compact", "comfortable"] as const).map((d) => (
-                          <button
-                            key={d}
-                            onClick={() => setAppearance({ ...appearance, layoutDensity: d })}
-                            className={`px-4 py-2.5 rounded-lg border text-sm font-medium capitalize transition-all ${
-                              appearance.layoutDensity === d
-                                ? "border-primary bg-primary/10 text-primary"
-                                : "border-border bg-muted/30 text-muted-foreground hover:bg-muted/50"
-                            }`}
-                          >
-                            {d}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              {/* ─── Backtest Defaults ─── */}
-              <TabsContent value="defaults">
-                <Card className="glass-card border-border/70">
-                  <CardHeader>
-                    <CardTitle className="text-lg">Default Backtest Parameters</CardTitle>
-                    <CardDescription>Pre-fill values when creating a new backtest.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="balance">Starting Balance ($)</Label>
-                        <Input id="balance" type="number" value={defaults.initialBalance} onChange={(e) => setDefaults({ ...defaults, initialBalance: Number(e.target.value) })} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="spread">Spread</Label>
-                        <Input id="spread" type="number" step="0.001" value={defaults.spread} onChange={(e) => setDefaults({ ...defaults, spread: Number(e.target.value) })} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="tp">Take Profit %</Label>
-                        <Input id="tp" type="number" value={defaults.takeProfitPercent} onChange={(e) => setDefaults({ ...defaults, takeProfitPercent: Number(e.target.value) })} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="sl">Stop Loss %</Label>
-                        <Input id="sl" type="number" value={defaults.stopLossPercent} onChange={(e) => setDefaults({ ...defaults, stopLossPercent: Number(e.target.value) })} />
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="timeframe">Default Timeframe</Label>
-                      <Select value={defaults.timeframe} onValueChange={(v) => setDefaults({ ...defaults, timeframe: v })}>
-                        <SelectTrigger id="timeframe" className="w-48">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
-                            <SelectItem key={tf} value={tf}>{tf}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <Button onClick={() => saveSection("backtestDefaults")} className="gap-1.5">
-                      <Save className="h-3.5 w-3.5" /> Save Defaults
-                    </Button>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              {/* ─── Notifications ─── */}
-              <TabsContent value="notifications">
-                <Card className="glass-card border-border/70">
-                  <CardHeader>
-                    <CardTitle className="text-lg">Notifications & Alerts</CardTitle>
-                    <CardDescription>Control in-app notifications and sound effects.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-5">
-                    <div className="flex items-center justify-between py-2 border-b border-border">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">Backtest Complete</div>
-                        <div className="text-xs text-muted-foreground">Show a toast when a backtest finishes running</div>
-                      </div>
-                      <Switch
-                        checked={notifications.backtestComplete}
-                        onCheckedChange={(v) => setNotifications({ ...notifications, backtestComplete: v })}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between py-2 border-b border-border">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">Optimization Complete</div>
-                        <div className="text-xs text-muted-foreground">Show a toast when the parameter optimizer finishes</div>
-                      </div>
-                      <Switch
-                        checked={notifications.optimizationComplete}
-                        onCheckedChange={(v) => setNotifications({ ...notifications, optimizationComplete: v })}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between py-2">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">Sound Effects</div>
-                        <div className="text-xs text-muted-foreground">Play a chime when tasks complete</div>
-                      </div>
-                      <Switch
-                        checked={notifications.soundEnabled}
-                        onCheckedChange={(v) => setNotifications({ ...notifications, soundEnabled: v })}
-                      />
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-            </Tabs>
+          {/* Section breadcrumb (mobile) */}
+          <div className="md:hidden mt-3 flex items-center gap-1.5 text-xs text-muted-foreground px-1">
+            <SlidersHorizontal className="h-3 w-3" />
+            <ChevronRight className="h-3 w-3" />
+            <span>{NAV.find((n) => n.id === section)?.label}</span>
+          </div>
+        </div>
       </motion.div>
     </DashboardLayout>
   );
