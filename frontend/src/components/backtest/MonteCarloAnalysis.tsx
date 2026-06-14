@@ -276,6 +276,63 @@ const runMonteCarloSimulation = (
   };
 };
 
+// Tooltip that only shows the 6 percentile/mean bands — filters out the 500
+// individual path series so the tooltip is compact and never overflows.
+const BAND_KEYS: Record<string, string> = {
+  p95: "95th %ile",
+  p75: "75th %ile",
+  p50: "Median",
+  mean: "Mean",
+  p25: "25th %ile",
+  p5: "5th %ile",
+};
+
+const MCTooltip = ({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: Array<{ dataKey: string; value: number }>;
+  label?: number;
+}) => {
+  if (!active || !payload || payload.length === 0) return null;
+
+  const rows = payload
+    .filter((p) => BAND_KEYS[p.dataKey] !== undefined)
+    .sort((a, b) => Object.keys(BAND_KEYS).indexOf(a.dataKey) - Object.keys(BAND_KEYS).indexOf(b.dataKey));
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        background: "hsl(var(--card))",
+        border: "1px solid hsl(var(--border))",
+        borderRadius: 8,
+        padding: "10px 14px",
+        fontSize: 12,
+        pointerEvents: "none",
+        minWidth: 180,
+      }}
+    >
+      <p style={{ color: "hsl(var(--muted-foreground))", marginBottom: 8, fontWeight: 500 }}>
+        Trade {label}
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {rows.map((p) => (
+          <div key={p.dataKey} style={{ display: "flex", justifyContent: "space-between", gap: 20 }}>
+            <span style={{ color: "hsl(var(--muted-foreground))" }}>{BAND_KEYS[p.dataKey]}</span>
+            <span style={{ fontFamily: "monospace", fontWeight: 600, color: "hsl(var(--foreground))" }}>
+              ${p.value != null ? Math.round(p.value).toLocaleString() : "—"}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
   const { settings } = useSettings();
   const chartColors = settings.appearance.chartColors;
@@ -383,17 +440,57 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
 
   // Format metrics for display
   const mcMetrics = results ? [
-    { icon: TrendingUp, label: "Expected Return", value: `${results.metrics.expectedReturn >= 0 ? '+' : ''}${results.metrics.expectedReturn.toFixed(1)}%`, color: results.metrics.expectedReturn >= 0 ? "text-success" : "text-destructive" },
-    { icon: Target, label: "Median Return", value: `${results.metrics.medianReturn >= 0 ? '+' : ''}${results.metrics.medianReturn.toFixed(1)}%`, color: results.metrics.medianReturn >= 0 ? "text-success" : "text-destructive" },
-    { icon: TrendingDown, label: "VaR (95%)", value: `${results.metrics.var95.toFixed(1)}%`, color: "text-destructive" },
-    { icon: Percent, label: "CVaR (95%)", value: `${results.metrics.cvar95.toFixed(1)}%`, color: "text-destructive" },
+    {
+      icon: TrendingUp,
+      label: "Expected Return",
+      value: `${results.metrics.expectedReturn >= 0 ? '+' : ''}${results.metrics.expectedReturn.toFixed(1)}%`,
+      color: results.metrics.expectedReturn >= 0 ? "text-success" : "text-destructive",
+      hint: "The average final return across all simulated scenarios — what you'd statistically expect if you ran this strategy many times forward.",
+    },
+    {
+      icon: Target,
+      label: "Median Return",
+      value: `${results.metrics.medianReturn >= 0 ? '+' : ''}${results.metrics.medianReturn.toFixed(1)}%`,
+      color: results.metrics.medianReturn >= 0 ? "text-success" : "text-destructive",
+      hint: "The midpoint return — exactly half of all simulations finished above this, half below. Less skewed by extreme outlier paths than the mean.",
+    },
+    {
+      icon: TrendingDown,
+      label: "VaR (95%)",
+      value: `${results.metrics.var95.toFixed(1)}%`,
+      color: "text-destructive",
+      hint: "Value at Risk — 95% of simulated scenarios ended better than this figure. It marks the boundary of the worst 5% of possible outcomes.",
+    },
+    {
+      icon: Percent,
+      label: "CVaR (95%)",
+      value: `${results.metrics.cvar95.toFixed(1)}%`,
+      color: "text-destructive",
+      hint: "Conditional VaR (also called Expected Shortfall) — the average return of the worst 5% of scenarios. Tells you how bad things get when they do go wrong.",
+    },
   ] : [];
 
   const probabilityMetrics = results ? [
-    { label: "P(Return > 0%)", value: `${results.metrics.probPositive.toFixed(1)}%` },
-    { label: "P(Return > 10%)", value: `${results.metrics.probGt10.toFixed(1)}%` },
-    { label: "P(Return > 20%)", value: `${results.metrics.probGt20.toFixed(1)}%` },
-    { label: "P(Drawdown > 20%)", value: `${results.metrics.probDrawdown20.toFixed(1)}%` },
+    {
+      label: "P(Return > 0%)",
+      value: `${results.metrics.probPositive.toFixed(1)}%`,
+      hint: "How often this strategy ended with any profit at all across all simulated scenarios.",
+    },
+    {
+      label: "P(Return > 10%)",
+      value: `${results.metrics.probGt10.toFixed(1)}%`,
+      hint: "Percentage of simulations that returned more than 10% over the forward period.",
+    },
+    {
+      label: "P(Return > 20%)",
+      value: `${results.metrics.probGt20.toFixed(1)}%`,
+      hint: "Percentage of simulations that returned more than 20% over the forward period.",
+    },
+    {
+      label: "P(Drawdown > 20%)",
+      value: `${results.metrics.probDrawdown20.toFixed(1)}%`,
+      hint: "How often the simulated portfolio dropped more than 20% from its peak at some point during the run.",
+    },
   ] : [];
 
   return (
@@ -612,9 +709,19 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                 transition={{ duration: 0.3, delay: index * 0.05 }}
                 className="p-4 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
               >
-                <div className="flex items-center gap-2 mb-2">
-                  <metric.icon className="h-4 w-4 text-muted-foreground" />
+                <div className="flex items-center gap-1.5 mb-2">
+                  <metric.icon className="h-4 w-4 text-muted-foreground shrink-0" />
                   <span className="text-xs text-muted-foreground">{metric.label}</span>
+                  <TooltipProvider delayDuration={150}>
+                    <UITooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3 w-3 text-muted-foreground/40 hover:text-muted-foreground cursor-help ml-auto shrink-0 transition-colors" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[220px] text-xs leading-relaxed">
+                        {metric.hint}
+                      </TooltipContent>
+                    </UITooltip>
+                  </TooltipProvider>
                 </div>
                 <p className={`text-xl font-bold font-mono ${metric.color}`}>{metric.value}</p>
               </motion.div>
@@ -717,23 +824,8 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
                     tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
                     domain={['auto', 'auto']}
                   />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
-                    formatter={(value: number, name: string) => {
-                      if (name === 'p95') return [`$${value.toFixed(0)}`, '95th %ile'];
-                      if (name === 'p75') return [`$${value.toFixed(0)}`, '75th %ile'];
-                      if (name === 'p50') return [`$${value.toFixed(0)}`, 'Median'];
-                      if (name === 'p25') return [`$${value.toFixed(0)}`, '25th %ile'];
-                      if (name === 'p5') return [`$${value.toFixed(0)}`, '5th %ile'];
-                      if (name === 'mean') return [`$${value.toFixed(0)}`, 'Mean'];
-                      return [`$${value.toFixed(0)}`, 'Equity'];
-                    }}
-                    labelFormatter={(label) => `Trade ${label}`}
-                  />
+                  {/* Pin y near top of chart so it never spills into sections below */}
+                  <Tooltip content={<MCTooltip />} position={{ y: 8 }} />
 
                   {/* 5th-95th Percentile Band */}
                   <Area
@@ -922,7 +1014,19 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
               <div className="grid grid-cols-2 gap-4">
                 {probabilityMetrics.map((metric, index) => (
                   <div key={index} className="p-4 rounded-lg bg-muted/30 border border-border">
-                    <p className="text-xs text-muted-foreground mb-2">{metric.label}</p>
+                    <div className="flex items-center gap-1 mb-2">
+                      <p className="text-xs text-muted-foreground">{metric.label}</p>
+                      <TooltipProvider delayDuration={150}>
+                        <UITooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3 w-3 text-muted-foreground/40 hover:text-muted-foreground cursor-help ml-auto shrink-0 transition-colors" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-[220px] text-xs leading-relaxed">
+                            {metric.hint}
+                          </TooltipContent>
+                        </UITooltip>
+                      </TooltipProvider>
+                    </div>
                     <p className="text-2xl font-bold font-mono text-primary">{metric.value}</p>
                   </div>
                 ))}

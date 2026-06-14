@@ -7,7 +7,14 @@ import {
   Activity,
   AlertTriangle,
   TrendingUp,
+  Info,
 } from "lucide-react";
+import {
+  Tooltip as UITooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   AreaChart,
   Area,
@@ -122,6 +129,7 @@ const GarchAnalysis = ({ results }: RiskAnalysisProps) => {
       label: "Sharpe Ratio",
       value: fmtRatio(m.sharpe),
       sub: "Per-trade risk-adjusted return",
+      hint: "Return earned per unit of total risk. Above 1 is decent, above 2 is strong. Negative means losses outweighed gains on a risk-adjusted basis.",
       color:
         m.sharpe === null
           ? "text-foreground"
@@ -134,6 +142,7 @@ const GarchAnalysis = ({ results }: RiskAnalysisProps) => {
       label: "Sortino Ratio",
       value: fmtRatio(m.sortino),
       sub: "Downside deviation adjusted",
+      hint: "Like the Sharpe Ratio but only penalises downside volatility — a strategy that swings upward a lot won't be unfairly punished. Higher is better.",
       color:
         m.sortino === null
           ? "text-foreground"
@@ -146,6 +155,7 @@ const GarchAnalysis = ({ results }: RiskAnalysisProps) => {
       label: "Calmar Ratio",
       value: fmtRatio(m.calmar),
       sub: "Return ÷ max drawdown",
+      hint: "Total return divided by the maximum drawdown. Shows how much return you earned relative to the worst dip you had to sit through. Above 1 is healthy.",
       color:
         m.calmar === null
           ? "text-foreground"
@@ -160,6 +170,7 @@ const GarchAnalysis = ({ results }: RiskAnalysisProps) => {
       label: "Max Drawdown",
       value: `${m.maxDrawdownPct.toFixed(2)}%`,
       sub: `Peak duration: ${m.maxDuration} trade${m.maxDuration !== 1 ? "s" : ""}`,
+      hint: "The largest peak-to-trough drop in portfolio value during the backtest. Represents the worst loss a user of this strategy would have had to stomach.",
       color:
         m.maxDrawdownPct > -5
           ? "text-success"
@@ -172,6 +183,7 @@ const GarchAnalysis = ({ results }: RiskAnalysisProps) => {
       label: "VaR (95%)",
       value: m.var95 === null ? "—" : fmtPct(m.var95 * 100),
       sub: "Worst 5% of trade outcomes",
+      hint: "Value at Risk — in the worst 5% of individual trades this strategy took, you'd expect at least this percentage loss per trade.",
       color:
         m.var95 === null
           ? "text-foreground"
@@ -184,6 +196,7 @@ const GarchAnalysis = ({ results }: RiskAnalysisProps) => {
       label: "Total Return",
       value: fmtPct(results.pct_change),
       sub: `Starting equity $${m.startEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      hint: "Overall percentage gain or loss on starting capital across the entire backtest period.",
       color: results.pct_change >= 0 ? "text-success" : "text-destructive",
     },
   ];
@@ -232,9 +245,19 @@ const GarchAnalysis = ({ results }: RiskAnalysisProps) => {
                 transition={{ duration: 0.3, delay: 0.05 + i * 0.04 }}
                 className="p-4 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
               >
-                <div className="flex items-center gap-2 mb-2">
-                  <tile.icon className="h-4 w-4 text-muted-foreground" />
+                <div className="flex items-center gap-1.5 mb-2">
+                  <tile.icon className="h-4 w-4 text-muted-foreground shrink-0" />
                   <span className="text-xs text-muted-foreground">{tile.label}</span>
+                  <TooltipProvider delayDuration={150}>
+                    <UITooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3 w-3 text-muted-foreground/40 hover:text-muted-foreground cursor-help ml-auto shrink-0 transition-colors" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[220px] text-xs leading-relaxed">
+                        {tile.hint}
+                      </TooltipContent>
+                    </UITooltip>
+                  </TooltipProvider>
                 </div>
                 <p className={`text-xl font-bold font-mono ${tile.color}`}>{tile.value}</p>
                 <p className="text-xs text-muted-foreground mt-1">{tile.sub}</p>
