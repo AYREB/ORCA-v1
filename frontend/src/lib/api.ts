@@ -263,7 +263,8 @@ export interface StrategyAssistantContext {
   riskManagement: {
     takeProfitPercent: number;
     stopLossPercent: number;
-    spread: number;
+    feeMode: "commission" | "spread";
+    feeValue: number;
   };
   markets: {
     tickers: string[];

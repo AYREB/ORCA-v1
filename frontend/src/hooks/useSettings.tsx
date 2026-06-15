@@ -34,7 +34,8 @@ export interface AppSettings {
   };
   backtestDefaults: {
     initialBalance: number;
-    spread: number;
+    feeMode: "commission" | "spread";
+    feeValue: number;
     takeProfitPercent: number;
     stopLossPercent: number;
     timeframe: string;
@@ -103,7 +104,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
   backtestDefaults: {
     initialBalance: 10000,
-    spread: 0.001,
+    feeMode: "commission" as const,
+    feeValue: 0.1,
     takeProfitPercent: 10,
     stopLossPercent: 6,
     timeframe: "1h",

@@ -66,7 +66,9 @@ export function ArgumentSelector({
   const hiddenArgs = [
     "takeProfitPercent",
     "stopLossPercent",
-    "spread"
+    "spread",
+    "fee_mode",
+    "fee_value",
   ];
   const topLevelArgs = Object.keys(availableArgs).filter((a) => !availableArgs[a]?.parent && !hiddenArgs.includes(a));
 

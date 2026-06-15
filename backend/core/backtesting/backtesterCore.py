@@ -4,8 +4,22 @@ from .BacktesterHelpers.DSLArgumentParser import get_long_short_conditions, get_
 from .BacktesterHelpers.CalculateShares import calculate_shares
 from core.parsing.extractingTickers import extract_execution_timeframe, extract_data_timeframes, extract_dateframe
 
-# ---------------- SPREAD HELPERS ---------------- #
+# ---------------- TRANSACTION COST HELPERS ---------------- #
+# cost_factor is applied per-leg:
+#   commission mode → cost_factor = fee_value / 100   (each leg costs fee_value %)
+#   spread mode     → cost_factor = fee_value / 200   (half-spread per leg)
+# Round-trip cost:  commission = 2 × fee_value%,  spread = fee_value%
 
+def apply_entry_cost(price, is_long, cost_factor):
+    """Buyer pays above mid (long) or seller receives below mid (short)."""
+    return price * (1 + cost_factor) if is_long else price * (1 - cost_factor)
+
+def apply_exit_cost(price, is_long, cost_factor):
+    """Seller receives below mid (long) or buyer pays above mid (short)."""
+    return price * (1 - cost_factor) if is_long else price * (1 + cost_factor)
+
+
+# Legacy aliases kept for any callers that imported these directly.
 def apply_buy_spread(price, half_spread):
     return price * (1 + half_spread)
 
@@ -68,7 +82,23 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
     trade_end_at = parse_datetime_bound(dateframe.get("end"))
     trade_end_is_exclusive = is_date_only_bound(dateframe.get("end"))
 
-    half_spread = open_args.get("spread", 0) / 200.0  # divide by 100 for pct, then by 2 for half
+    # Transaction cost factor applied per leg.
+    # New keys: fee_mode ("commission"|"spread") + fee_value (%)
+    # Legacy key: "spread" is treated as spread mode for backward compat.
+    if "fee_value" in open_args:
+        fee_mode  = open_args.get("fee_mode", "commission")
+        fee_value = float(open_args.get("fee_value", 0))
+    elif "spread" in open_args:
+        fee_mode  = "spread"
+        fee_value = float(open_args.get("spread", 0))
+    else:
+        fee_mode  = "commission"
+        fee_value = 0.0
+
+    if fee_mode == "spread":
+        cost_factor = fee_value / 200.0   # half-spread per leg → full spread round-trip
+    else:
+        cost_factor = fee_value / 100.0   # commission per leg → 2× round-trip
 
     invest_type   = open_args.get("initialOpenPositionInvestType", "percentCashBalance")
     invest_amount = open_args.get("initialOpenPositionInvestAmount", 0.2)
@@ -158,7 +188,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                 )
                 if result:
                     market_price = current_prices[ticker]
-                    exec_price = (apply_buy_spread if is_long else apply_sell_spread)(market_price, half_spread)
+                    exec_price = apply_entry_cost(market_price, is_long, cost_factor)
 
                     shares = calculate_shares(cash, exec_price, invest_type, invest_amount,
                                               allow_fractional, fractional_precision, sl_pct=sl_pct)
@@ -191,7 +221,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                         (max_recurs == 0 or recurring_count[ticker] < max_recurs)):
 
                     market_price = current_prices[ticker]
-                    exec_price = (apply_buy_spread if is_long else apply_sell_spread)(market_price, half_spread)
+                    exec_price = apply_entry_cost(market_price, is_long, cost_factor)
 
                     shares = calculate_shares(cash, exec_price, rec_type, rec_amt,
                                               allow_fractional, fractional_precision)
@@ -248,7 +278,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
 
                 if close_price is not None:
                     shares = abs(positions[ticker])
-                    exec_price = (apply_sell_spread if is_long else apply_buy_spread)(close_price, half_spread)
+                    exec_price = apply_exit_cost(close_price, is_long, cost_factor)
                     cash += shares * exec_price * (1 if is_long else -1)
                     positions[ticker] = 0
                     entry_index[ticker] = None

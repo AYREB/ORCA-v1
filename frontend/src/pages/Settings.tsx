@@ -669,10 +669,32 @@ const Settings = () => {
                 <span className="text-xs text-muted-foreground">%</span>
               </div>
             } />
-            <Row label="Spread %" sub="Simulated bid/ask spread on entries and exits" icon={Activity} last control={
-              <div className="flex items-center gap-2">
-                <Stepper value={defaults.spread} onChange={(v) => setDefaults((p) => ({ ...p, spread: v }))} step={0.001} min={0} />
-                <span className="text-xs text-muted-foreground">%</span>
+            <Row label="Transaction Costs" sub={
+              defaults.feeMode === "commission"
+                ? `Commission per trade · round-trip ${(defaults.feeValue * 2).toFixed(2)}%`
+                : `Bid-ask spread · round-trip ${defaults.feeValue.toFixed(2)}%`
+            } icon={Activity} last control={
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1">
+                  {(["commission", "spread"] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setDefaults((p) => ({ ...p, feeMode: m }))}
+                      className={`rounded-md border px-2 py-1 text-[10px] font-medium transition-all ${
+                        defaults.feeMode === m
+                          ? "border-primary/40 bg-primary/10 text-primary"
+                          : "border-border/40 bg-muted/20 text-muted-foreground hover:bg-muted/40"
+                      }`}
+                    >
+                      {m === "commission" ? "Fee" : "Spread"}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1">
+                  <Stepper value={defaults.feeValue} onChange={(v) => setDefaults((p) => ({ ...p, feeValue: v }))} step={0.01} min={0} />
+                  <span className="text-xs text-muted-foreground">%</span>
+                </div>
               </div>
             } />
           </div>

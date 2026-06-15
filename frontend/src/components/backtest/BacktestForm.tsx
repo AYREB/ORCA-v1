@@ -71,9 +71,9 @@ export interface BacktestFormProps {
 
 type WizardStep = 1 | 2 | 3 | 4 | 5;
 type BlockState = Record<string, Record<string, { ARGUMENTS: Record<string, any> }>>;
-type RiskArgument = "takeProfitPercent" | "stopLossPercent" | "spread";
+type RiskArgument = "takeProfitPercent" | "stopLossPercent" | "fee_mode" | "fee_value" | "spread";
 
-const RISK_ARGUMENTS: RiskArgument[] = ["takeProfitPercent", "stopLossPercent", "spread"];
+const RISK_ARGUMENTS: RiskArgument[] = ["takeProfitPercent", "stopLossPercent", "fee_mode", "fee_value", "spread"];
 
 const WIZARD_STEPS: Array<{ id: WizardStep; label: string }> = [
   { id: 1, label: "Strategy" },
@@ -125,7 +125,8 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
   const [initialBalance, setInitialBalance] = useState(btDefaults.initialBalance);
   const [takeProfitPercent, setTakeProfitPercent] = useState(btDefaults.takeProfitPercent);
   const [stopLossPercent, setStopLossPercent] = useState(btDefaults.stopLossPercent);
-  const [spread, setSpread] = useState(btDefaults.spread);
+  const [feeMode, setFeeMode] = useState<"commission" | "spread">(btDefaults.feeMode);
+  const [feeValue, setFeeValue] = useState(btDefaults.feeValue);
 
   useEffect(() => {
     const fetchRegistry = async () => {
@@ -329,7 +330,17 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
       const loadedOpenArgs = sideData.OPEN?.ARGUMENTS || {};
       setTakeProfitPercent(numericArg(loadedOpenArgs.takeProfitPercent, btDefaults.takeProfitPercent));
       setStopLossPercent(numericArg(loadedOpenArgs.stopLossPercent, btDefaults.stopLossPercent));
-      setSpread(numericArg(loadedOpenArgs.spread, btDefaults.spread));
+      // Support new fee_mode/fee_value keys and old legacy "spread" key.
+      if (loadedOpenArgs.fee_value !== undefined) {
+        setFeeMode((loadedOpenArgs.fee_mode as "commission" | "spread") || "commission");
+        setFeeValue(numericArg(loadedOpenArgs.fee_value, btDefaults.feeValue));
+      } else if (loadedOpenArgs.spread !== undefined) {
+        setFeeMode("spread");
+        setFeeValue(numericArg(loadedOpenArgs.spread, btDefaults.feeValue));
+      } else {
+        setFeeMode(btDefaults.feeMode);
+        setFeeValue(btDefaults.feeValue);
+      }
 
       if (sideData.OPEN?.ARGUMENTS) {
         nextBlocks[detectedSide].OPEN = { ARGUMENTS: stripRiskArguments(sideData.OPEN.ARGUMENTS) };
@@ -486,7 +497,8 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
       ...stripRiskArguments(blocks[side]?.OPEN?.ARGUMENTS || {}),
       takeProfitPercent,
       stopLossPercent,
-      spread,
+      fee_mode: feeMode,
+      fee_value: feeValue,
     };
     const closeArgs = blocks[side]?.CLOSE?.ARGUMENTS || {};
     const openConditions = conditionGroups.OPEN || { conditions: [] };
@@ -612,7 +624,8 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
     riskManagement: {
       takeProfitPercent,
       stopLossPercent,
-      spread,
+      feeMode,
+      feeValue,
     },
     markets: {
       tickers: selectedTickers,
@@ -875,21 +888,52 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                         })()}
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="spread" className="text-xs text-muted-foreground">
-                          Spread %
-                        </Label>
-                        <Input
-                          id="spread"
-                          type="number"
-                          min="0"
-                          step="0.001"
-                          value={spread}
-                          onChange={(e) => setSpread(numberInputValue(e.currentTarget.valueAsNumber))}
-                          className="bg-secondary/50 border-border/50 h-9"
-                        />
-                        {spread <= 0 && (
-                          <p className="text-[11px] text-muted-foreground/60">0 = disabled</p>
-                        )}
+                        <Label className="text-xs text-muted-foreground">Transaction Costs</Label>
+                        {/* Mode selector */}
+                        <div className="flex gap-1.5">
+                          {(["commission", "spread"] as const).map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => setFeeMode(m)}
+                              className={`flex-1 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition-all ${
+                                feeMode === m
+                                  ? "border-primary/40 bg-primary/10 text-primary"
+                                  : "border-border/40 bg-muted/20 text-muted-foreground hover:bg-muted/40"
+                              }`}
+                            >
+                              {m === "commission" ? "Commission" : "Spread"}
+                            </button>
+                          ))}
+                        </div>
+                        {/* Fee value */}
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={feeValue}
+                            onChange={(e) => setFeeValue(numberInputValue(e.currentTarget.valueAsNumber))}
+                            className="bg-secondary/50 border-border/50 h-9"
+                          />
+                          <span className="text-xs text-muted-foreground shrink-0">%</span>
+                        </div>
+                        {/* Dynamic hint */}
+                        <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
+                          {feeMode === "commission" ? (
+                            <>
+                              {feeValue > 0
+                                ? `${feeValue}% per trade · round-trip ${(feeValue * 2).toFixed(2)}% · typical: Binance 0.1%, stocks 0.05%`
+                                : "0% = no costs applied"}
+                            </>
+                          ) : (
+                            <>
+                              {feeValue > 0
+                                ? `±${(feeValue / 2).toFixed(3)}% per leg · round-trip ${feeValue.toFixed(2)}% · typical: crypto 0.05–0.2%, forex 0.01–0.05%`
+                                : "0% = no costs applied"}
+                            </>
+                          )}
+                        </p>
                       </div>
                     </div>
                   </div>
