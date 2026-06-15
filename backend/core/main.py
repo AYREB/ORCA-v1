@@ -303,10 +303,14 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
     fetch_start_date = get_fetch_date_bound(start_date, warmup_days=warmup_days)
     fetch_end_date = get_fetch_date_bound(end_date, is_end=True)
 
+    # data_dict: full data including warmup bars (for indicator computation)
+    # chart_dict: clipped to user's requested range (for chart response)
     data_dict = {}
+    chart_dict = {}
 
     for t in TICKERS:
         data_dict[t] = {}
+        chart_dict[t] = {}
 
         for tf in DATA_TFS:
             try:
@@ -331,16 +335,19 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
                     code="no_data"
                 )
 
-            df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=True)
+            # Keep warmup bars so indicators warm up before the user's start date.
+            # The backtester's trade_start_at gate prevents trades on warmup bars.
+            df_with_warmup = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=False)
 
-            if df.empty:
+            if df_with_warmup.empty:
                 raise BacktestError(
                     f"No data available for {t} after clipping to "
                     f"{start_date} → {end_date}.",
                     code="no_data_after_clip"
                 )
 
-            data_dict[t][tf] = df
+            data_dict[t][tf] = df_with_warmup
+            chart_dict[t][tf] = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=True)
 
     # Run backtester
     try:
@@ -366,8 +373,9 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
         )
 
     invested = sum(
-        positions[ticker] * data_dict[ticker][EXECUTION_TF].iloc[-1]["Close"]
+        positions[ticker] * chart_dict[ticker][EXECUTION_TF].iloc[-1]["Close"]
         for ticker in positions
+        if not chart_dict[ticker][EXECUTION_TF].empty
     )
     total_portfolio = cash + invested
     pct_change = (total_portfolio - initial_balance) / initial_balance * 100
@@ -395,9 +403,9 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
         "data": {
             ticker: {
                 tf: dataframe_to_response_records(df)
-                for tf, df in data_dict[ticker].items()
+                for tf, df in chart_dict[ticker].items()
             }
-            for ticker in data_dict
+            for ticker in chart_dict
         }
     }
 
