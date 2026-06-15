@@ -274,7 +274,7 @@ const Pills = <T extends string>({
 // ─── Main ────────────────────────────────────────────────────────────────────
 const Settings = () => {
   const { settings, updateSettings } = useSettings();
-  const { user, logout, refreshUser } = useAuth();
+  const { user, logout, refreshUser, updateToken } = useAuth();
 
   const [section, setSection] = useState<SectionId>("profile");
 
@@ -282,6 +282,40 @@ const Settings = () => {
   const [nameInput, setNameInput] = useState(user?.name ?? "");
   const [nameSaving, setNameSaving] = useState(false);
   const nameChanged = nameInput.trim() !== (user?.name ?? "");
+
+  // Change password
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [pwSaving, setPwSaving] = useState(false);
+
+  const handleChangePassword = useCallback(async () => {
+    if (!currentPw || !newPw || !confirmPw) {
+      toast.error("Please fill in all password fields.");
+      return;
+    }
+    if (newPw !== confirmPw) {
+      toast.error("New passwords don't match.");
+      return;
+    }
+    if (newPw.length < 8) {
+      toast.error("New password must be at least 8 characters.");
+      return;
+    }
+    setPwSaving(true);
+    try {
+      const res = await api.changePassword(currentPw, newPw);
+      updateToken(res.token);
+      setCurrentPw("");
+      setNewPw("");
+      setConfirmPw("");
+      toast.success("Password changed successfully.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to change password.");
+    } finally {
+      setPwSaving(false);
+    }
+  }, [currentPw, newPw, confirmPw, updateToken]);
 
   // Other sections
   const [appearance, setAppearance]       = useState(settings.appearance);
@@ -716,7 +750,7 @@ const Settings = () => {
           <div className="rounded-xl border border-border/40 overflow-hidden bg-card/30 divide-y divide-border/30">
             {[
               { label: "Account ID",    value: user?.id ? `#${user.id}` : "—", mono: true },
-              { label: "Email",         value: user?.email ?? "—", badge: <Badge variant="secondary" className="text-[10px] px-1.5 py-0.5">Verified</Badge> },
+              { label: "Email",         value: user?.email ?? "—" },
               ...(memberSince ? [{ label: "Member since", value: memberSince }] : []),
               { label: "Plan",          value: "Free", badge: <Badge className="text-[10px] px-1.5 py-0.5 bg-primary/15 text-primary border-primary/20">Active</Badge> },
             ].map(({ label, value, mono, badge }, i, arr) => (
@@ -728,6 +762,55 @@ const Settings = () => {
                 </div>
               </div>
             ))}
+          </div>
+        </Block>
+
+        <Block title="Change Password">
+          <div className="rounded-xl border border-border/40 bg-card/30 p-4 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1 block">Current password</Label>
+                <Input
+                  type="password"
+                  value={currentPw}
+                  onChange={(e) => setCurrentPw(e.target.value)}
+                  placeholder="••••••••"
+                  className="bg-secondary border-border h-9 text-sm"
+                  autoComplete="current-password"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1 block">New password</Label>
+                <Input
+                  type="password"
+                  value={newPw}
+                  onChange={(e) => setNewPw(e.target.value)}
+                  placeholder="••••••••"
+                  className="bg-secondary border-border h-9 text-sm"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1 block">Confirm new password</Label>
+                <Input
+                  type="password"
+                  value={confirmPw}
+                  onChange={(e) => setConfirmPw(e.target.value)}
+                  placeholder="••••••••"
+                  className="bg-secondary border-border h-9 text-sm"
+                  autoComplete="new-password"
+                />
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleChangePassword}
+              disabled={pwSaving || !currentPw || !newPw || !confirmPw}
+              className="gap-1.5"
+            >
+              {pwSaving ? "Saving…" : "Update password"}
+            </Button>
           </div>
         </Block>
 

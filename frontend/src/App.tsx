@@ -22,6 +22,7 @@ import { AuthProvider } from "./context/AuthContext";
 import { SettingsProvider } from "./hooks/useSettings";
 import { RegistryProvider } from "@/context/RegistryContext";
 import Settings from "./pages/Settings";
+import ResetPassword from "./pages/ResetPassword";
 
 const queryClient = new QueryClient();
 
@@ -37,6 +38,7 @@ const App = () => (
               <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
                 <Routes>
                   <Route path="/" element={<Index />} />
+                  <Route path="/reset-password" element={<ResetPassword />} />
                   <Route path="/legal/:doc" element={<Legal />} />
                   <Route
                     path="/dashboard"

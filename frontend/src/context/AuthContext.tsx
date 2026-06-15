@@ -10,6 +10,7 @@ interface AuthContextValue {
   signup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
+  updateToken: (newToken: string) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -90,8 +91,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(currentUser);
   }, []);
 
+  const updateToken = useCallback((newToken: string) => {
+    localStorage.setItem(AUTH_STORAGE_KEY, newToken);
+    api.setToken(newToken);
+    setToken(newToken);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, loginWithGoogle, signup, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, token, loading, login, loginWithGoogle, signup, logout, refreshUser, updateToken }}>
       {children}
     </AuthContext.Provider>
   );

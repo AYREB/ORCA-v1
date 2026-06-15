@@ -335,6 +335,19 @@ ORCA_ASSISTANT_MARKET_DATA_DIR = os.getenv(
 ORCA_ASSISTANT_MARKET_DATA_MAX_TICKERS = env_int("ORCA_ASSISTANT_MARKET_DATA_MAX_TICKERS", 3, minimum=1)
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
+# Email — defaults to console backend for local dev so no SMTP setup is needed.
+# In production set EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+# and supply EMAIL_HOST / EMAIL_HOST_USER / EMAIL_HOST_PASSWORD / EMAIL_PORT.
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "noreply@orca.app")
+# Used to build the password-reset link inserted in the email.
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.TokenAuthentication",

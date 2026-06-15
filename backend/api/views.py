@@ -801,6 +801,133 @@ def me(request):
 
 @csrf_exempt
 @api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("auth")
+def change_password(request):
+    from .models import PasswordResetToken as _PRT  # noqa — local import avoids circular at module level
+    from django.core.mail import send_mail as _send  # noqa
+    body = parse_body(request)
+    user = get_authenticated_user(request)
+    current = body.get("current_password") or ""
+    new_pass = body.get("new_password") or ""
+
+    if not current or not new_pass:
+        raise APIError("Both current_password and new_password are required.")
+
+    if not user.check_password(current):
+        raise APIError("Current password is incorrect.")
+
+    try:
+        validate_password(new_pass, user=user)
+    except ValidationError as exc:
+        raise APIError(" ".join(exc.messages))
+
+    user.set_password(new_pass)
+    user.save()
+    # Rotate token so existing sessions are invalidated on other devices.
+    Token.objects.filter(user=user).delete()
+    new_token = Token.objects.create(user=user)
+    return no_store(JsonResponse({"token": new_token.key, "message": "Password changed successfully."}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@rate_limit("auth")
+def forgot_password(request):
+    from django.core.mail import send_mail as _send_mail
+    from .models import PasswordResetToken
+
+    body = parse_body(request)
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        raise APIError("Email is required.")
+
+    # Always respond the same way — prevents user-enumeration attacks.
+    _SAFE_RESPONSE = no_store(JsonResponse({"message": "If that email exists, a reset link has been sent."}))
+
+    try:
+        validate_email(email)
+    except ValidationError:
+        return _SAFE_RESPONSE
+
+    try:
+        user = User.objects.get(email__iexact=email)
+    except User.DoesNotExist:
+        return _SAFE_RESPONSE
+
+    # Expire any outstanding tokens for this user.
+    PasswordResetToken.objects.filter(user=user, used=False).update(used=True)
+    reset_token = PasswordResetToken.objects.create(user=user)
+
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
+    reset_url = f"{frontend_url}/reset-password?token={reset_token.token}"
+    name = user.first_name or "there"
+
+    try:
+        _send_mail(
+            subject="Reset your Orca password",
+            message=(
+                f"Hi {name},\n\n"
+                f"Click the link below to reset your password. This link expires in 1 hour.\n\n"
+                f"{reset_url}\n\n"
+                f"If you didn't request this, you can safely ignore this email."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception("Failed to send password reset email to %s", email)
+        # Still return the safe response — don't leak backend errors to the client.
+
+    return _SAFE_RESPONSE
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@rate_limit("auth")
+def reset_password(request):
+    from .models import PasswordResetToken
+
+    body = parse_body(request)
+    token_str = (body.get("token") or "").strip()
+    new_pass = body.get("new_password") or ""
+
+    if not token_str or not new_pass:
+        raise APIError("token and new_password are required.")
+
+    try:
+        token_uuid = uuid.UUID(token_str)
+    except ValueError:
+        raise APIError("Invalid reset token.", status_code=400)
+
+    try:
+        reset_token = PasswordResetToken.objects.select_related("user").get(token=token_uuid)
+    except PasswordResetToken.DoesNotExist:
+        raise APIError("Invalid or expired reset link.", status_code=400)
+
+    if not reset_token.is_valid():
+        raise APIError("This reset link has expired. Please request a new one.", status_code=400)
+
+    user = reset_token.user
+    try:
+        validate_password(new_pass, user=user)
+    except ValidationError as exc:
+        raise APIError(" ".join(exc.messages))
+
+    user.set_password(new_pass)
+    user.save()
+    reset_token.used = True
+    reset_token.save(update_fields=["used"])
+
+    return no_store(JsonResponse({"message": "Password reset successfully. You can now sign in."}))
+
+
+@csrf_exempt
+@api_error_boundary
 @require_methods("GET", "POST")
 @token_required
 @rate_limit("general")

@@ -1,3 +1,5 @@
+import uuid as _uuid
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
@@ -168,3 +170,21 @@ class PaperAccountState(models.Model):
     def __str__(self):
         count = len(self.accounts) if isinstance(self.accounts, list) else 0
         return f"PaperAccountState({self.user_id}, {count} accounts)"
+
+
+class PasswordResetToken(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="password_reset_tokens",
+    )
+    token = models.UUIDField(default=_uuid.uuid4, unique=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    used = models.BooleanField(default=False)
+
+    def is_valid(self) -> bool:
+        age = (timezone.now() - self.created_at).total_seconds()
+        return not self.used and age < 3600  # 1-hour window
+
+    def __str__(self):
+        return f"PasswordResetToken({self.user.email}, used={self.used})"

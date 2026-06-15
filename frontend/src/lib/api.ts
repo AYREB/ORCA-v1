@@ -554,6 +554,27 @@ class DjangoAPI {
     return this.request<AuthUser>('/me/', { method: 'PATCH', body: JSON.stringify({ name }) });
   }
 
+  async changePassword(currentPassword: string, newPassword: string): Promise<{ token: string; message: string }> {
+    return this.request<{ token: string; message: string }>('/change-password/', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+  }
+
+  async forgotPassword(email: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/forgot-password/', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/reset-password/', {
+      method: 'POST',
+      body: JSON.stringify({ token, new_password: newPassword }),
+    });
+  }
+
   // Health check
   async healthCheck() {
     return this.request<{ status: string }>('/health/');
