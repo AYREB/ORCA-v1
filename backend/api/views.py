@@ -805,6 +805,28 @@ def me(request):
 @require_methods("POST")
 @token_required
 @rate_limit("auth")
+def delete_account(request):
+    user = get_authenticated_user(request)
+    body = parse_body(request)
+    password = body.get("password") or ""
+
+    if not password:
+        raise APIError("Password is required to delete your account.")
+
+    if not user.check_password(password):
+        raise APIError("Incorrect password.")
+
+    # Delete the user — CASCADE removes all related data (strategies, backtest
+    # runs, custom indicators, paper accounts, password reset tokens, etc.)
+    user.delete()
+    return no_store(JsonResponse({"message": "Account deleted."}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("auth")
 def change_password(request):
     from .models import PasswordResetToken as _PRT  # noqa — local import avoids circular at module level
     from django.core.mail import send_mail as _send  # noqa

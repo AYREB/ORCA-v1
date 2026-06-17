@@ -289,6 +289,11 @@ const Settings = () => {
   const [confirmPw, setConfirmPw] = useState("");
   const [pwSaving, setPwSaving] = useState(false);
 
+  // Delete account
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletePw, setDeletePw] = useState("");
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
   const handleChangePassword = useCallback(async () => {
     if (!currentPw || !newPw || !confirmPw) {
       toast.error("Please fill in all password fields.");
@@ -316,6 +321,21 @@ const Settings = () => {
       setPwSaving(false);
     }
   }, [currentPw, newPw, confirmPw, updateToken]);
+
+  const handleDeleteAccount = useCallback(async () => {
+    if (!deletePw) {
+      toast.error("Please enter your password to confirm.");
+      return;
+    }
+    setDeleteLoading(true);
+    try {
+      await api.deleteAccount(deletePw);
+      logout();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete account.");
+      setDeleteLoading(false);
+    }
+  }, [deletePw, logout]);
 
   // Other sections
   const [appearance, setAppearance]       = useState(settings.appearance);
@@ -910,16 +930,56 @@ const Settings = () => {
                 <div>
                   <p className="text-sm font-medium text-destructive">Delete account</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Permanently removes your account, strategies, and all associated data.
+                    Permanently removes your account, all strategies, backtest history, and associated data. This cannot be undone.
                   </p>
                 </div>
               </div>
-              <Button variant="outline" size="sm" disabled className="border-destructive/30 text-destructive/60 shrink-0">
-                Contact support
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground shrink-0"
+                onClick={() => { setDeletePw(""); setDeleteDialogOpen(true); }}
+              >
+                Delete account
               </Button>
             </div>
           </div>
         </Block>
+
+        {/* Delete account confirmation dialog */}
+        <AlertDialog open={deleteDialogOpen} onOpenChange={(open) => { if (!deleteLoading) setDeleteDialogOpen(open); }}>
+          <AlertDialogContent className="border-border/70 bg-card/95 backdrop-blur-xl">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-destructive">Delete your account?</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <span className="block">
+                  This permanently deletes your account and <strong>all</strong> associated data — strategies, backtest history, custom indicators, and paper accounts. There is no way to recover this.
+                </span>
+                <span className="block pt-1">Enter your password to confirm.</span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <Input
+              type="password"
+              placeholder="Your password"
+              value={deletePw}
+              onChange={(e) => setDeletePw(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleDeleteAccount()}
+              autoComplete="current-password"
+              className="mt-1"
+              disabled={deleteLoading}
+            />
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleteLoading}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(e) => { e.preventDefault(); handleDeleteAccount(); }}
+                disabled={deleteLoading || !deletePw}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {deleteLoading ? "Deleting…" : "Delete my account"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     ),
   };

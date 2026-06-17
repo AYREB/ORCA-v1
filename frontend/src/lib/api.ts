@@ -555,6 +555,13 @@ class DjangoAPI {
     return this.request<AuthUser>('/me/', { method: 'PATCH', body: JSON.stringify({ name }) });
   }
 
+  async deleteAccount(password: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/delete-account/', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    });
+  }
+
   async changePassword(currentPassword: string, newPassword: string): Promise<{ token: string; message: string }> {
     return this.request<{ token: string; message: string }>('/change-password/', {
       method: 'POST',
