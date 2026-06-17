@@ -1,12 +1,10 @@
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-import os
 import hashlib
 from django.core.cache import cache
 
 def get_cache_key(ticker, start, end, interval):
-    """Generate a unique cache key for this data request"""
     raw = f"{ticker}_{start}_{end}_{interval}"
     return f"market_data_{hashlib.md5(raw.encode()).hexdigest()}"
 
@@ -16,12 +14,11 @@ def get_data_with_indicator(
     end: str,
     interval: str = "1h",
     dropna: bool = True,
-    save_path: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data_csvs")
 ) -> pd.DataFrame:
-    
+
     # Check cache first
     cache_key = get_cache_key(ticker, start, end, interval)
-    
+
     try:
         cached = cache.get(cache_key)
         if cached is not None:
@@ -29,7 +26,7 @@ def get_data_with_indicator(
             return pd.read_json(cached, orient="split")
     except Exception:
         pass  # cache miss or error, just fetch fresh
-    
+
     # Cache miss - fetch from yfinance
     data = yf.download(ticker, start=start, end=end, interval=interval, group_by="column")
 
@@ -38,10 +35,6 @@ def get_data_with_indicator(
 
     if dropna:
         data = data.dropna()
-
-    if save_path:
-        actualSavePath = f"{save_path}/{ticker}_{interval}.csv"
-        data.to_csv(actualSavePath, index=True)
 
     # Store in cache
     try:

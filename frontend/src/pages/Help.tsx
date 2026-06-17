@@ -88,8 +88,8 @@ const howToSections = [
     steps: [
       "In the DSL editor, click Save and give your strategy a name",
       "Load saved strategies anytime from the Load dialog",
-      "You can also copy the raw DSL text and paste it anywhere to back up or share",
-      "Easy Mode strategies can be saved too — they're stored locally in your browser",
+      "Strategies are saved to your account — they sync across all your devices automatically",
+      "You can also copy the raw DSL text and paste it anywhere to share a strategy with others",
     ],
   },
 ];
@@ -127,7 +127,7 @@ const faqItems = [
   },
   {
     q: "How are trading fees simulated?",
-    a: "Set the spread value in your backtest config. This simulates the cost of entering and exiting each trade, giving you more realistic performance numbers.",
+    a: "In the Risk Management section, choose between Commission (a flat % per trade, e.g. 0.1% like most brokers) or Spread (bid-ask spread cost). Both are applied on entry and exit so your results reflect realistic round-trip costs.",
   },
   {
     q: "What does the offset parameter do?",
@@ -135,7 +135,7 @@ const faqItems = [
   },
   {
     q: "Where are my saved strategies stored?",
-    a: "Strategies are saved locally in your browser's storage. They persist between sessions but won't sync across devices. Use copy/paste to transfer strategies.",
+    a: "Strategies are saved to your account on the server, so they're available on any device you log into. You can also copy the raw DSL text to back up or share a strategy.",
   },
   {
     q: "What timeframes are supported?",
