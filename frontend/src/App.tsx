@@ -121,9 +121,23 @@ const App = () => (
                       </ProtectedRoute>
                     }
                   />
-                  <Route path="/dashboard/help" element={<Help />} />
+                  <Route
+                    path="/dashboard/help"
+                    element={
+                      <ProtectedRoute>
+                        <Help />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/settings"
+                    element={
+                      <ProtectedRoute>
+                        <Settings />
+                      </ProtectedRoute>
+                    }
+                  />
                   <Route path="*" element={<NotFound />} />
-                  <Route path="/dashboard/settings" element={<Settings />} />
                 </Routes>
               </BrowserRouter>
             </TooltipProvider>

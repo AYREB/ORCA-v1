@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ArrowRight, Play, BarChart3, Zap, Shield } from "lucide-react";
+import { ArrowRight, BarChart3, Zap, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import FinanceBackground, { TickerTape } from "@/components/effects/FinanceBackground";
 
@@ -86,13 +86,9 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
               Start Free Trial
               <ArrowRight className="h-5 w-5" />
             </Button>
-            <Button variant="heroOutline" size="xl">
-              <Play className="h-5 w-5" />
-              Watch Demo
-            </Button>
           </motion.div>
 
-          {/* Stats */}
+          {/* Key facts */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -100,9 +96,9 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
             className="grid grid-cols-3 gap-8 max-w-2xl mx-auto"
           >
             {[
-              { value: "10K+", label: "Active Traders" },
-              { value: "1M+", label: "Backtests Run" },
-              { value: "15+", label: "Years of Data" },
+              { value: "Custom", label: "Indicator Builder" },
+              { value: "20yr", label: "Daily Chart Data" },
+              { value: "Free", label: "To Get Started" },
             ].map((stat, index) => (
               <div key={index} className="text-center">
                 <div className="text-xl md:text-2xl font-bold font-mono text-primary">{stat.value}</div>

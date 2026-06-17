@@ -37,7 +37,7 @@ const CTASection = ({ onSignupClick }: CTASectionProps) => {
           </h2>
           
           <p className="text-lg text-muted-foreground mb-10 max-w-xl mx-auto">
-            Join thousands of traders who use QuantLab to test their strategies before risking real capital.
+            Build and test your trading strategies on historical data before risking real capital.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
