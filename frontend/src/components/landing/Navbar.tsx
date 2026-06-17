@@ -44,7 +44,7 @@ const Navbar = ({ onLoginClick, onSignupClick }: NavbarProps) => {
               Log In
             </Button>
             <Button variant="hero" size="sm" onClick={onSignupClick}>
-              Start Free Trial
+              Get Started Free
             </Button>
           </div>
 
@@ -77,7 +77,7 @@ const Navbar = ({ onLoginClick, onSignupClick }: NavbarProps) => {
                   Log In
                 </Button>
                 <Button variant="hero" onClick={onSignupClick}>
-                  Start Free Trial
+                  Get Started Free
                 </Button>
               </div>
             </div>

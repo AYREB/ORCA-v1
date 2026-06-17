@@ -257,7 +257,7 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
                     ? `A reset link has been sent to ${forgotEmail} if that account exists.`
                     : mode === "login"
                     ? "Enter your credentials to access your dashboard"
-                    : "Start your 14-day free trial today"}
+                    : "Create your free account to get started"}
                 </p>
               </div>
 

@@ -34,6 +34,7 @@ from core.analysis.parameter_optimiser import (
     optimizer,
 )
 from core.main import dslJSONBacktest, dslTextToJsonBacktest, BacktestError, dataframe_to_response_records
+from core.parsing.extractingTickers import extract_tickers as _extract_tickers
 from core.data_pulling.datapull import get_data_with_indicator
 from .assistant import _market_csv_path, _load_market_csv
 from .assistant import (
@@ -1299,6 +1300,16 @@ def backtestDSLJSON(request):
                 "code": "missing_stop_loss",
                 "success": False,
             }, status=400)
+
+    # Guard: cap tickers per request to prevent excessive data fetching
+    MAX_TICKERS_PER_BACKTEST = 5
+    _tickers = _extract_tickers(dsl)
+    if len(_tickers) > MAX_TICKERS_PER_BACKTEST:
+        return JsonResponse({
+            "error": f"Too many tickers. Maximum {MAX_TICKERS_PER_BACKTEST} tickers per backtest.",
+            "code": "too_many_tickers",
+            "success": False,
+        }, status=400)
 
     try:
         result = dslJSONBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)

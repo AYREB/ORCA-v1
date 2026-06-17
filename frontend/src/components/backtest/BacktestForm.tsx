@@ -1045,10 +1045,14 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                         )}
                       </div>
                     ))}
-                    <Button type="button" variant="outline" size="sm" onClick={addTicker} className="h-9 gap-1">
-                      <Plus className="h-4 w-4" />
-                      Add
-                    </Button>
+                    {tickers.length < 5 ? (
+                      <Button type="button" variant="outline" size="sm" onClick={addTicker} className="h-9 gap-1">
+                        <Plus className="h-4 w-4" />
+                        Add
+                      </Button>
+                    ) : (
+                      <p className="self-center text-xs text-muted-foreground">Max 5 tickers</p>
+                    )}
                   </div>
                 </div>
               </div>

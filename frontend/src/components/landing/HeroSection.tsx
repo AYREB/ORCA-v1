@@ -83,7 +83,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
             className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12"
           >
             <Button variant="hero" size="xl" onClick={onSignupClick}>
-              Start Free Trial
+              Get Started Free
               <ArrowRight className="h-5 w-5" />
             </Button>
           </motion.div>

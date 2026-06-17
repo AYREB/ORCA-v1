@@ -27,7 +27,7 @@ const CTASection = ({ onSignupClick }: CTASectionProps) => {
         >
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-primary/20 bg-primary/5 mb-8">
             <Sparkles className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium text-primary">14-Day Free Trial</span>
+            <span className="text-sm font-medium text-primary">Free to Use</span>
           </div>
 
           <h2 className="text-2xl md:text-4xl font-bold mb-6">
@@ -35,14 +35,14 @@ const CTASection = ({ onSignupClick }: CTASectionProps) => {
             <br />
             <span className="text-gradient-primary">Trading Edge?</span>
           </h2>
-          
+
           <p className="text-lg text-muted-foreground mb-10 max-w-xl mx-auto">
             Build and test your trading strategies on historical data before risking real capital.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button variant="hero" size="xl" onClick={onSignupClick}>
-              Start Free Trial
+              Get Started Free
               <ArrowRight className="h-5 w-5" />
             </Button>
             <p className="text-sm text-muted-foreground">

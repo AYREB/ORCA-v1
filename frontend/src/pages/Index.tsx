@@ -32,7 +32,7 @@ const Index = () => {
         <title>Orca - No-Code Backtesting for Traders</title>
         <meta
           name="description"
-          content="Professional backtesting without coding. Build, test, and optimize trading strategies with our visual strategy builder. Start your free trial today."
+          content="Professional backtesting without coding. Build, test, and optimize trading strategies with our visual strategy builder. Free to get started."
         />
       </Helmet>
 
