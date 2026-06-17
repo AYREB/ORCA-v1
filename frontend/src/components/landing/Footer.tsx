@@ -22,9 +22,7 @@ const Footer = () => {
             <h4 className="font-semibold mb-4">Product</h4>
             <ul className="space-y-2 text-sm text-muted-foreground">
               <li><a href="#features" className="hover:text-foreground transition-colors">Features</a></li>
-              <li><a href="#pricing" className="hover:text-foreground transition-colors">Pricing</a></li>
-              <li><a href="#" className="hover:text-foreground transition-colors">API</a></li>
-              <li><a href="#" className="hover:text-foreground transition-colors">Changelog</a></li>
+              <li><a href="#how-it-works" className="hover:text-foreground transition-colors">How It Works</a></li>
             </ul>
           </div>
 
@@ -32,10 +30,7 @@ const Footer = () => {
           <div>
             <h4 className="font-semibold mb-4">Resources</h4>
             <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><a href="#" className="hover:text-foreground transition-colors">Documentation</a></li>
-              <li><a href="#" className="hover:text-foreground transition-colors">Tutorials</a></li>
-              <li><a href="#" className="hover:text-foreground transition-colors">Blog</a></li>
-              <li><a href="#" className="hover:text-foreground transition-colors">Community</a></li>
+              <li><Link to="/dashboard/help" className="hover:text-foreground transition-colors">Help & Docs</Link></li>
             </ul>
           </div>
 
@@ -46,7 +41,6 @@ const Footer = () => {
               <li><Link to="/legal/terms" className="hover:text-foreground transition-colors">Terms of Service</Link></li>
               <li><Link to="/legal/privacy" className="hover:text-foreground transition-colors">Privacy Policy</Link></li>
               <li><Link to="/legal/risk" className="hover:text-foreground transition-colors">Risk Disclosure</Link></li>
-              <li><a href="#" className="hover:text-foreground transition-colors">Contact</a></li>
             </ul>
           </div>
         </div>
@@ -70,9 +64,7 @@ const Footer = () => {
             © {new Date().getFullYear()} Orca. All rights reserved.
           </p>
           <div className="flex items-center gap-4 text-sm text-muted-foreground">
-            <a href="#" className="hover:text-foreground transition-colors">Twitter</a>
-            <a href="#" className="hover:text-foreground transition-colors">Discord</a>
-            <a href="#" className="hover:text-foreground transition-colors">GitHub</a>
+            <Link to="/legal/risk" className="hover:text-foreground transition-colors">Risk Disclosure</Link>
           </div>
         </div>
       </div>

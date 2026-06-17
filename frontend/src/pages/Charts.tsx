@@ -9,6 +9,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
+import RiskDisclaimer from "@/components/RiskDisclaimer";
 import CandlestickChart from "@/components/backtest/CandlestickChart";
 import { Input } from "@/components/ui/input";
 import { api, ChartDataResponse, OHLCData } from "@/lib/api";
@@ -293,6 +294,7 @@ const Charts = () => {
           </div>
         </div>
       </div>
+      <RiskDisclaimer variant="inline" className="pt-2" />
     </DashboardLayout>
   );
 };

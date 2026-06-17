@@ -36,9 +36,6 @@ const Navbar = ({ onLoginClick, onSignupClick }: NavbarProps) => {
             <a href="#how-it-works" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               How It Works
             </a>
-            <a href="#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-              Pricing
-            </a>
           </div>
 
           {/* Desktop Auth Buttons */}
@@ -74,9 +71,6 @@ const Navbar = ({ onLoginClick, onSignupClick }: NavbarProps) => {
               </a>
               <a href="#how-it-works" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
                 How It Works
-              </a>
-              <a href="#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                Pricing
               </a>
               <div className="flex flex-col gap-2 pt-4 border-t border-border/50">
                 <Button variant="ghost" onClick={onLoginClick}>
