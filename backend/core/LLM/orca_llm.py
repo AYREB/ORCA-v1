@@ -25,9 +25,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _provider() -> str:
-    """Which inference backend to use: 'mlx' (default, Apple Silicon dev),
-    'local' (llama-cpp-python GGUF, any OS/GPU), or 'modal' (hosted HTTP)."""
-    return os.getenv("ORCA_LLM_PROVIDER", "mlx").strip().lower()
+    """Which inference backend to use: 'local' (llama-cpp-python GGUF, default),
+    'mlx' (Apple Silicon dev only), or 'modal' (hosted HTTP)."""
+    return os.getenv("ORCA_LLM_PROVIDER", "local").strip().lower()
 
 
 def get_model(adapter_path=None):
