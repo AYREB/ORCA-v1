@@ -72,8 +72,8 @@ logger = logging.getLogger(__name__)
 
 def _prewarm_model():
     try:
-        from core.LLM.orca_llm import get_model
-        get_model()
+        from core.LLM.orca_llm import prewarm
+        prewarm()
     except Exception as e:
         logger.warning(f"Model pre-warm failed: {e}")
 

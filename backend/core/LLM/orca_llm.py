@@ -1,5 +1,6 @@
 # orca_llm.py - Inference pipeline
 import json
+import os
 import re
 import threading
 from datetime import datetime, timedelta
@@ -8,9 +9,10 @@ from pathlib import Path
 from core.LLM.registry_loader import build_registry_context, load_ticker_registry
 from core.parsing.validateParsedDSL import validate_conditions
 
-# Global model cache
+# Global model caches
 _model = None
 _tokenizer = None
+_llama = None  # llama-cpp-python model (local GGUF provider)
 _model_lock = threading.Lock()
 
 VALID_TIMEFRAMES = {"1m", "5m", "15m", "1h", "4h", "1D"}
@@ -18,9 +20,18 @@ VALID_INDICATORS = {"PRICE", "VOLUME", "SMA", "EMA", "RSI",
                     "MACD", "BBANDS", "ATR", "STOCH", "CCI", "OBV"}
 
 ADAPTER_PATH = Path(__file__).resolve().parent / "adapters"
+# Repo root (…/ORCA-v1) so a relative ORCA_LLM_MODEL_PATH resolves predictably.
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _provider() -> str:
+    """Which inference backend to use: 'mlx' (default, Apple Silicon dev),
+    'local' (llama-cpp-python GGUF, any OS/GPU), or 'modal' (hosted HTTP)."""
+    return os.getenv("ORCA_LLM_PROVIDER", "mlx").strip().lower()
 
 
 def get_model(adapter_path=None):
+    """Load the MLX model + tokenizer (Apple Silicon dev only)."""
     global _model, _tokenizer
 
     if _model is not None:
@@ -38,6 +49,112 @@ def get_model(adapter_path=None):
         )
 
     return _model, _tokenizer
+
+
+def _resolve_model_path() -> str:
+    raw = os.getenv("ORCA_LLM_MODEL_PATH", "models/orca-qwen2.5.gguf")
+    p = Path(raw)
+    if not p.is_absolute():
+        p = PROJECT_ROOT / p
+    return str(p)
+
+
+def _get_llama():
+    """Load (and cache) the local GGUF model via llama-cpp-python."""
+    global _llama
+
+    if _llama is not None:
+        return _llama
+
+    with _model_lock:
+        if _llama is not None:
+            return _llama
+
+        from llama_cpp import Llama
+
+        model_path = _resolve_model_path()
+        if not Path(model_path).exists():
+            raise RuntimeError(
+                f"GGUF model not found at {model_path}. Set ORCA_LLM_MODEL_PATH "
+                "or place the file there."
+            )
+        _llama = Llama(
+            model_path=model_path,
+            n_ctx=int(os.getenv("ORCA_LLM_N_CTX", "4096")),
+            n_gpu_layers=int(os.getenv("ORCA_LLM_N_GPU_LAYERS", "-1")),  # -1 = all on GPU
+            verbose=False,
+        )
+
+    return _llama
+
+
+def _generate_mlx(prompt: str, adapter_path=None, max_tokens: int = 1024) -> str:
+    from mlx_lm import generate
+    model, tokenizer = get_model(adapter_path)
+    return generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens)
+
+
+def _generate_local(prompt: str, max_tokens: int = 1024) -> str:
+    llama = _get_llama()
+    out = llama(
+        prompt,
+        max_tokens=max_tokens,
+        temperature=0.0,
+        stop=["<|im_end|>"],
+    )
+    return out["choices"][0]["text"]
+
+
+def _generate_modal(prompt: str, max_tokens: int = 1024) -> str:
+    import requests
+
+    url = os.getenv("ORCA_MODAL_INFERENCE_URL", "").strip().rstrip("/")
+    if not url:
+        raise RuntimeError("ORCA_MODAL_INFERENCE_URL is not set (ORCA_LLM_PROVIDER=modal).")
+
+    headers = {"Content-Type": "application/json"}
+    api_key = os.getenv("ORCA_MODAL_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    resp = requests.post(
+        url,
+        json={"prompt": prompt, "max_tokens": max_tokens},
+        headers=headers,
+        timeout=env_float_modal_timeout(),
+    )
+    resp.raise_for_status()
+    return resp.json()["output"]
+
+
+def env_float_modal_timeout() -> float:
+    try:
+        return float(os.getenv("ORCA_MODAL_TIMEOUT_SECONDS", "120"))
+    except ValueError:
+        return 120.0
+
+
+def generate_raw(prompt: str, adapter_path=None, max_tokens: int = 1024) -> str:
+    """Run raw text generation through the configured provider."""
+    provider = _provider()
+    if provider == "modal":
+        return _generate_modal(prompt, max_tokens)
+    if provider == "local":
+        return _generate_local(prompt, max_tokens)
+    # Default: MLX (legacy Apple Silicon local dev).
+    return _generate_mlx(prompt, adapter_path, max_tokens)
+
+
+def prewarm():
+    """Load the model into memory ahead of the first request, when that helps.
+    No-op for the 'modal' provider (warming happens on Modal's side)."""
+    provider = _provider()
+    if provider == "local":
+        _get_llama()
+    elif provider == "modal":
+        pass  # nothing to load locally; Modal handles its own cold start
+    else:
+        get_model()
 
 
 def build_system_prompt(registry_context: dict) -> str:
@@ -250,12 +367,9 @@ def parse_strategy(
     allowed_tickers: list = None,
     allowed_timeframes: list = None,
 ) -> dict:
-    from mlx_lm import generate
-
     registry_context = build_registry_context(allowed_tickers, allowed_timeframes)
     normalised_input = normalise_tickers_from_registry(user_input, registry_context)
 
-    model, tokenizer = get_model(adapter_path)
     system_prompt = build_system_prompt(registry_context)
 
     prompt = (
@@ -264,7 +378,7 @@ def parse_strategy(
         f"<|im_start|>assistant\n"
     )
 
-    raw_output = generate(model, tokenizer, prompt=prompt, max_tokens=1024)
+    raw_output = generate_raw(prompt, adapter_path=adapter_path, max_tokens=1024)
     strategy, errors = validate_and_repair(raw_output, registry_context)
 
     if strategy is None:
@@ -280,8 +394,6 @@ def parse_strategy_with_context(
     allowed_tickers: list = None,
     allowed_timeframes: list = None,
 ) -> tuple:
-    from mlx_lm import generate
-
     user_messages = [m["content"] for m in messages if m["role"] == "user"]
     combined_input = " ".join(user_messages)
 
@@ -302,7 +414,6 @@ def parse_strategy_with_context(
             available_tfs.update(tfs)
         registry_context = build_registry_context(allowed_tickers, list(available_tfs))
 
-    model, tokenizer = get_model(adapter_path)
     system_prompt = build_system_prompt(registry_context)
 
     prompt = (
@@ -311,7 +422,7 @@ def parse_strategy_with_context(
         f"<|im_start|>assistant\n"
     )
 
-    raw_output = generate(model, tokenizer, prompt=prompt, max_tokens=1024)
+    raw_output = generate_raw(prompt, adapter_path=adapter_path, max_tokens=1024)
     strategy, errors = validate_and_repair(raw_output, registry_context)
 
     if strategy is None:

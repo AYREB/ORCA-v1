@@ -97,8 +97,28 @@ function computeMetrics(trades: TradeEntry[], results: BacktestResult) {
   const varIdx = Math.max(0, Math.floor(sorted5.length * 0.05) - 1);
   const var95 = sorted5.length > 0 ? sorted5[varIdx] : null;
 
+  // Normalize the portfolio y-axis to its data range (incl. the start line)
+  // rather than auto-scaling from $0 — matches the dashboard chart.
+  const equityValues = equityCurve
+    .map((p) => p.portfolio)
+    .concat(startEquity)
+    .filter(Number.isFinite);
+  let equityDomain: [number, number] = [0, 1];
+  if (equityValues.length > 0) {
+    const min = Math.min(...equityValues);
+    const max = Math.max(...equityValues);
+    if (min === max) {
+      const pad = Math.max(1, Math.abs(min) * 0.02);
+      equityDomain = [min - pad, max + pad];
+    } else {
+      const pad = (max - min) * 0.08;
+      equityDomain = [Math.max(0, min - pad), max + pad];
+    }
+  }
+
   return {
     equityCurve,
+    equityDomain,
     startEquity,
     maxDrawdownPct,
     maxDuration,
@@ -298,6 +318,8 @@ const GarchAnalysis = ({ results }: RiskAnalysisProps) => {
                       minTickGap={28}
                     />
                     <YAxis
+                      domain={m.equityDomain}
+                      allowDataOverflow
                       stroke="hsl(var(--muted-foreground))"
                       tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
                       tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`}

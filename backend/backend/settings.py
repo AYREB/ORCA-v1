@@ -147,6 +147,19 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# Serve static files with WhiteNoise in production (right after SecurityMiddleware).
+# Guarded so local dev without whitenoise installed still boots.
+try:
+    import whitenoise  # noqa: F401
+
+    MIDDLEWARE.insert(
+        MIDDLEWARE.index('django.middleware.security.SecurityMiddleware') + 1,
+        'whitenoise.middleware.WhiteNoiseMiddleware',
+    )
+    _WHITENOISE_AVAILABLE = True
+except ImportError:
+    _WHITENOISE_AVAILABLE = False
+
 _default_local_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -221,6 +234,25 @@ DATABASES = {
     }
 }
 
+# In production (Railway sets DATABASE_URL) switch to Postgres via dj-database-url.
+# Local dev has no DATABASE_URL, so it keeps SQLite and doesn't need the package.
+_database_url = os.getenv("DATABASE_URL")
+if _database_url:
+    try:
+        import dj_database_url
+
+        DATABASES["default"] = dj_database_url.parse(
+            _database_url,
+            conn_max_age=600,
+            ssl_require=not DEBUG,
+        )
+    except ImportError:
+        warnings.warn(
+            "DATABASE_URL is set but dj-database-url is not installed; "
+            "falling back to SQLite.",
+            RuntimeWarning,
+        )
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -258,6 +290,16 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# When WhiteNoise is installed (production), serve compressed + hashed static
+# files. Django 5.2 uses STORAGES (the old STATICFILES_STORAGE is deprecated).
+if _WHITENOISE_AVAILABLE:
+    STORAGES = {
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        },
+    }
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

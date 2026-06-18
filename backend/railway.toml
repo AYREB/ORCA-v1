@@ -1,0 +1,12 @@
+[build]
+builder = "nixpacks"
+# collectstatic at BUILD time so the manifest + hashed files are baked into the
+# serving image. (A pre-deploy one-off container's filesystem is NOT shared with
+# the replicas that serve traffic.)
+buildCommand = "python manage.py collectstatic --noinput"
+
+[deploy]
+startCommand = "gunicorn backend.wsgi --workers 2 --bind 0.0.0.0:$PORT --timeout 120"
+# Run migrations exactly once per deploy, before the new version serves traffic.
+preDeployCommand = "python manage.py migrate --noinput"
+restartPolicyType = "on_failure"

@@ -56,7 +56,7 @@ Modal (shared GPU inference endpoint for the parser, called by both QA + Prod Dj
 | Dependencies          | No requirements.txt          | requirements.txt + pinned versions     |
 | QA environment        | None                         | Railway QA + Vercel preview            |
 
-### Already done in code (this session)
+### Already done in code (earlier session)
 - `DEBUG` now defaults to **False** in `settings.py` (fails safe; local `.env` still sets `DEBUG=true`).
 - Async optimizer job store is now **cache-backed** (`CacheJobStore`), so it works across
   gunicorn workers and survives restarts. With Redis set it also works across replicas.
@@ -64,6 +64,21 @@ Modal (shared GPU inference endpoint for the parser, called by both QA + Prod Dj
   configurable via `FILE_CACHE_LOCATION`.
 - `frontend/.env.example` created (documents `VITE_DJANGO_API_URL` and `VITE_GOOGLE_CLIENT_ID`).
 - Dead `backend/api/logic/` duplicate tree removed (`core/` is canonical).
+
+### Done in code (this session)
+- **`orca_llm.py` rewritten with a provider abstraction** (`generate_raw()` dispatcher).
+  `ORCA_LLM_PROVIDER` selects `mlx` (default — preserves current Mac dev), `local`
+  (llama-cpp-python GGUF, any OS/GPU), or `modal` (hosted HTTP). MLX is now lazy-imported
+  only on the `mlx` path, so Railway never needs it.  *(Still TODO: produce the GGUF and
+  flip prod to `modal`.)*
+- **`modal_inference/app.py` created** — A10G GPU, GGUF on a Modal Volume, single
+  Bearer-authenticated POST endpoint. *(Still TODO: upload a GGUF and `modal deploy`.)*
+- **`backend/requirements.txt`** — hand-curated, pinned, no mlx; prod deps included;
+  `llama-cpp-python` left commented (not needed under `modal`).
+- **`backend/Procfile`** and **`backend/railway.toml`** (build collectstatic, preDeploy migrate).
+- **`settings.py`**: WhiteNoise middleware + `STORAGES` (both guarded so local dev still boots);
+  Postgres via `dj-database-url` when `DATABASE_URL` is set (else SQLite locally).
+- **`frontend/vercel.json`** — SPA rewrite fallback. `npm run build` passes.
 
 ---
 

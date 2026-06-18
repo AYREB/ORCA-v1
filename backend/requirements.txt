@@ -1,0 +1,28 @@
+# Orca backend — production requirements (Linux/Railway).
+# Hand-curated, NOT a raw `pip freeze` (a Mac freeze pulls in mlx/Apple-only
+# wheels that fail to build on Railway). Versions pinned from the local venv.
+
+# --- Core app ---
+Django==5.2.8
+djangorestframework==3.16.1
+django-cors-headers==4.9.0
+
+# --- Data / backtesting ---
+numpy==2.2.6
+pandas==2.3.3
+pandas-ta==0.4.71b0
+requests==2.32.5
+yfinance==0.2.66
+certifi==2025.11.12
+
+# --- Production runtime ---
+gunicorn>=21.0
+whitenoise>=6.0
+psycopg2-binary>=2.9
+dj-database-url>=2.0
+redis>=5.0
+
+# --- Local-only parser inference (ORCA_LLM_PROVIDER=local) ---
+# Not needed on Railway when ORCA_LLM_PROVIDER=modal (inference runs on Modal).
+# Uncomment only on a host that runs GGUF inference itself:
+# llama-cpp-python>=0.2

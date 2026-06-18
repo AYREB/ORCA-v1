@@ -51,6 +51,25 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
     const startEquity = results.total_portfolio / (1 + results.pct_change / 100);
     const points = buildDailyEquityCurve(results.trades, startEquity);
     return { points, startEquity };
+  }, [results]);
+
+  // Normalize the y-axis to the data range (incl. the start reference line)
+  // instead of letting it auto-scale from $0 — matches the dashboard chart.
+  const equityDomain = useMemo<[number, number]>(() => {
+    if (!equitySeries) return [0, 1];
+    const values = equitySeries.points
+      .map((p) => p.portfolio)
+      .concat(equitySeries.startEquity)
+      .filter(Number.isFinite);
+    if (values.length === 0) return [0, 1];
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    if (min === max) {
+      const pad = Math.max(1, Math.abs(min) * 0.02);
+      return [min - pad, max + pad];
+    }
+    const pad = (max - min) * 0.08;
+    return [Math.max(0, min - pad), max + pad];
   }, [results.trades, results.total_portfolio, results.pct_change]);
 
   // Extract unique tickers
@@ -264,6 +283,8 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
                       minTickGap={30}
                     />
                     <YAxis
+                      domain={equityDomain}
+                      allowDataOverflow
                       stroke="hsl(var(--muted-foreground))"
                       tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
                       tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`}
