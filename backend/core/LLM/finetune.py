@@ -52,8 +52,8 @@ TRAINING_CONFIG = {
     "weight_decay": 0.01,
     "lr_scheduler_type": "cosine",
     "seed": 42,
-    "fp16": False,
-    "bf16": True,  # A10G supports bf16
+    "fp16": not bool(os.environ.get("USE_BF16", "")),  # fp16 by default (T4/P100 safe); set USE_BF16=1 on A100/A10G
+    "bf16": bool(os.environ.get("USE_BF16", "")),
 }
 
 # ---------------- SYSTEM PROMPT BUILDER ----------------
