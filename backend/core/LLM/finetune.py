@@ -18,6 +18,11 @@ TRAINING_DATA = BASE_DIR.parent.parent / "training_data.jsonl"
 ADAPTER_OUTPUT = BASE_DIR / "adapters"
 GGUF_OUTPUT = BASE_DIR / "gguf"
 
+# Add backend/ to sys.path so core.* imports resolve from any working directory
+_BACKEND_DIR = str(BASE_DIR.parent.parent)
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
 # ---------------- CONFIG ----------------
 
 MODEL_NAME = "unsloth/Qwen2.5-Coder-7B-Instruct"
@@ -38,7 +43,7 @@ TRAINING_CONFIG = {
     "per_device_train_batch_size": 2,
     "gradient_accumulation_steps": 4,
     "warmup_steps": 50,
-    "max_steps": 600,
+    "max_steps": 1500,
     "learning_rate": 2e-4,
     "logging_steps": 25,
     "eval_steps": 100,
@@ -54,87 +59,8 @@ TRAINING_CONFIG = {
 # ---------------- SYSTEM PROMPT BUILDER ----------------
 
 def build_training_system_prompt() -> str:
-    try:
-        with open(REGISTRY_DIR / "indicatorRegistry.json") as f:
-            indicators = json.load(f).get("INDICATORS", {})
-    except FileNotFoundError:
-        indicators = {}
-
-    try:
-        with open(REGISTRY_DIR / "timeframeRegistry.json") as f:
-            timeframes = json.load(f).get("TIMEFRAMES", {})
-    except FileNotFoundError:
-        timeframes = {"1m": {}, "5m": {}, "15m": {}, "1h": {}, "4h": {}, "1D": {}}
-
-    try:
-        with open(REGISTRY_DIR / "tickerRegistry.json") as f:
-            tickers_raw = json.load(f).get("TICKERS", {})
-    except FileNotFoundError:
-        tickers_raw = {}
-
-    indicator_lines = []
-    for name, info in indicators.items():
-        args     = info.get("args", [])
-        defaults = info.get("defaults", {})
-        defaults_str = ", ".join(f"{k}={v}" for k, v in defaults.items())
-        indicator_lines.append(f"  - {name}: args={args}, defaults={{{defaults_str}}}")
-
-    ticker_lines = []
-    for ticker, data in tickers_raw.items():
-        aliases = data.get("aliases", [])
-        tfs     = data.get("available_timeframes", [])
-        ticker_lines.append(f"  - {ticker}: aliases={aliases}, timeframes={tfs}")
-
-    indicators_str = "\n".join(indicator_lines)
-    timeframes_str = ", ".join(timeframes.keys())
-    indicator_names = ", ".join(indicators.keys())
-    tickers_str     = "\n".join(ticker_lines)
-
-    return f"""You are a trading strategy parser. Convert natural language trading strategies into JSON format.
-
-AVAILABLE INDICATORS: {indicator_names}
-
-INDICATOR DETAILS:
-{indicators_str}
-
-AVAILABLE TIMEFRAMES: {timeframes_str}
-
-AVAILABLE TICKERS:
-{tickers_str}
-
-JSON SCHEMA RULES:
-- Top level key must be LONG or SHORT
-- LONG = buying, SHORT = selling short
-- context contains: tickers (list of canonical tickers), execution_timeframe, dateframe (start/end)
-- OPEN contains: CONDITIONS and ARGUMENTS
-- CLOSE is optional - only include if explicitly mentioned
-- CONDITIONS use: left, operator, right structure
-- operators: >, <, >=, <=, ==, !=
-- right side can be a value or another indicator
-- AND/OR logic: {{"AND": [condition1, condition2]}}
-- Arithmetic: {{"op": "*", "left": {{...}}, "right": {{...}}}}
-- Default timeframe: 1h if not specified
-- Default date range: last 1 year if not specified
-
-OPEN ARGUMENTS (include only what is specified or can be inferred):
-- stopLossPercent: whole number (5 = 5% stop loss, backtester divides by 100 internally)
-- takeProfitPercent: whole number (15 = 15% take profit)
-- initialOpenPositionInvestType: "percentCashBalance" | "fixedValue" | "numberShares" | "riskFixedAmount" | "riskPercentBalance"
-- initialOpenPositionInvestAmount: fraction for percent/risk-percent types (0.2 = 20%, 0.01 = 1%), dollar amount for fixedValue/riskFixedAmount, share count for numberShares
-  riskFixedAmount: risk $X if SL hit (e.g. 100 = risk $100 per trade, requires stopLossPercent)
-  riskPercentBalance: risk X% of balance if SL hit (e.g. 0.01 = 1% risk per trade, requires stopLossPercent)
-- recurring: true if DCA / pyramid entries are requested
-- recurringPeriod: bars between recurring entries
-- recurringInvestType: same options as initialOpenPositionInvestType
-- recurringInvestAmount: same scale as initialOpenPositionInvestAmount
-- maxRecurringCount: max additional entries, 0 = unlimited
-
-CLOSE ARGUMENTS (optional, only if hold time or cooldown is specified):
-- minHoldBars: ignore close condition for first N bars (0 = off)
-- maxHoldBars: force-close after N bars (0 = off)
-- reentryCooldownBars: cooldown bars before next entry allowed (0 = off)
-
-Output ONLY raw JSON, no explanation, no markdown, no code fences."""
+    from core.LLM.registry_loader import build_full_system_prompt
+    return build_full_system_prompt()
 
 
 # ---------------- DATA PREPARATION ----------------
@@ -254,7 +180,7 @@ def train(data_path: Path = TRAINING_DATA):
         logging_steps=TRAINING_CONFIG["logging_steps"],
         eval_steps=TRAINING_CONFIG["eval_steps"],
         save_steps=TRAINING_CONFIG["save_steps"],
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         save_strategy="steps",
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
@@ -512,7 +438,7 @@ if __name__ == "__main__":
     cmd = sys.argv[1]
 
     if cmd == "generate":
-        from SynthData import generate_dataset
+        from core.LLM.SynthData import generate_dataset
         n   = int(sys.argv[2])   if len(sys.argv) > 2 else 2000
         out = sys.argv[3]        if len(sys.argv) > 3 else str(TRAINING_DATA)
         print(f"Generating {n} examples → {out}")

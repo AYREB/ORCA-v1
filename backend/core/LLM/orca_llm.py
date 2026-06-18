@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from core.LLM.registry_loader import build_registry_context, load_ticker_registry
+from core.LLM.registry_loader import build_registry_context, load_ticker_registry, build_full_system_prompt
 from core.parsing.validateParsedDSL import validate_conditions
 
 # Global model caches
@@ -158,44 +158,7 @@ def prewarm():
 
 
 def build_system_prompt(registry_context: dict) -> str:
-    tickers_str = ", ".join(registry_context["tickers"].keys())
-    timeframes_str = ", ".join(registry_context["timeframes"])
-    indicators_str = ", ".join(registry_context["indicators"])
-
-    alias_lines = []
-    for ticker, aliases in registry_context["tickers"].items():
-        natural = [a for a in aliases if a != ticker][:3]
-        if natural:
-            alias_lines.append(f"  {ticker}: also known as {', '.join(natural)}")
-    aliases_str = "\n".join(alias_lines)
-
-    return f"""You are a trading strategy parser. Convert natural language trading strategies into JSON format.
-
-AVAILABLE TICKERS: {tickers_str}
-Ticker aliases:
-{aliases_str}
-
-AVAILABLE TIMEFRAMES: {timeframes_str}
-
-AVAILABLE INDICATORS: {indicators_str}
-
-RULES:
-- Only use tickers from the available list above
-- Only use timeframes from the available list above
-- Only use indicators from the available list above
-- Output ONLY raw JSON, no explanation, no markdown
-- Percentages as decimals (5% = 0.05)
-- Default timeframe: 1h if not specified
-- Default date range: last 1 year if not specified
-
-POSITION SIZING (initialOpenPositionInvestType):
-- "percentCashBalance" + amount as fraction (0.2 = 20% of cash) — default
-- "fixedValue" + amount as dollars (500 = $500)
-- "numberShares" + amount as share count (10 = 10 shares)
-- "riskFixedAmount" + amount as dollars to risk (100 = risk $100 per trade, requires stopLossPercent)
-- "riskPercentBalance" + amount as fraction to risk (0.01 = risk 1% of balance per trade, requires stopLossPercent)
-Risk-based sizing: position = risk_amount / (entry_price × stopLossPercent/100)
-Use riskFixedAmount when user says "risk $X per trade". Use riskPercentBalance when user says "risk X% per trade"."""
+    return build_full_system_prompt(registry_context)
 
 
 def fix_percentage_fields(block: dict) -> dict:
