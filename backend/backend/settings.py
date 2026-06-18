@@ -92,7 +92,9 @@ def env_list(name: str, default: list[str] | None = None) -> list[str]:
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = env_bool("DEBUG", True)
+# Default to False so a forgotten DEBUG env var in production fails safe (no
+# tracebacks/settings leak). Local development sets DEBUG=true in .env.
+DEBUG = env_bool("DEBUG", False)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "")
@@ -354,13 +356,17 @@ REST_FRAMEWORK = {
     ]
 }
 
+# Rate limiting and async-job state live in the cache, so it must be shared
+# across worker processes/instances. Set REDIS_URL in any multi-instance
+# deployment; the file-based fallback is only shared between workers on a single
+# host (and its location is configurable via FILE_CACHE_LOCATION).
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
-        "LOCATION": "/tmp/orca_cache",
-    }
-    if not os.environ.get("REDIS_URL") else {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": os.environ.get("REDIS_URL"),
+        "LOCATION": os.environ["REDIS_URL"],
+    }
+    if os.environ.get("REDIS_URL") else {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": os.getenv("FILE_CACHE_LOCATION", "/tmp/orca_cache"),
     }
 }

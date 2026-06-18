@@ -4,6 +4,7 @@ import logging
 import re
 import ssl
 import threading
+import time
 from datetime import timedelta
 import urllib.error
 import urllib.parse
@@ -79,11 +80,124 @@ def _prewarm_model():
 threading.Thread(target=_prewarm_model, daemon=True).start()
 
 
-optimizer_jobs: dict[str, dict[str, Any]] = {}
-genetic_jobs: dict[str, dict[str, Any]] = {}
+class CacheJobStore:
+    """Async-job store backed by the Django cache.
+
+    Optimization jobs run in a background thread inside one worker, but the
+    status poll can be served by any worker. A module-level dict only lives in
+    the worker that created the job, so polls hitting a different worker (or any
+    poll after a restart) 404. Persisting job state to the shared cache (Redis
+    in prod, a single-host file cache otherwise) makes jobs visible to every
+    worker. An index key tracks live job ids for cleanup and per-user counts.
+    """
+
+    def __init__(self, namespace: str):
+        self.namespace = namespace
+        self.index_key = f"jobs:{namespace}:index"
+
+    def _key(self, job_id: str) -> str:
+        return f"jobs:{self.namespace}:{job_id}"
+
+    def _ttl(self) -> int:
+        return int(getattr(settings, "ASYNC_JOB_TTL_SECONDS", 3600))
+
+    def _index(self) -> set[str]:
+        return set(cache.get(self.index_key) or [])
+
+    def _save_index(self, ids) -> None:
+        cache.set(self.index_key, list(ids), timeout=None)
+
+    def get(self, job_id: str):
+        return cache.get(self._key(job_id))
+
+    def set(self, job_id: str, job: dict[str, Any]) -> None:
+        cache.set(self._key(job_id), job, timeout=self._ttl())
+        ids = self._index()
+        if job_id not in ids:
+            ids.add(job_id)
+            self._save_index(ids)
+
+    def update(self, job_id: str, **changes):
+        job = self.get(job_id)
+        if job is None:
+            return None
+        job.update(changes)
+        self.set(job_id, job)
+        return job
+
+    def pop(self, job_id: str) -> None:
+        cache.delete(self._key(job_id))
+        ids = self._index()
+        if job_id in ids:
+            ids.discard(job_id)
+            self._save_index(ids)
+
+    def all(self) -> dict[str, dict[str, Any]]:
+        ids = self._index()
+        result: dict[str, dict[str, Any]] = {}
+        stale = False
+        for job_id in list(ids):
+            job = cache.get(self._key(job_id))
+            if job is None:  # expired via TTL — drop from the index.
+                ids.discard(job_id)
+                stale = True
+            else:
+                result[job_id] = job
+        if stale:
+            self._save_index(ids)
+        return result
+
+
+optimizer_jobs = CacheJobStore("optimizer")
+genetic_jobs = CacheJobStore("genetic")
 # Shared store for the metaheuristic optimizers (random / pso / annealing / differential),
 # which all run through the single dslOptimiser endpoint and differ only by `method`.
-optimiser_jobs: dict[str, dict[str, Any]] = {}
+optimiser_jobs = CacheJobStore("optimiser")
+
+
+def run_async_job(store: CacheJobStore, user_id: int, total_runs: int, work_fn: Callable) -> str:
+    """Create a queued job and run ``work_fn(progress_hook)`` in a daemon thread.
+
+    All job state is persisted to ``store`` (the shared cache) so any worker can
+    serve the status poll. ``work_fn`` receives a progress hook ``(done, total)``.
+    """
+    job_id = str(uuid.uuid4())
+    store.set(job_id, {
+        "status": "queued",
+        "completed_runs": 0,
+        "total_runs": total_runs,
+        "result": None,
+        "error": None,
+        "user_id": user_id,
+        "created_at": timezone.now(),
+    })
+
+    # Persisting every progress tick would mean a cache write (disk/Redis I/O)
+    # per backtest run. Throttle to ~1/sec, but always flush the final tick.
+    last_write = {"t": 0.0}
+
+    def progress_hook(done, total):
+        now = time.monotonic()
+        if done < total and (now - last_write["t"]) < 1.0:
+            return
+        last_write["t"] = now
+        store.update(job_id, completed_runs=done, total_runs=total, status="running")
+
+    def run_job():
+        try:
+            result = work_fn(progress_hook)
+            job = store.get(job_id)
+            final_total = job.get("total_runs", total_runs) if job else total_runs
+            store.update(job_id, result=result, status="completed", completed_runs=final_total)
+        except Exception as exc:
+            store.update(
+                job_id,
+                error=str(exc) if settings.DEBUG else "Optimization failed.",
+                status="error",
+            )
+
+    threading.Thread(target=run_job, daemon=True).start()
+    return job_id
 
 DEFAULT_INITIAL_BALANCE = 10000.0
 MAX_STRATEGY_NAME_LENGTH = 255
@@ -374,46 +488,42 @@ def validate_dict_payload(value: Any, field_name: str) -> dict[str, Any]:
     return value
 
 
-def cleanup_jobs(store: dict[str, dict[str, Any]]) -> None:
+def cleanup_jobs(store: CacheJobStore) -> None:
     ttl_seconds = int(getattr(settings, "ASYNC_JOB_TTL_SECONDS", 3600))
     max_entries = int(getattr(settings, "ASYNC_JOB_MAX_ENTRIES", 500))
     now = timezone.now()
 
-    expired_job_ids = []
-    for job_id, job in store.items():
+    jobs = store.all()
+    for job_id, job in list(jobs.items()):
         created_at = job.get("created_at")
-        if not created_at:
-            expired_job_ids.append(job_id)
-            continue
-        age_seconds = (now - created_at).total_seconds()
-        if age_seconds > ttl_seconds:
-            expired_job_ids.append(job_id)
+        if not created_at or (now - created_at).total_seconds() > ttl_seconds:
+            store.pop(job_id)
+            jobs.pop(job_id, None)
 
-    for job_id in expired_job_ids:
-        store.pop(job_id, None)
-
-    if len(store) <= max_entries:
+    if len(jobs) <= max_entries:
         return
 
-    sorted_jobs = sorted(store.items(), key=lambda item: item[1].get("created_at", now))
+    sorted_jobs = sorted(jobs.items(), key=lambda item: item[1].get("created_at", now))
     for job_id, job in sorted_jobs:
-        if len(store) <= max_entries:
+        if len(jobs) <= max_entries:
             break
         if job.get("status") in {"completed", "error"}:
-            store.pop(job_id, None)
+            store.pop(job_id)
+            jobs.pop(job_id, None)
 
-    if len(store) > max_entries:
+    if len(jobs) > max_entries:
         for job_id, _ in sorted_jobs:
-            if len(store) <= max_entries:
+            if len(jobs) <= max_entries:
                 break
-            store.pop(job_id, None)
+            store.pop(job_id)
+            jobs.pop(job_id, None)
 
 
-def ensure_user_can_create_job(store: dict[str, dict[str, Any]], user_id: int) -> None:
+def ensure_user_can_create_job(store: CacheJobStore, user_id: int) -> None:
     max_per_user = int(getattr(settings, "ASYNC_JOB_MAX_PER_USER", 3))
     active_count = sum(
         1
-        for job in store.values()
+        for job in store.all().values()
         if job.get("user_id") == user_id and job.get("status") in {"queued", "running"}
     )
     if active_count >= max_per_user:
@@ -1384,7 +1494,6 @@ def dslParameterOptimiser(request):
         cleanup_jobs(optimizer_jobs)
         ensure_user_can_create_job(optimizer_jobs, user.id)
 
-        job_id = str(uuid.uuid4())
         param_grid, _ = build_param_grid(dsl, parameter_choice)
         if not param_grid:
             raise APIError("No parameters selected for optimization")
@@ -1392,47 +1501,18 @@ def dslParameterOptimiser(request):
         for vals in param_grid.values():
             total_runs *= len(vals)
 
-        optimizer_jobs[job_id] = {
-            "status": "queued",
-            "completed_runs": 0,
-            "total_runs": total_runs,
-            "result": None,
-            "error": None,
-            "user_id": user.id,
-            "created_at": timezone.now(),
-        }
-
-        def progress_hook(done, total):
-            job = optimizer_jobs.get(job_id)
-            if not job:
-                return
-            job["completed_runs"] = done
-            job["total_runs"] = total
-            job["status"] = "running"
-
-        def run_job():
-            try:
-                result = optimizer(
-                    parsed_dsl=dsl,
-                    param_choices=parameter_choice,
-                    initial_balance=initial_balance,
-                    progress_hook=progress_hook,
-                    param_grid_override=param_grid,
-                )
-                job = optimizer_jobs.get(job_id)
-                if not job:
-                    return
-                job["result"] = result
-                job["status"] = "completed"
-                job["completed_runs"] = job.get("total_runs", 0)
-            except Exception as exc:
-                job = optimizer_jobs.get(job_id)
-                if not job:
-                    return
-                job["error"] = str(exc) if settings.DEBUG else "Optimization failed."
-                job["status"] = "error"
-
-        threading.Thread(target=run_job, daemon=True).start()
+        job_id = run_async_job(
+            optimizer_jobs,
+            user.id,
+            total_runs,
+            lambda hook: optimizer(
+                parsed_dsl=dsl,
+                param_choices=parameter_choice,
+                initial_balance=initial_balance,
+                progress_hook=hook,
+                param_grid_override=param_grid,
+            ),
+        )
         return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
     result = optimizer(parsed_dsl=dsl, param_choices=parameter_choice, initial_balance=initial_balance)
@@ -1490,54 +1570,24 @@ def dslGeneticOptimiser(request):
         cleanup_jobs(genetic_jobs)
         ensure_user_can_create_job(genetic_jobs, user.id)
 
-        job_id = str(uuid.uuid4())
         param_values, _ = build_param_values(dsl, parameter_choice)
         if not param_values:
             raise APIError("No parameters selected for optimization")
 
         total_runs = int(ga_settings.get("population", 20)) * int(ga_settings.get("generations", 10))
 
-        genetic_jobs[job_id] = {
-            "status": "queued",
-            "completed_runs": 0,
-            "total_runs": total_runs,
-            "result": None,
-            "error": None,
-            "user_id": user.id,
-            "created_at": timezone.now(),
-        }
-
-        def progress_hook(done, total):
-            job = genetic_jobs.get(job_id)
-            if not job:
-                return
-            job["completed_runs"] = done
-            job["total_runs"] = total
-            job["status"] = "running"
-
-        def run_job():
-            try:
-                result = genetic_optimizer(
-                    parsed_dsl=dsl,
-                    param_choices=parameter_choice,
-                    initial_balance=initial_balance,
-                    ga_settings=ga_settings,
-                    progress_hook=progress_hook,
-                )
-                job = genetic_jobs.get(job_id)
-                if not job:
-                    return
-                job["result"] = result
-                job["status"] = "completed"
-                job["completed_runs"] = job.get("total_runs", 0)
-            except Exception as exc:
-                job = genetic_jobs.get(job_id)
-                if not job:
-                    return
-                job["error"] = str(exc) if settings.DEBUG else "Optimization failed."
-                job["status"] = "error"
-
-        threading.Thread(target=run_job, daemon=True).start()
+        job_id = run_async_job(
+            genetic_jobs,
+            user.id,
+            total_runs,
+            lambda hook: genetic_optimizer(
+                parsed_dsl=dsl,
+                param_choices=parameter_choice,
+                initial_balance=initial_balance,
+                ga_settings=ga_settings,
+                progress_hook=hook,
+            ),
+        )
         return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
     result = genetic_optimizer(
@@ -1619,50 +1669,20 @@ def dslOptimiser(request):
         cleanup_jobs(optimiser_jobs)
         ensure_user_can_create_job(optimiser_jobs, user.id)
 
-        job_id = str(uuid.uuid4())
         total_runs = estimate_total_runs(method, opt_settings)
 
-        optimiser_jobs[job_id] = {
-            "status": "queued",
-            "completed_runs": 0,
-            "total_runs": total_runs,
-            "result": None,
-            "error": None,
-            "user_id": user.id,
-            "created_at": timezone.now(),
-        }
-
-        def progress_hook(done, total):
-            job = optimiser_jobs.get(job_id)
-            if not job:
-                return
-            job["completed_runs"] = done
-            job["total_runs"] = total
-            job["status"] = "running"
-
-        def run_job():
-            try:
-                result = runner(
-                    parsed_dsl=dsl,
-                    param_choices=parameter_choice,
-                    initial_balance=initial_balance,
-                    settings=opt_settings,
-                    progress_hook=progress_hook,
-                )
-                job = optimiser_jobs.get(job_id)
-                if not job:
-                    return
-                job["result"] = result
-                job["status"] = "completed"
-                job["completed_runs"] = job.get("total_runs", 0)
-            except Exception as exc:
-                job = optimiser_jobs.get(job_id)
-                if not job:
-                    return
-                job["error"] = str(exc) if settings.DEBUG else "Optimization failed."
-                job["status"] = "error"
-
-        threading.Thread(target=run_job, daemon=True).start()
+        job_id = run_async_job(
+            optimiser_jobs,
+            user.id,
+            total_runs,
+            lambda hook: runner(
+                parsed_dsl=dsl,
+                param_choices=parameter_choice,
+                initial_balance=initial_balance,
+                settings=opt_settings,
+                progress_hook=hook,
+            ),
+        )
         return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
     result = runner(
