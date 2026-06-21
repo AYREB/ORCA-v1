@@ -391,8 +391,7 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
         setSelectedPath(null);
         toast.success("Monte Carlo simulation complete");
       } catch (err) {
-        toast.error("Simulation failed");
-        console.error(err);
+        toast.error(err instanceof Error ? err.message : "Simulation failed");
       } finally {
         setIsLoading(false);
       }

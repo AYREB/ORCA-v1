@@ -35,8 +35,8 @@ export const RegistryProvider = ({ children }: { children: ReactNode }) => {
       try {
         const data = (await api.getRegistry()) as unknown as Registry;
         if (alive) setRegistry(data);
-      } catch (err) {
-        console.error("Failed to fetch registry:", err);
+      } catch {
+        // Falls back to FALLBACK_REGISTRY set in initial state — app remains usable
       } finally {
         if (alive) setLoading(false);
       }

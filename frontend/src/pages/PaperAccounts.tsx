@@ -625,10 +625,10 @@ const PaperAccounts = () => {
   // occasional double-fire from a functional state update is harmless.
   const persistAccounts = useCallback((next: PaperAccount[]) => {
     api.savePaperAccounts(serializeAccountsForStorage(next)).catch((error) => {
-      console.warn("Unable to persist paper account history:", error);
       if (!saveWarningShown.current) {
         saveWarningShown.current = true;
-        toast.error("Couldn't save your paper account changes. Check your connection and try again.");
+        const msg = error instanceof Error ? error.message : "Couldn't save your paper account changes. Check your connection and try again.";
+        toast.error(msg);
       }
     });
   }, []);
@@ -691,8 +691,8 @@ const PaperAccounts = () => {
         setSelectedAccountId(normalized[0]?.id ?? null);
       } catch (error) {
         if (cancelled) return;
-        console.warn("Unable to load paper accounts:", error);
-        toast.error("Couldn't load your paper accounts. Please refresh to try again.");
+        const msg = error instanceof Error ? error.message : "Couldn't load your paper accounts. Please refresh to try again.";
+        toast.error(msg);
         setAccounts([]);
         setSelectedAccountId(null);
       } finally {

@@ -133,8 +133,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
       let merged: Registry;
       try {
         merged = { ...(await api.getRegistry()) } as unknown as Registry;
-      } catch (err) {
-        console.error("Failed to fetch registry:", err);
+      } catch {
         merged = FALLBACK_REGISTRY;
       }
 
@@ -153,8 +152,8 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
             }
             merged = { ...merged, indicators: { INDICATORS: indicators }, customIndicatorMeta };
           }
-        } catch (err) {
-          console.error("Failed to fetch custom indicators:", err);
+        } catch {
+          toast.error("Couldn't load your custom indicators — only built-in ones are available.");
         }
       }
 
@@ -167,8 +166,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
         const strategies = await api.fetchStrategies();
         setSavedStrategies(strategies);
       } catch (err) {
-        console.error("Failed to fetch strategies:", err);
-        toast.error("Failed to load saved strategies");
+        toast.error(err instanceof Error ? err.message : "Failed to load saved strategies");
       }
     };
 
@@ -371,8 +369,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
       setShowLoadDialog(false);
       toast.success(`Strategy "${strategy.name}" loaded`);
     } catch (err) {
-      console.error("Failed to parse strategy:", err);
-      toast.error("Failed to parse strategy");
+      toast.error(err instanceof Error ? err.message : "Failed to load strategy");
     }
   };
 
