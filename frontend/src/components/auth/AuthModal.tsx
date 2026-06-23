@@ -68,10 +68,21 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
   const { login, loginWithGoogle, signup } = useAuth();
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 
+  const pwLongEnough = password.length >= 8;
+  const pwNotAllNumbers = password.length > 0 && !/^\d+$/.test(password);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password || (mode === "signup" && !name.trim())) {
       toast.error("Please fill in all required fields");
+      return;
+    }
+    if (mode === "signup" && !pwLongEnough) {
+      toast.error("Password must be at least 8 characters.");
+      return;
+    }
+    if (mode === "signup" && !pwNotAllNumbers) {
+      toast.error("Password can't be entirely numbers.");
       return;
     }
 
@@ -366,6 +377,19 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
                         {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                       </button>
                     </motion.div>
+
+                    {mode === "signup" && password.length > 0 && (
+                      <div className="flex gap-4 px-1 -mt-1">
+                        <span className={`flex items-center gap-1.5 text-xs transition-colors ${pwLongEnough ? "text-emerald-500" : "text-muted-foreground/60"}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full transition-colors ${pwLongEnough ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                          8+ characters
+                        </span>
+                        <span className={`flex items-center gap-1.5 text-xs transition-colors ${pwNotAllNumbers ? "text-emerald-500" : "text-muted-foreground/60"}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full transition-colors ${pwNotAllNumbers ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                          Not all numbers
+                        </span>
+                      </div>
+                    )}
 
                     {mode === "login" && (
                       <motion.div variants={fieldVariants} className="text-right">
