@@ -14,6 +14,7 @@ export interface TradeEntry {
   sl_price?: number;
   tp_price?: number;
   close_reason?: 'SL' | 'TP' | 'CLOSE_CONDITION' | 'MAX_HOLD';
+  fee?: number;
 }
 
 export interface OHLCData {
@@ -265,6 +266,7 @@ export interface StrategyAssistantContext {
     stopLossPercent: number;
     feeMode: "commission" | "spread";
     feeValue: number;
+    feeFixed?: number;
   };
   markets: {
     tickers: string[];

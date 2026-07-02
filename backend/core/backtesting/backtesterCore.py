@@ -5,10 +5,15 @@ from .BacktesterHelpers.CalculateShares import calculate_shares
 from core.parsing.extractingTickers import extract_execution_timeframe, extract_data_timeframes, extract_dateframe
 
 # ---------------- TRANSACTION COST HELPERS ---------------- #
-# cost_factor is applied per-leg:
-#   commission mode → cost_factor = fee_value / 100   (each leg costs fee_value %)
-#   spread mode     → cost_factor = fee_value / 200   (half-spread per leg)
-# Round-trip cost:  commission = 2 × fee_value%,  spread = fee_value%
+# Two independent cost components, combinable to model any retail broker:
+#   1. Percentage (cost_factor, applied per-leg as a price adjustment):
+#        commission mode → cost_factor = fee_value / 100   (each leg costs fee_value %)
+#        spread mode     → cost_factor = fee_value / 200   (half-spread per leg)
+#      Round-trip cost:  commission = 2 × fee_value%,  spread = fee_value%
+#   2. Fixed (fee_fixed, a flat $ amount deducted from cash on every order —
+#      entries, recurring entries, and exits each pay it once).
+# Examples: Binance = 0.1% commission + $0; flat-fee broker = 0% + $4.95;
+#           CFD broker = 0.04% spread + $1 per order.
 
 def apply_entry_cost(price, is_long, cost_factor):
     """Buyer pays above mid (long) or seller receives below mid (short)."""
@@ -100,6 +105,9 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
     else:
         cost_factor = fee_value / 100.0   # commission per leg → 2× round-trip
 
+    # Flat $ fee charged once per order (entry, recurring entry, or exit).
+    fee_fixed = max(0.0, float(open_args.get("fee_fixed", 0) or 0))
+
     invest_type   = open_args.get("initialOpenPositionInvestType", "percentCashBalance")
     invest_amount = open_args.get("initialOpenPositionInvestAmount", 0.2)
     sl_pct        = open_args.get("stopLossPercent")
@@ -190,10 +198,13 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                     market_price = current_prices[ticker]
                     exec_price = apply_entry_cost(market_price, is_long, cost_factor)
 
-                    shares = calculate_shares(cash, exec_price, invest_type, invest_amount,
-                                              allow_fractional, fractional_precision, sl_pct=sl_pct)
+                    # Reserve the flat fee before sizing so an all-in entry can still pay it.
+                    sizing_cash = cash - fee_fixed
+                    shares = calculate_shares(sizing_cash, exec_price, invest_type, invest_amount,
+                                              allow_fractional, fractional_precision, sl_pct=sl_pct) if sizing_cash > 0 else 0
                     if shares > 0:
                         cash += shares * exec_price * (-1 if is_long else 1)
+                        cash -= fee_fixed
                         positions[ticker] += shares * (1 if is_long else -1)
                         last_recurring_index[ticker] = i
                         recurring_count[ticker] = 0
@@ -212,6 +223,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                             "timestamp": row.name.isoformat(),
                             "sl_price": sl_price,
                             "tp_price": tp_price,
+                            "fee": round(shares * abs(exec_price - market_price) + fee_fixed, 4),
                         })
                         in_position = True
 
@@ -223,10 +235,12 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                     market_price = current_prices[ticker]
                     exec_price = apply_entry_cost(market_price, is_long, cost_factor)
 
-                    shares = calculate_shares(cash, exec_price, rec_type, rec_amt,
-                                              allow_fractional, fractional_precision)
+                    sizing_cash = cash - fee_fixed
+                    shares = calculate_shares(sizing_cash, exec_price, rec_type, rec_amt,
+                                              allow_fractional, fractional_precision) if sizing_cash > 0 else 0
                     if shares > 0:
                         cash += shares * exec_price * (-1 if is_long else 1)
+                        cash -= fee_fixed
                         positions[ticker] += shares * (1 if is_long else -1)
                         last_recurring_index[ticker] = i
                         recurring_count[ticker] += 1
@@ -239,6 +253,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                             "shares": shares,
                             "balance": cash,
                             "timestamp": row.name.isoformat(),
+                            "fee": round(shares * abs(exec_price - market_price) + fee_fixed, 4),
                         })
 
             # ---------------- CLOSE ---------------- #
@@ -280,6 +295,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                     shares = abs(positions[ticker])
                     exec_price = apply_exit_cost(close_price, is_long, cost_factor)
                     cash += shares * exec_price * (1 if is_long else -1)
+                    cash -= fee_fixed
                     positions[ticker] = 0
                     entry_index[ticker] = None
                     last_close_index[ticker] = i
@@ -293,6 +309,7 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                         "balance": cash,
                         "timestamp": row.name.isoformat(),
                         "close_reason": reason,
+                        "fee": round(shares * abs(exec_price - close_price) + fee_fixed, 4),
                     })
 
     # ---------------- FINAL VALUATION ---------------- #

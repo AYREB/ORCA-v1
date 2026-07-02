@@ -23,7 +23,8 @@ from core.parsing.validateParsedDSL import validate_parsed_dsl
 # ---------------- REGISTRY ---------------- #
  
 _REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "../registries/indicatorRegistry.json")
-BLOCKED_OPTIMIZER_PARAM_NAMES = {"spread"}
+# Transaction-cost fields must never be tuned - an optimizer would just drive them to 0.
+BLOCKED_OPTIMIZER_PARAM_NAMES = {"spread", "fee_value", "fee_fixed"}
 
 
 def is_optimizable_parameter_path(path):

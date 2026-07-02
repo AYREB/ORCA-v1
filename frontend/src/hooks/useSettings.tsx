@@ -36,6 +36,7 @@ export interface AppSettings {
     initialBalance: number;
     feeMode: "commission" | "spread";
     feeValue: number;
+    feeFixed: number;
     takeProfitPercent: number;
     stopLossPercent: number;
     timeframe: string;
@@ -106,6 +107,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     initialBalance: 10000,
     feeMode: "commission" as const,
     feeValue: 0.1,
+    feeFixed: 0,
     takeProfitPercent: 10,
     stopLossPercent: 6,
     timeframe: "1h",

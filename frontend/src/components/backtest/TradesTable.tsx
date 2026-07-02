@@ -102,10 +102,16 @@ const TradesTable = ({ trades }: TradesTableProps) => {
     return roundTrips;
   }, [trades, directions]);
 
+  const totalFees = useMemo(
+    () => trades.reduce((sum, t) => sum + (t.fee ?? 0), 0),
+    [trades],
+  );
+  const hasFees = totalFees > 0;
+
   const renderTradeRow = (trade: TradeEntry, index: number) => {
     const dir = directions.get(trade.ticker) || "long";
     const isEntry = isEntryTrade(trade, dir);
-    
+
     return (
       <TableRow key={index} className="border-border">
         <TableCell className="font-mono text-sm">
@@ -135,6 +141,11 @@ const TradesTable = ({ trades }: TradesTableProps) => {
         <TableCell className="text-right font-mono">
           ${trade.price.toFixed(2)}
         </TableCell>
+        {hasFees && (
+          <TableCell className="text-right font-mono text-xs text-muted-foreground">
+            {(trade.fee ?? 0) > 0 ? `$${(trade.fee ?? 0).toFixed(2)}` : "-"}
+          </TableCell>
+        )}
         <TableCell className="text-right font-mono">
           ${trade.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </TableCell>
@@ -153,7 +164,14 @@ const TradesTable = ({ trades }: TradesTableProps) => {
       className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
     >
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold">Trade Log</h3>
+        <div className="flex items-baseline gap-3">
+          <h3 className="text-lg font-semibold">Trade Log</h3>
+          {hasFees && (
+            <span className="text-xs text-muted-foreground">
+              Total fees paid: <span className="font-mono text-foreground/80">${totalFees.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <Button
             variant={viewMode === "chronological" ? "default" : "outline"}
@@ -187,6 +205,7 @@ const TradesTable = ({ trades }: TradesTableProps) => {
                 <TableHead className="text-muted-foreground">Side</TableHead>
                 <TableHead className="text-muted-foreground text-right">Shares</TableHead>
                 <TableHead className="text-muted-foreground text-right">Price</TableHead>
+                {hasFees && <TableHead className="text-muted-foreground text-right">Fee</TableHead>}
                 <TableHead className="text-muted-foreground text-right">Balance</TableHead>
                 <TableHead className="text-muted-foreground">Reason</TableHead>
               </TableRow>

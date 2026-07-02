@@ -69,6 +69,7 @@ export function ArgumentSelector({
     "spread",
     "fee_mode",
     "fee_value",
+    "fee_fixed",
   ];
   const topLevelArgs = Object.keys(availableArgs).filter((a) => !availableArgs[a]?.parent && !hiddenArgs.includes(a));
 

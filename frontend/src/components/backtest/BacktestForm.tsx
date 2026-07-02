@@ -71,9 +71,9 @@ export interface BacktestFormProps {
 
 type WizardStep = 1 | 2 | 3 | 4 | 5;
 type BlockState = Record<string, Record<string, { ARGUMENTS: Record<string, any> }>>;
-type RiskArgument = "takeProfitPercent" | "stopLossPercent" | "fee_mode" | "fee_value" | "spread";
+type RiskArgument = "takeProfitPercent" | "stopLossPercent" | "fee_mode" | "fee_value" | "fee_fixed" | "spread";
 
-const RISK_ARGUMENTS: RiskArgument[] = ["takeProfitPercent", "stopLossPercent", "fee_mode", "fee_value", "spread"];
+const RISK_ARGUMENTS: RiskArgument[] = ["takeProfitPercent", "stopLossPercent", "fee_mode", "fee_value", "fee_fixed", "spread"];
 
 const WIZARD_STEPS: Array<{ id: WizardStep; label: string }> = [
   { id: 1, label: "Strategy" },
@@ -127,6 +127,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
   const [stopLossPercent, setStopLossPercent] = useState(btDefaults.stopLossPercent);
   const [feeMode, setFeeMode] = useState<"commission" | "spread">(btDefaults.feeMode);
   const [feeValue, setFeeValue] = useState(btDefaults.feeValue);
+  const [feeFixed, setFeeFixed] = useState(btDefaults.feeFixed ?? 0);
 
   useEffect(() => {
     const fetchRegistry = async () => {
@@ -339,6 +340,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
         setFeeMode(btDefaults.feeMode);
         setFeeValue(btDefaults.feeValue);
       }
+      setFeeFixed(numericArg(loadedOpenArgs.fee_fixed, btDefaults.feeFixed ?? 0));
 
       if (sideData.OPEN?.ARGUMENTS) {
         nextBlocks[detectedSide].OPEN = { ARGUMENTS: stripRiskArguments(sideData.OPEN.ARGUMENTS) };
@@ -496,6 +498,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
       stopLossPercent,
       fee_mode: feeMode,
       fee_value: feeValue,
+      ...(feeFixed > 0 ? { fee_fixed: feeFixed } : {}),
     };
     const closeArgs = blocks[side]?.CLOSE?.ARGUMENTS || {};
     const openConditions = conditionGroups.OPEN || { conditions: [] };
@@ -623,6 +626,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
       stopLossPercent,
       feeMode,
       feeValue,
+      feeFixed,
     },
     markets: {
       tickers: selectedTickers,
@@ -903,7 +907,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                             </button>
                           ))}
                         </div>
-                        {/* Fee value */}
+                        {/* Fee values: percentage + optional flat fee per order */}
                         <div className="flex items-center gap-2">
                           <Input
                             type="number"
@@ -914,20 +918,38 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                             className="bg-secondary/50 border-border/50 h-9"
                           />
                           <span className="text-xs text-muted-foreground shrink-0">%</span>
+                          <span className="text-xs text-muted-foreground/60 shrink-0">+</span>
+                          <span className="text-xs text-muted-foreground shrink-0">$</span>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.5"
+                            value={feeFixed}
+                            onChange={(e) => setFeeFixed(numberInputValue(e.currentTarget.valueAsNumber))}
+                            className="bg-secondary/50 border-border/50 h-9"
+                          />
+                          <span className="text-[11px] text-muted-foreground/60 shrink-0">/order</span>
                         </div>
                         {/* Dynamic hint */}
                         <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
-                          {feeMode === "commission" ? (
-                            <>
-                              {feeValue > 0
-                                ? `${feeValue}% per trade · round-trip ${(feeValue * 2).toFixed(2)}% · typical: Binance 0.1%, stocks 0.05%`
-                                : "0% = no costs applied"}
-                            </>
+                          {feeValue <= 0 && feeFixed <= 0 ? (
+                            "No costs applied — most brokers charge something, so results may look better than reality."
                           ) : (
                             <>
-                              {feeValue > 0
-                                ? `±${(feeValue / 2).toFixed(3)}% per leg · round-trip ${feeValue.toFixed(2)}% · typical: crypto 0.05–0.2%, forex 0.01–0.05%`
-                                : "0% = no costs applied"}
+                              Round-trip ≈{" "}
+                              {feeValue > 0 && (
+                                <span className="text-foreground/80">
+                                  {(feeMode === "commission" ? feeValue * 2 : feeValue).toFixed(2)}%
+                                </span>
+                              )}
+                              {feeValue > 0 && feeFixed > 0 && " + "}
+                              {feeFixed > 0 && (
+                                <span className="text-foreground/80">${(feeFixed * 2).toFixed(2)}</span>
+                              )}
+                              {" · "}
+                              {feeMode === "commission"
+                                ? "typical: Binance 0.1%, stocks 0.05%, flat-fee brokers $1–5/order"
+                                : "typical: crypto 0.05–0.2%, forex 0.01–0.05%, CFD brokers often add $/order"}
                             </>
                           )}
                         </p>

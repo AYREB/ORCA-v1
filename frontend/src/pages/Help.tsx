@@ -127,7 +127,7 @@ const faqItems = [
   },
   {
     q: "How are trading fees simulated?",
-    a: "In the Risk Management section, choose between Commission (a flat % per trade, e.g. 0.1% like most brokers) or Spread (bid-ask spread cost). Both are applied on entry and exit so your results reflect realistic round-trip costs.",
+    a: "In the Risk Management section, choose Commission (a % per trade, e.g. 0.1% like Binance) or Spread (bid-ask spread cost), and optionally add a flat $ fee per order for brokers that charge fixed amounts (e.g. $1–5 per trade). All costs apply on both entry and exit, each trade in the log shows the fee it paid, and total fees appear above the trade log.",
   },
   {
     q: "What does the offset parameter do?",

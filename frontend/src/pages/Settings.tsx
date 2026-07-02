@@ -691,9 +691,9 @@ const Settings = () => {
             } />
             <Row label="Transaction Costs" sub={
               defaults.feeMode === "commission"
-                ? `Commission per trade · round-trip ${(defaults.feeValue * 2).toFixed(2)}%`
-                : `Bid-ask spread · round-trip ${defaults.feeValue.toFixed(2)}%`
-            } icon={Activity} last control={
+                ? `Commission per trade · round-trip ${(defaults.feeValue * 2).toFixed(2)}%${(defaults.feeFixed ?? 0) > 0 ? ` + $${((defaults.feeFixed ?? 0) * 2).toFixed(2)}` : ""}`
+                : `Bid-ask spread · round-trip ${defaults.feeValue.toFixed(2)}%${(defaults.feeFixed ?? 0) > 0 ? ` + $${((defaults.feeFixed ?? 0) * 2).toFixed(2)}` : ""}`
+            } icon={Activity} control={
               <div className="flex items-center gap-3">
                 <div className="flex gap-1">
                   {(["commission", "spread"] as const).map((m) => (
@@ -715,6 +715,12 @@ const Settings = () => {
                   <Stepper value={defaults.feeValue} onChange={(v) => setDefaults((p) => ({ ...p, feeValue: v }))} step={0.01} min={0} />
                   <span className="text-xs text-muted-foreground">%</span>
                 </div>
+              </div>
+            } />
+            <Row label="Flat Fee per Order" sub="Fixed $ charged on every order — entries and exits each pay it" icon={Activity} last control={
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground">$</span>
+                <Stepper value={defaults.feeFixed ?? 0} onChange={(v) => setDefaults((p) => ({ ...p, feeFixed: v }))} step={0.5} min={0} />
               </div>
             } />
           </div>
