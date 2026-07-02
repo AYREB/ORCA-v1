@@ -19,6 +19,14 @@ VALID_TIMEFRAMES = {"1m", "5m", "15m", "1h", "4h", "1D"}
 VALID_INDICATORS = {"PRICE", "VOLUME", "SMA", "EMA", "RSI",
                     "MACD", "BBANDS", "ATR", "STOCH", "CCI", "OBV"}
 
+
+class LLMUnavailableError(RuntimeError):
+    """The parser model is not deployed/configured on this host.
+
+    Views catch this to return a friendly 503 instead of a generic 500 —
+    it signals a deployment gap, not a bug or a bad user request.
+    """
+
 ADAPTER_PATH = Path(__file__).resolve().parent / "adapters"
 # Repo root (…/ORCA-v1) so a relative ORCA_LLM_MODEL_PATH resolves predictably.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -42,7 +50,12 @@ def get_model(adapter_path=None):
             return _model, _tokenizer
 
         path = str(adapter_path or ADAPTER_PATH)
-        from mlx_lm import load
+        try:
+            from mlx_lm import load
+        except ImportError as e:
+            raise LLMUnavailableError(
+                "mlx-lm is not installed (ORCA_LLM_PROVIDER=mlx is Apple Silicon only)."
+            ) from e
         _model, _tokenizer = load(
             "mlx-community/Qwen2.5-7B-Instruct-4bit",
             adapter_path=path if Path(path).exists() else None,
@@ -70,11 +83,16 @@ def _get_llama():
         if _llama is not None:
             return _llama
 
-        from llama_cpp import Llama
+        try:
+            from llama_cpp import Llama
+        except ImportError as e:
+            raise LLMUnavailableError(
+                "llama-cpp-python is not installed (ORCA_LLM_PROVIDER=local)."
+            ) from e
 
         model_path = _resolve_model_path()
         if not Path(model_path).exists():
-            raise RuntimeError(
+            raise LLMUnavailableError(
                 f"GGUF model not found at {model_path}. Set ORCA_LLM_MODEL_PATH "
                 "or place the file there."
             )
@@ -110,7 +128,7 @@ def _generate_modal(prompt: str, max_tokens: int = 1024) -> str:
 
     url = os.getenv("ORCA_MODAL_INFERENCE_URL", "").strip().rstrip("/")
     if not url:
-        raise RuntimeError("ORCA_MODAL_INFERENCE_URL is not set (ORCA_LLM_PROVIDER=modal).")
+        raise LLMUnavailableError("ORCA_MODAL_INFERENCE_URL is not set (ORCA_LLM_PROVIDER=modal).")
 
     headers = {"Content-Type": "application/json"}
     api_key = os.getenv("ORCA_MODAL_API_KEY", "").strip()

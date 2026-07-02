@@ -16,4 +16,17 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Split the heaviest vendor libs into separate chunks so the browser
+        // caches them across deploys and the initial page load shrinks.
+        manualChunks: {
+          "react-vendor": ["react", "react-dom", "react-router-dom"],
+          charts: ["recharts"],
+          motion: ["framer-motion"],
+        },
+      },
+    },
+  },
 }));

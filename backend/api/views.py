@@ -55,7 +55,12 @@ from .indicator_sandbox import (
     validate_parameters,
 )
 from .models import BacktestRun, CustomIndicator, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
-from core.LLM.orca_llm import parse_strategy, parse_strategy_with_context
+from core.LLM.orca_llm import LLMUnavailableError, parse_strategy, parse_strategy_with_context
+
+LLM_UNAVAILABLE_MESSAGE = (
+    "The AI strategy builder is temporarily unavailable. "
+    "You can still build and run strategies with Manual Mode."
+)
 from core.LLM.ambiguity import (
     detect_missing_fields,
     get_next_question,
@@ -1739,7 +1744,11 @@ def strategy_to_dsl(request):
         raise APIError("message is required")
 
     # 1. Call LLM parser
-    result = parse_strategy(message)
+    try:
+        result = parse_strategy(message)
+    except LLMUnavailableError as e:
+        logger.warning(f"LLM unavailable for strategy_to_dsl: {e}")
+        return JsonResponse({"success": False, "error": LLM_UNAVAILABLE_MESSAGE}, status=503)
 
     # 2. Handle failure from model
     if isinstance(result, dict) and "error" in result:
@@ -1970,11 +1979,15 @@ def strategy_chat(request):
     constraints = get_user_constraints(user)
 
     # ---- Try to parse with full context ----
-    strategy, errors, raw_output = parse_strategy_with_context(
-        history,
-        allowed_tickers=constraints["allowed_tickers"],
-        allowed_timeframes=constraints["allowed_timeframes"]
-    )
+    try:
+        strategy, errors, raw_output = parse_strategy_with_context(
+            history,
+            allowed_tickers=constraints["allowed_tickers"],
+            allowed_timeframes=constraints["allowed_timeframes"]
+        )
+    except LLMUnavailableError as e:
+        logger.warning(f"LLM unavailable for strategy_chat: {e}")
+        return JsonResponse({"success": False, "error": LLM_UNAVAILABLE_MESSAGE}, status=503)
 
     # ---- Check for invalid timeframe in errors ----
     timeframe_errors = [e for e in errors if "Invalid timeframe" in e]
