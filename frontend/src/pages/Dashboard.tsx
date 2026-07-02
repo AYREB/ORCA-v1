@@ -16,6 +16,7 @@ import {
   TrendingDown,
   TrendingUp,
   Wallet,
+  X,
 } from "lucide-react";
 import {
   Area,
@@ -139,15 +140,25 @@ const ReturnIndicator = ({ value }: { value: number }) => {
   return <Minus className="h-4 w-4 text-muted-foreground" />;
 };
 
+const ONBOARDING_DISMISSED_KEY = "orca-onboarding-dismissed";
+
 const Dashboard = () => {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [range, setRange] = useState<RangeKey>("all");
+  const [onboardingDismissed, setOnboardingDismissed] = useState(
+    () => localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1",
+  );
   const { user } = useAuth();
   const navigate = useNavigate();
   const { settings } = useSettings();
   const chartColors = settings.appearance.chartColors;
+
+  const dismissOnboarding = () => {
+    localStorage.setItem(ONBOARDING_DISMISSED_KEY, "1");
+    setOnboardingDismissed(true);
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -290,6 +301,78 @@ const Dashboard = () => {
       >
         {error && <p className="text-sm text-destructive">{error}</p>}
       </PageHeader>
+
+      {/* Getting-started strip — only for new users (no runs or no saved
+          strategies yet), dismissible, disappears for good once both done. */}
+      {!isLoading && !error && !onboardingDismissed &&
+        !((summary?.backtestRunCount ?? 0) > 0 && (summary?.strategyCount ?? 0) > 0) && (
+        <motion.section
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25 }}
+          className="glass-card relative border-primary/20 p-4"
+        >
+          <button
+            onClick={dismissOnboarding}
+            aria-label="Dismiss getting started"
+            className="absolute right-3 top-3 rounded p-1 text-muted-foreground/50 transition-colors hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+          <p className="mb-3 text-xs font-medium uppercase tracking-widest text-muted-foreground">
+            Getting started
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
+            {[
+              {
+                label: "Run your first backtest",
+                sub: "Build a strategy in Easy Mode and test it",
+                done: (summary?.backtestRunCount ?? 0) > 0,
+                href: "/dashboard/backtest",
+              },
+              {
+                label: "Save it as a strategy",
+                sub: "Hit Save on the results to keep it",
+                done: (summary?.strategyCount ?? 0) > 0,
+                href: "/dashboard/strategies",
+              },
+              {
+                label: "Forward-test it on paper",
+                sub: "See how it holds up on live data",
+                done: false,
+                href: "/dashboard/paper-accounts",
+              },
+            ].map((step, i) => (
+              <button
+                key={step.label}
+                onClick={() => navigate(step.href)}
+                className={`group flex flex-1 items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-all ${
+                  step.done
+                    ? "border-border/30 bg-background/30 opacity-60"
+                    : "border-border/50 bg-background/50 hover:border-primary/40 hover:bg-background/80"
+                }`}
+              >
+                {step.done ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                ) : (
+                  <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-primary/50 text-[10px] font-semibold text-primary">
+                    {i + 1}
+                  </span>
+                )}
+                <span className="min-w-0">
+                  <span className={`block text-sm font-medium ${step.done ? "line-through decoration-muted-foreground/40" : ""}`}>
+                    {step.label}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">{step.sub}</span>
+                </span>
+                {!step.done && (
+                  <ArrowRight className="ml-auto mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground/40 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+                )}
+              </button>
+            ))}
+          </div>
+        </motion.section>
+      )}
 
       {/* Stat cards */}
       <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
