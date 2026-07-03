@@ -841,6 +841,7 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                     setConditionGroup={(group) => setConditionGroups((prev) => ({ ...prev, OPEN: group }))}
                     registry={registry}
                     availableTimeframes={availableTimeframesFor(tickers.filter(Boolean), registryTickers, registryTimeframes)}
+                    executionTimeframe={executionTF}
                   />
                   <div className="space-y-3 pt-3 border-t border-border/30">
                     <Label className="text-xs uppercase tracking-wider text-muted-foreground">Risk Management</Label>
@@ -997,6 +998,8 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                     conditionGroup={conditionGroups.CLOSE}
                     setConditionGroup={(group) => setConditionGroups((prev) => ({ ...prev, CLOSE: group }))}
                     registry={registry}
+                    availableTimeframes={availableTimeframesFor(tickers.filter(Boolean), registryTickers, registryTimeframes)}
+                    executionTimeframe={executionTF}
                   />
                   {Object.keys(allowedArgs.CLOSE || {}).length > 0 && (
                     <div className="space-y-3 pt-3 border-t border-border/30">

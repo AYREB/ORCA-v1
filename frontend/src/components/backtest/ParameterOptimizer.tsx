@@ -24,6 +24,14 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { api, isRateLimitError, OptimizationResult, ParameterChoice, OptimizerJobStatus, BacktestResult, SavedStrategy } from "@/lib/api";
+import {
+  isOptimizableParameterPath,
+  getParamDomain,
+  clampToDomain,
+  domainHint,
+  sanitizeValues,
+  MAX_GRID_COMBINATIONS,
+} from "@/lib/paramDomains";
 
 
 interface ParameterOptimizerProps {
@@ -40,13 +48,6 @@ interface ExtractedParameter {
   indicator: string | null;
   displayName: string;
   paramType: string;
-}
-
-const BLOCKED_OPTIMIZER_PARAM_NAMES = new Set(["spread"]);
-
-function isOptimizableParameterPath(path: string): boolean {
-  const lastSegment = path.replace(/\]/g, "").split(".").pop()?.split("[").pop()?.toLowerCase();
-  return !!lastSegment && !BLOCKED_OPTIMIZER_PARAM_NAMES.has(lastSegment);
 }
 
 function formatDuration(seconds: number): string {
@@ -88,15 +89,26 @@ function extractOptimizableParameters(
         isOptimizableParameterPath(newPath) &&
         /period|percent|threshold|offset|value|amount/i.test(key)
       ) {
-        params[newPath] = { 
-          value, 
+        params[newPath] = {
+          value,
           indicator: currentIndicator,
           displayName: getDisplayName(newPath, currentIndicator, key),
           paramType: key.toLowerCase()
         };
       }
 
-      Object.assign(params, extractOptimizableParameters(value, newPath, currentIndicator));
+      // When descending into one side of a comparison, carry the indicator
+      // from the other side so threshold values inherit its domain and group
+      // (e.g. the 30 in "RSI < 30" is an RSI-scale number).
+      let childIndicator = currentIndicator;
+      if (key === "right" || key === "left") {
+        const sibling = nodeObj[key === "right" ? "left" : "right"] as Record<string, unknown> | undefined;
+        if (sibling && typeof sibling === "object" && typeof sibling.func === "string") {
+          childIndicator = sibling.func;
+        }
+      }
+
+      Object.assign(params, extractOptimizableParameters(value, newPath, childIndicator));
     });
   }
 
@@ -227,16 +239,18 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
     return Math.max(0, Math.ceil(avgSecondsPerRun * remainingRuns));
   }, [loading, sampledCycleCount, sampledCycleSeconds, totalRuns, completedRuns]);
 
-  // Get range preview values
-  const getRangePreview = (choice: ParameterChoice): number[] => {
+  // Preview of the values a range will actually test (domain-sanitized,
+  // so it matches exactly what the backend will run).
+  const getRangePreview = (path: string, choice: ParameterChoice): number[] => {
     if (choice.mode !== "range" || choice.start === undefined || choice.end === undefined || !choice.steps || choice.steps < 2) {
       return [];
     }
-    
+
     const step = (choice.end - choice.start) / (choice.steps - 1);
-    return Array.from({ length: Math.min(choice.steps, 10) }, (_, i) => 
+    const raw = Array.from({ length: Math.min(choice.steps, 10) }, (_, i) =>
       Math.round((choice.start! + step * i) * 100) / 100
     );
+    return sanitizeValues(path, raw, extractedParams[path]?.indicator);
   };
 
   // Sorted results for leaderboard
@@ -261,7 +275,8 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
 
   const handleModeChange = (param: string, mode: ParameterChoice["mode"]) => {
     const currentValue = extractedParams[param]?.value || 0;
-    
+    const domain = getParamDomain(param, extractedParams[param]?.indicator);
+
     setParamChoices((prev) => {
       const current = prev[param] || {};
       const updated = { ...prev };
@@ -269,9 +284,9 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
       if (mode === "manual") {
         updated[param] = { ...current, mode, values: [currentValue] };
       } else if (mode === "range") {
-        // Smart defaults based on current value
-        const defaultStart = Math.max(1, Math.floor(currentValue * 0.5));
-        const defaultEnd = Math.ceil(currentValue * 2);
+        // Smart defaults around the current value, clamped to the domain
+        const defaultStart = clampToDomain(Math.max(1, Math.floor(currentValue * 0.5)), domain);
+        const defaultEnd = clampToDomain(Math.ceil(currentValue * 2), domain);
         updated[param] = { ...current, mode, start: defaultStart, end: defaultEnd, steps: 5 };
       } else if (mode === "auto") {
         updated[param] = { ...current, mode: "auto" };
@@ -291,6 +306,21 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
     });
   };
 
+  // Clamp free-typed values into the parameter's valid domain when the user
+  // leaves the field (clamping mid-keystroke would fight partial input).
+  const clampManualValue = (param: string, index: number) => {
+    const domain = getParamDomain(param, extractedParams[param]?.indicator);
+    setParamChoices((prev) => {
+      const values = prev[param]?.values;
+      if (!values) return prev;
+      const clamped = clampToDomain(values[index], domain);
+      if (clamped === values[index]) return prev;
+      const newValues = [...values];
+      newValues[index] = clamped;
+      return { ...prev, [param]: { ...prev[param], values: newValues } };
+    });
+  };
+
   const handleRangeChange = (param: string, field: "start" | "end" | "steps", value: number) => {
     setParamChoices((prev) => ({
       ...prev,
@@ -298,12 +328,36 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
     }));
   };
 
+  const clampRangeField = (param: string, field: "start" | "end" | "steps") => {
+    const domain = getParamDomain(param, extractedParams[param]?.indicator);
+    setParamChoices((prev) => {
+      const choice = prev[param];
+      if (!choice || choice[field] === undefined) return prev;
+      const clamped = field === "steps"
+        ? Math.min(200, Math.max(2, Math.round(choice[field] as number) || 2))
+        : clampToDomain(choice[field] as number, domain);
+      if (clamped === choice[field]) return prev;
+      return { ...prev, [param]: { ...choice, [field]: clamped } };
+    });
+  };
+
   const addManualValue = (param: string) => {
     setParamChoices((prev) => {
       const current = prev[param] || { mode: "manual", values: [] };
+      const existing = current.values || [];
+      // Seed with the strategy's current value (not 0, which is invalid for
+      // most parameters); step upward if it's already in the list.
+      const base = extractedParams[param]?.value ?? 0;
+      const domain = getParamDomain(param, extractedParams[param]?.indicator);
+      const step = domain?.integer ? 1 : Math.max(0.1, Math.abs(base) * 0.1);
+      let candidate = clampToDomain(base, domain);
+      for (let i = 0; existing.includes(candidate) && i < 100; i++) {
+        candidate = clampToDomain(candidate + step, domain);
+        if (domain && candidate >= domain.max) break;
+      }
       return {
         ...prev,
-        [param]: { ...current, values: [...(current.values || []), 0] },
+        [param]: { ...current, values: [...existing, candidate] },
       };
     });
   };
@@ -365,18 +419,53 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
     lastSampleTsRef.current = Date.now();
 
     try {
-      const payload: Record<string, ParameterChoice> = {};
-      Object.entries(paramChoices).forEach(([param, choice]) => {
-        if (!isOptimizableParameterPath(param)) return;
-        if (choice.mode !== "nochange") {
-          payload[param] = choice;
-        }
-      });
-
-      if (Object.keys(payload).length === 0) {
-        toast.error("Select at least one parameter to optimize");
+      const abort = (message: string) => {
+        toast.error(message);
         setLoading(false);
         setOptimizerStatus("idle");
+      };
+
+      const payload: Record<string, ParameterChoice> = {};
+      let combinations = 1;
+
+      for (const [param, choice] of Object.entries(paramChoices)) {
+        if (!isOptimizableParameterPath(param) || choice.mode === "nochange") continue;
+
+        const indicator = extractedParams[param]?.indicator;
+        const domain = getParamDomain(param, indicator);
+        const name = extractedParams[param]?.displayName || param;
+
+        if (choice.mode === "manual") {
+          const values = sanitizeValues(param, choice.values || [], indicator);
+          if (values.length === 0) {
+            abort(`"${name}" has no valid values to test${domainHint(domain) ? ` (valid: ${domainHint(domain)})` : ""}.`);
+            return;
+          }
+          payload[param] = { ...choice, values };
+          combinations *= values.length;
+        } else if (choice.mode === "range") {
+          const start = clampToDomain(choice.start ?? 0, domain);
+          const end = clampToDomain(choice.end ?? 0, domain);
+          const steps = Math.min(200, Math.max(2, Math.round(choice.steps ?? 2)));
+          if (start === end) {
+            abort(`"${name}" range covers a single value${domainHint(domain) ? ` after clamping to ${domainHint(domain)}` : ""} — widen it or use Manual mode.`);
+            return;
+          }
+          payload[param] = { ...choice, start, end, steps };
+          combinations *= steps;
+        } else {
+          payload[param] = choice;
+          combinations *= 5;
+        }
+      }
+
+      if (Object.keys(payload).length === 0) {
+        abort("Select at least one parameter to optimize");
+        return;
+      }
+
+      if (combinations > MAX_GRID_COMBINATIONS) {
+        abort(`Too many combinations (${combinations.toLocaleString()}). Reduce ranges or steps to at most ${MAX_GRID_COMBINATIONS.toLocaleString()}.`);
         return;
       }
 
@@ -534,7 +623,9 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                 {/* Parameters in group */}
                 {params.map(([path, param]) => {
                   const choice = paramChoices[path] || { mode: "nochange" };
-                  
+                  const domain = getParamDomain(path, param.indicator);
+                  const hint = domainHint(domain);
+
                   return (
                     <div
                       key={path}
@@ -576,8 +667,12 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                               <div key={i} className="flex items-center gap-1">
                                 <Input
                                   type="number"
+                                  min={domain?.min}
+                                  max={domain?.max}
+                                  step={domain?.integer ? 1 : "any"}
                                   value={val}
                                   onChange={(e) => handleValueChange(path, i, Number(e.target.value))}
+                                  onBlur={() => clampManualValue(path, i)}
                                   className="w-20 h-8 bg-secondary border-border font-mono text-center"
                                 />
                                 <Button
@@ -601,6 +696,9 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                               + Add
                             </Button>
                           </div>
+                          {hint && (
+                            <p className="text-[11px] text-muted-foreground/70">Valid: {hint}</p>
+                          )}
                         </div>
                       )}
 
@@ -611,8 +709,12 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                               <Label className="text-xs text-muted-foreground">Start</Label>
                               <Input
                                 type="number"
+                                min={domain?.min}
+                                max={domain?.max}
+                                step={domain?.integer ? 1 : "any"}
                                 value={choice.start || 0}
                                 onChange={(e) => handleRangeChange(path, "start", Number(e.target.value))}
+                                onBlur={() => clampRangeField(path, "start")}
                                 className="h-8 bg-secondary border-border font-mono"
                               />
                             </div>
@@ -620,8 +722,12 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                               <Label className="text-xs text-muted-foreground">End</Label>
                               <Input
                                 type="number"
+                                min={domain?.min}
+                                max={domain?.max}
+                                step={domain?.integer ? 1 : "any"}
                                 value={choice.end || 0}
                                 onChange={(e) => handleRangeChange(path, "end", Number(e.target.value))}
+                                onBlur={() => clampRangeField(path, "end")}
                                 className="h-8 bg-secondary border-border font-mono"
                               />
                             </div>
@@ -629,18 +735,25 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
                               <Label className="text-xs text-muted-foreground">Steps</Label>
                               <Input
                                 type="number"
+                                min={2}
+                                max={200}
+                                step={1}
                                 value={choice.steps || 0}
                                 onChange={(e) => handleRangeChange(path, "steps", Number(e.target.value))}
+                                onBlur={() => clampRangeField(path, "steps")}
                                 className="h-8 bg-secondary border-border font-mono"
                               />
                             </div>
                           </div>
-                          
+                          {hint && (
+                            <p className="text-[11px] text-muted-foreground/70">Valid: {hint}</p>
+                          )}
+
                           {/* Range Preview Chips */}
-                          {getRangePreview(choice).length > 0 && (
+                          {getRangePreview(path, choice).length > 0 && (
                             <div className="flex flex-wrap items-center gap-1.5">
                               <span className="text-xs text-muted-foreground">Will test:</span>
-                              {getRangePreview(choice).map((val, i) => (
+                              {getRangePreview(path, choice).map((val, i) => (
                                 <Badge key={i} variant="secondary" className="text-xs font-mono px-2 py-0.5">
                                   {val}
                                 </Badge>

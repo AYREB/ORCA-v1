@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Info, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { getParamDomain, clampToDomain } from "@/lib/paramDomains";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -126,8 +127,16 @@ export function ArgumentSelector({
         ) : (
           <Input
             type="number"
+            min={getParamDomain(arg)?.min}
+            max={getParamDomain(arg)?.max}
+            step={getParamDomain(arg)?.integer ? 1 : "any"}
             value={val}
             onChange={(e) => onChange(arg, parseFloat(e.target.value) || 0)}
+            onBlur={() => {
+              const domain = getParamDomain(arg);
+              const clamped = clampToDomain(Number(val) || 0, domain);
+              if (domain && clamped !== val) onChange(arg, clamped);
+            }}
             className="w-20 h-7 text-xs bg-secondary/50"
           />
         )}

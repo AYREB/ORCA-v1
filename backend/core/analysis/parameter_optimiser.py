@@ -26,12 +26,125 @@ _REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "../registries/indicato
 # Transaction-cost fields must never be tuned - an optimizer would just drive them to 0.
 BLOCKED_OPTIMIZER_PARAM_NAMES = {"spread", "fee_value", "fee_fixed"}
 
+# Valid domains per parameter name (last path segment, lowercased):
+# (min, max, must_be_integer). Candidate values outside these bounds are
+# nonsense (negative RSI periods, 0-step recurring buys, RSI thresholds > 100)
+# and either crash the backtester or silently waste runs.
+PARAM_NAME_DOMAINS = {
+    "period":    (2, 500, True),
+    "fast":      (2, 200, True),
+    "slow":      (3, 400, True),
+    "signal":    (2, 100, True),
+    "k_period":  (1, 100, True),
+    "d_period":  (1, 100, True),
+    "slowing":   (1, 50, True),
+    "stddev":    (0.1, 10.0, False),
+    "offset":    (0, 500, True),
+    "stoplosspercent":   (0.1, 100.0, False),
+    "takeprofitpercent": (0.1, 1000.0, False),
+    "initialopenpositioninvestamount": (0.0001, 1e9, False),
+    "recurringinvestamount":           (0.0001, 1e9, False),
+    "recurringperiod":     (1, 10000, True),
+    "maxrecurringcount":   (0, 1000, True),
+    "minholdbars":         (0, 100000, True),
+    "maxholdbars":         (0, 100000, True),
+    "reentrycooldownbars": (0, 100000, True),
+}
+
+# Threshold values compared against bounded oscillators live on the
+# oscillator's scale (e.g. "RSI < 30" - a threshold of 400 can never fire).
+OSCILLATOR_VALUE_DOMAINS = {
+    "RSI":   (0.0, 100.0, False),
+    "STOCH": (0.0, 100.0, False),
+}
+
+# Hard ceiling on grid-search size so a huge range can't queue days of work.
+MAX_GRID_COMBINATIONS = 5000
+
+
+def _last_path_segment(path):
+    normalized = path.replace("]", "")
+    return normalized.split(".")[-1].split("[")[-1].lower()
+
 
 def is_optimizable_parameter_path(path):
     """Return False for numeric DSL fields that optimizers must never tune."""
-    normalized = path.replace("]", "")
-    last_segment = normalized.split(".")[-1].split("[")[-1].lower()
-    return last_segment not in BLOCKED_OPTIMIZER_PARAM_NAMES
+    return _last_path_segment(path) not in BLOCKED_OPTIMIZER_PARAM_NAMES
+
+
+def _get_node_by_path(dsl, path):
+    """Fetch the value at a dotted path with optional [i] list indices; None if missing."""
+    node = dsl
+    try:
+        for segment in path.split("."):
+            if "[" in segment and segment.endswith("]"):
+                name, idx = segment[:-1].split("[", 1)
+                if name:
+                    node = node[name]
+                node = node[int(idx)]
+            else:
+                node = node[segment]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    return node
+
+
+def _comparand_indicator(parsed_dsl, value_path):
+    """For a '...left.value' / '...right.value' condition leaf, return the func
+    of the indicator on the other side of the comparison (if any)."""
+    parent_path, _, leaf = value_path.rpartition(".")
+    if leaf != "value" or not parent_path:
+        return None
+    container_path, _, side = parent_path.rpartition(".")
+    sibling = {"left": "right", "right": "left"}.get(side)
+    if not sibling:
+        return None
+    sibling_path = f"{container_path}.{sibling}" if container_path else sibling
+    sibling_node = _get_node_by_path(parsed_dsl, sibling_path)
+    if isinstance(sibling_node, dict):
+        func = sibling_node.get("func")
+        if isinstance(func, str):
+            return func.upper()
+    return None
+
+
+def get_param_domain(path, parsed_dsl=None):
+    """Return (min, max, integer) for a parameter path, or None if unconstrained."""
+    last = _last_path_segment(path)
+    if last == "value" and parsed_dsl is not None:
+        func = _comparand_indicator(parsed_dsl, path)
+        if func in OSCILLATOR_VALUE_DOMAINS:
+            return OSCILLATOR_VALUE_DOMAINS[func]
+        return None
+    return PARAM_NAME_DOMAINS.get(last)
+
+
+def sanitize_param_values(path, values, parsed_dsl=None):
+    """Coerce candidate values into the parameter's valid domain.
+
+    Drops non-numeric/non-finite entries, clamps to [min, max], rounds
+    integer-only fields, and dedupes while preserving order. Returns [] if
+    nothing valid remains (caller drops the parameter).
+    """
+    domain = get_param_domain(path, parsed_dsl)
+    cleaned = []
+    for v in values or []:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        if not math.isfinite(v):
+            continue
+        if domain:
+            lo, hi, integer = domain
+            v = min(hi, max(lo, v))
+            if integer:
+                v = int(round(v))
+        cleaned.append(v)
+    seen, deduped = set(), []
+    for v in cleaned:
+        if v not in seen:
+            seen.add(v)
+            deduped.append(v)
+    return deduped
 
 
 def filter_optimizable_parameter_map(param_map):
@@ -106,40 +219,69 @@ def extract_optimizable_parameters(parsed_dsl):
 # ---------------- PARAM GRID BUILDERS ---------------- #
  
 def _auto_values(path, value):
+    """Candidates around the current value; sanitization clamps them to the
+    parameter's domain afterwards (so period=3 explores 2..8, never -2)."""
     if isinstance(value, int):
-        return [value - 5, value, value + 5]
-    return [round(value * 0.8, 3), value, round(value * 1.2, 3)]
- 
- 
+        return [value - 5, value - 2, value, value + 2, value + 5]
+    return [round(value * 0.8, 3), round(value * 0.9, 3), value,
+            round(value * 1.1, 3), round(value * 1.2, 3)]
+
+
 def _range_values(choice):
-    start, end, steps = choice["start"], choice["end"], choice["steps"]
+    start, end, steps = choice["start"], choice["end"], int(choice["steps"])
     if steps < 2:
         raise ValueError(f"Range needs at least 2 steps")
+    steps = min(steps, 200)
     return [start + (end - start) * i / (steps - 1) for i in range(steps)]
- 
- 
+
+
 def _resolve_choice(path, value, choice):
     mode = choice["mode"]
-    if mode == "auto":    return _auto_values(path, value)
+    if mode == "auto":
+        if value is None:
+            return None
+        return _auto_values(path, value)
     if mode == "manual":  return choice["values"]
     if mode == "range":   return _range_values(choice)
     if mode == "nochange": return None
     raise ValueError(f"Invalid mode '{mode}' for '{path}'")
- 
- 
+
+
 def build_param_grid(parsed_dsl, param_choices=None):
-    """Return (param_grid, base_params) for grid-search optimization."""
+    """Return (param_grid, base_params) for grid-search optimization.
+
+    Every candidate list is sanitized against the parameter's valid domain
+    (clamped, integer-rounded, deduped) so no optimizer ever backtests a
+    nonsense value like a negative period or an RSI threshold of 400.
+    """
     base_params = extract_optimizable_parameters(parsed_dsl)
     if param_choices is None:
-        return {p: _auto_values(p, v) for p, v in base_params.items()}, base_params
- 
+        grid = {}
+        for p, v in base_params.items():
+            values = sanitize_param_values(p, _auto_values(p, v), parsed_dsl)
+            if len(values) > 1:
+                grid[p] = values
+        return grid, base_params
+
     grid = {}
     for path, choice in param_choices.items():
         if not is_optimizable_parameter_path(path):
             continue
         values = _resolve_choice(path, base_params.get(path), choice)
-        if values is not None:
+        if values is None:
+            continue
+        values = sanitize_param_values(path, values, parsed_dsl)
+        if values:
             grid[path] = values
+
+    total = 1
+    for vals in grid.values():
+        total *= len(vals)
+    if total > MAX_GRID_COMBINATIONS:
+        raise ValueError(
+            f"Too many combinations ({total:,}). Reduce ranges/steps to at most "
+            f"{MAX_GRID_COMBINATIONS:,} total combinations."
+        )
     return grid, base_params
  
  

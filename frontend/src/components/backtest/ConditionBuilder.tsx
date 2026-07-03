@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, X, ChevronsUpDown, ArrowLeftRight, Calculator } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getParamDomain, clampToDomain } from "@/lib/paramDomains";
 import IndicatorCommandPalette from "./IndicatorCommandPalette";
 import {
   ConditionSide,
@@ -65,12 +66,14 @@ export function MultiConditionBuilder({
   setConditionGroup,
   registry,
   availableTimeframes,
+  executionTimeframe,
 }: {
   blockName: string;
   conditionGroup: ConditionGroup;
   setConditionGroup: (group: ConditionGroup) => void;
   registry: Registry;
   availableTimeframes?: string[];
+  executionTimeframe?: string;
 }) {
   // "adding" state: null = idle, "left" = picking left side, "right" = picking operator + right side
   const [adding, setAdding] = useState<"left" | "right" | null>(null);
@@ -141,6 +144,7 @@ export function MultiConditionBuilder({
                 registry={registry}
                 isOpen={isOpen}
                 availableTimeframes={availableTimeframes}
+                executionTimeframe={executionTimeframe}
               />
               {idx < conditionGroup.conditions.length - 1 && (
                 <div className="flex items-center py-1.5 px-1">
@@ -216,6 +220,7 @@ export function MultiConditionBuilder({
                 }}
                 onCancel={resetAdd}
                 availableTimeframes={availableTimeframes}
+                executionTimeframe={executionTimeframe}
               />
             )}
 
@@ -269,6 +274,7 @@ export function MultiConditionBuilder({
                     onCancel={resetAdd}
                     placeholder="Pick right side..."
                     availableTimeframes={availableTimeframes}
+                    executionTimeframe={executionTimeframe}
                   />
                 )}
               </div>
@@ -302,7 +308,8 @@ function ConditionRow({
   onRemove,
   registry,
   isOpen,
-  availableTimeframes
+  availableTimeframes,
+  executionTimeframe
 }: {
   condition: SingleCondition;
   onChange: (cond: SingleCondition) => void;
@@ -310,6 +317,7 @@ function ConditionRow({
   registry: Registry;
   isOpen: boolean;
   availableTimeframes?: string[];
+  executionTimeframe?: string;
 }) {
   const [editingSide, setEditingSide] = useState<"left" | "right" | null>(null);
   const [expandedSide, setExpandedSide] = useState<"left" | "right" | null>(null);
@@ -352,6 +360,7 @@ function ConditionRow({
               }}
               onCancel={() => setEditingSide(null)}
               availableTimeframes={availableTimeframes}
+              executionTimeframe={executionTimeframe}
             />
           </div>
         ) : (
@@ -383,6 +392,7 @@ function ConditionRow({
               }}
               onCancel={() => setEditingSide(null)}
               availableTimeframes={availableTimeframes}
+              executionTimeframe={executionTimeframe}
             />
           </div>
         ) : (
@@ -672,11 +682,15 @@ function ExpandedArgsEditor({
               );
             }
 
+            const domain = getParamDomain(param);
             return (
               <div key={param} className="flex items-center gap-1">
                 <span className="text-[10px] text-muted-foreground font-medium">{param}:</span>
                 <input
                   type="number"
+                  min={domain?.min}
+                  max={domain?.max}
+                  step={domain?.integer ? 1 : "any"}
                   value={val as number}
                   onChange={(e) =>
                     onChange({
@@ -684,6 +698,12 @@ function ExpandedArgsEditor({
                       args: { ...side.args, [param]: parseFloat(e.target.value) || 0 },
                     })
                   }
+                  onBlur={() => {
+                    const clamped = clampToDomain(Number(val) || 0, domain);
+                    if (clamped !== val) {
+                      onChange({ ...side, args: { ...side.args, [param]: clamped } });
+                    }
+                  }}
                   className="h-6 w-14 px-1.5 rounded border border-border/50 bg-background text-[11px] font-mono text-foreground outline-none focus:border-primary/50 transition-colors"
                 />
               </div>

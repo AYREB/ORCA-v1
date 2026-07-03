@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Search, Hash, Check } from "lucide-react";
+import { getParamDomain, clampToDomain, clampIndicatorArgs } from "@/lib/paramDomains";
 import {
   Registry,
   ConditionSide,
@@ -14,6 +15,7 @@ interface IndicatorCommandPaletteProps {
   onCancel: () => void;
   placeholder?: string;
   availableTimeframes?: string[];
+  executionTimeframe?: string;
 }
 
 export default function IndicatorCommandPalette({
@@ -22,6 +24,7 @@ export default function IndicatorCommandPalette({
   onCancel,
   placeholder = "Search indicators or type a number...",
   availableTimeframes,
+  executionTimeframe,
 }: IndicatorCommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -98,13 +101,18 @@ export default function IndicatorCommandPalette({
     if (item.type === "value") {
       onSelect({ type: "value", value: item.value, func: "", args: {}, operation: undefined });
     } else {
-      const defaults = registry.indicators.INDICATORS[item.func]?.defaults || {};
+      const defaults = { ...(registry.indicators.INDICATORS[item.func]?.defaults || {}) };
       const argKeys = registry.indicators.INDICATORS[item.func]?.args || [];
+      // Seed the indicator's timeframe from the selected execution timeframe
+      // so it matches the chart being traded by default.
+      if ("timeframe" in defaults && executionTimeframe) {
+        defaults.timeframe = executionTimeframe;
+      }
       if (argKeys.length === 0) {
-        commitIndicator(item.func, { ...defaults });
+        commitIndicator(item.func, defaults);
       } else {
         setConfiguring(item.func);
-        setConfigArgs({ ...defaults });
+        setConfigArgs(defaults);
       }
     }
   };
@@ -128,7 +136,7 @@ export default function IndicatorCommandPalette({
   const handleConfigKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (configuring) commitIndicator(configuring, configArgs);
+      if (configuring) commitIndicator(configuring, clampIndicatorArgs(configArgs));
     } else if (e.key === "Escape") {
       e.preventDefault();
       setConfiguring(null);
@@ -195,8 +203,15 @@ export default function IndicatorCommandPalette({
                   <input
                     ref={i === 0 ? firstArgRef : undefined}
                     type="number"
+                    min={getParamDomain(param)?.min}
+                    max={getParamDomain(param)?.max}
+                    step={getParamDomain(param)?.integer ? 1 : "any"}
                     value={val as number}
                     onChange={(e) => setConfigArgs({ ...configArgs, [param]: parseFloat(e.target.value) || 0 })}
+                    onBlur={() => {
+                      const clamped = clampToDomain(Number(val) || 0, getParamDomain(param));
+                      if (clamped !== val) setConfigArgs({ ...configArgs, [param]: clamped });
+                    }}
                     className="bg-transparent text-[11px] font-mono outline-none w-10 text-foreground"
                   />
                 )}
@@ -205,7 +220,7 @@ export default function IndicatorCommandPalette({
           })}
           <button
             type="button"
-            onClick={() => commitIndicator(configuring, configArgs)}
+            onClick={() => commitIndicator(configuring, clampIndicatorArgs(configArgs))}
             className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded bg-primary text-primary-foreground text-[10px] font-medium hover:bg-primary/90 transition-colors"
           >
             <Check className="h-2.5 w-2.5" /> Confirm

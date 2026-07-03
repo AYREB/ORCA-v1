@@ -40,12 +40,7 @@ function formatDuration(seconds: number): string {
   return `${hours}h ${remMins}m`;
 }
 
-const BLOCKED_OPTIMIZER_PARAM_NAMES = new Set(["spread"]);
-
-function isOptimizableParameterPath(path: string): boolean {
-  const lastSegment = path.replace(/\]/g, "").split(".").pop()?.split("[").pop()?.toLowerCase();
-  return !!lastSegment && !BLOCKED_OPTIMIZER_PARAM_NAMES.has(lastSegment);
-}
+import { isOptimizableParameterPath } from "@/lib/paramDomains";
 
 // shared helper from ParameterOptimizer (duplicated to keep component standalone)
 function extractOptimizableParameters(
