@@ -364,7 +364,9 @@ def rate_limit(bucket: str) -> Callable:
                 return view_func(request, *args, **kwargs)
 
             if count > max_requests:
-                return json_error("Too many requests. Please try again later.", status=429)
+                response = json_error("Too many requests. Please try again later.", status=429)
+                response["Retry-After"] = str(window_seconds)
+                return response
 
             return view_func(request, *args, **kwargs)
 
@@ -1214,7 +1216,7 @@ def _validate_indicator_parameters(parameters: Any) -> list[dict[str, Any]]:
 @api_error_boundary
 @require_methods("GET", "POST")
 @token_required
-@rate_limit("compute")
+@rate_limit("general")
 def custom_indicators(request):
     user = get_authenticated_user(request)
 
@@ -1258,7 +1260,7 @@ def custom_indicators(request):
 @api_error_boundary
 @require_methods("GET", "PUT", "PATCH", "DELETE")
 @token_required
-@rate_limit("compute")
+@rate_limit("general")
 def custom_indicator_detail(request, indicator_id: int):
     user = get_authenticated_user(request)
 

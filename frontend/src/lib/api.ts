@@ -442,12 +442,17 @@ export type StrategyChatResponse =
 // so callers can branch on failure type instead of string-matching messages.
 export class ApiError extends Error {
   code?: string;
-  constructor(message: string, code?: string) {
+  status?: number;
+  constructor(message: string, code?: string, status?: number) {
     super(message);
     this.name = "ApiError";
     this.code = code;
+    this.status = status;
   }
 }
+
+export const isRateLimitError = (err: unknown): boolean =>
+  err instanceof ApiError && err.status === 429;
 
 class DjangoAPI {
   private baseUrl: string;
@@ -475,7 +480,7 @@ class DjangoAPI {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      const error = new ApiError(errorData.error || `API Error: ${response.statusText}`, errorData.code);
+      const error = new ApiError(errorData.error || `API Error: ${response.statusText}`, errorData.code, response.status);
       throw error;
     }
 

@@ -45,6 +45,16 @@ def load_env_file(env_path: Path) -> None:
 load_env_file(BASE_DIR / ".env")
 load_env_file(PROJECT_ROOT / ".env")
 
+# macOS python.org builds don't wire system CA certs into OpenSSL, which breaks
+# TLS verification (e.g. SMTP to Resend). Point Python's default SSL context at
+# certifi's CA bundle unless the environment already provides one.
+try:
+    import certifi
+
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+except ImportError:
+    pass
+
 
 def env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -323,16 +333,19 @@ API_RATE_LIMITS = {
         "max_requests": env_int("RATE_LIMIT_AUTH_MAX_REQUESTS", 20, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_AUTH_WINDOW_SECONDS", 300, minimum=1),
     },
+    # Optimizer job starts + indicator sandbox runs share this bucket.
     "compute": {
-        "max_requests": env_int("RATE_LIMIT_COMPUTE_MAX_REQUESTS", 10, minimum=1),
+        "max_requests": env_int("RATE_LIMIT_COMPUTE_MAX_REQUESTS", 20, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_COMPUTE_WINDOW_SECONDS", 60, minimum=1),
     },
     "backtest": {
         "max_requests": env_int("RATE_LIMIT_BACKTEST_MAX_REQUESTS", 60, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_BACKTEST_WINDOW_SECONDS", 60, minimum=1),
     },
+    # Job-status polling: must comfortably cover several optimizers polling
+    # at once (3 concurrent pollers at 1s each = 180/min).
     "status": {
-        "max_requests": env_int("RATE_LIMIT_STATUS_MAX_REQUESTS", 120, minimum=1),
+        "max_requests": env_int("RATE_LIMIT_STATUS_MAX_REQUESTS", 240, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_STATUS_WINDOW_SECONDS", 60, minimum=1),
     },
     "assistant": {

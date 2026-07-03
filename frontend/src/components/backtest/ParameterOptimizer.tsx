@@ -23,7 +23,7 @@ import {
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { api, OptimizationResult, ParameterChoice, OptimizerJobStatus, BacktestResult, SavedStrategy } from "@/lib/api";
+import { api, isRateLimitError, OptimizationResult, ParameterChoice, OptimizerJobStatus, BacktestResult, SavedStrategy } from "@/lib/api";
 
 
 interface ParameterOptimizerProps {
@@ -383,9 +383,11 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
       const start = await api.startOptimizeJob(dslJson, payload, initialBalance);
       setTotalRuns(start.total_runs || estimatedCombinations);
 
+      let pollFailures = 0;
       const poll = async () => {
         try {
           const status: OptimizerJobStatus = await api.getOptimizeJobStatus(start.job_id);
+          pollFailures = 0;
           const nowTs = Date.now();
           const currentCompleted = status.completed_runs || 0;
           const previousCompleted = lastCompletedRef.current;
@@ -425,6 +427,13 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
 
           window.setTimeout(poll, 1000);
         } catch (pollErr) {
+          // The job keeps running server-side — transient failures (rate
+          // limits, network blips) should back off and retry, not kill the UI.
+          pollFailures += 1;
+          if (pollFailures <= 5) {
+            window.setTimeout(poll, 3000);
+            return;
+          }
           const pollErrorMessage = pollErr instanceof Error ? pollErr.message : "Optimizer status polling failed";
           setError(pollErrorMessage);
           setLoading(false);
@@ -435,7 +444,9 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
 
       poll();
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Optimizer request failed";
+      const errorMessage = isRateLimitError(err)
+        ? "Rate limit reached — too many optimizer requests in the last minute. Wait a moment and try again."
+        : err instanceof Error ? err.message : "Optimizer request failed";
       setError(errorMessage);
       toast.error(errorMessage);
       setLoading(false);
