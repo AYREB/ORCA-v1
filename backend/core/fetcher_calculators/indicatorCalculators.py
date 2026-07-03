@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 # ---------------- Indicator functions ----------------
 
@@ -85,8 +86,9 @@ def compute_cci(data, period=20, timeframe=None):
     """CCI - standard calculation matches TradingView"""
     tp = (data['High'] + data['Low'] + data['Close']) / 3
     ma = tp.rolling(window=int(period)).mean()
+    # raw=True passes numpy arrays, which have no .abs() method - use np.abs.
     md = tp.rolling(window=int(period)).apply(
-        lambda x: (x - x.mean()).abs().mean(), raw=True
+        lambda x: np.abs(x - x.mean()).mean(), raw=True
     )
     cci = (tp - ma) / (0.015 * md)
     return cci

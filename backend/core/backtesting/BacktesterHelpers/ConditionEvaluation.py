@@ -26,18 +26,37 @@ with open(_registry_path) as _f:
 
 # ---------------- INTERNAL HELPERS ---------------- #
 
+# Bar duration per timeframe — used to exclude a higher-timeframe bar that is
+# still forming at decision time (its Close isn't knowable yet).
+_TF_DURATIONS = {
+    "1m": pd.Timedelta(minutes=1),
+    "5m": pd.Timedelta(minutes=5),
+    "15m": pd.Timedelta(minutes=15),
+    "1h": pd.Timedelta(hours=1),
+    "4h": pd.Timedelta(hours=4),
+    "1d": pd.Timedelta(days=1),
+}
+
+# Indicators computed from full OHLCV data (High/Low/Volume), not just Close.
+_OHLCV_INDICATORS = {"ATR", "STOCH", "CCI", "OBV"}
+
+
+def _tf_duration(tf):
+    return _TF_DURATIONS.get(str(tf).lower())
+
+
 def _default_tf(allowed_timeframes):
     return allowed_timeframes[0] if allowed_timeframes else "1h"
 
 
-def _eval_price(func_args, merged_args, current_ticker, context_index, data_dict, execution_tf):
+def _eval_price(merged_args, offset, current_ticker, context_index, data_dict, execution_tf):
     if current_ticker not in data_dict or execution_tf not in data_dict[current_ticker]:
         return None, None
     try:
         val = indicatorCalculators.get_price(
             data_dict[current_ticker][execution_tf],
             field=merged_args.get("OHLC", "close"),
-            offset=merged_args.get("offset", 0),
+            offset=offset,
             context={"i": context_index}
         )
         return val, None
@@ -45,13 +64,16 @@ def _eval_price(func_args, merged_args, current_ticker, context_index, data_dict
         return None, None
 
 
-def _eval_volume(merged_args, current_ticker, timeframe, context_index, data_dict):
-    if current_ticker not in data_dict or timeframe not in data_dict[current_ticker]:
+def _eval_volume(offset, current_ticker, context_index, data_dict, execution_tf):
+    # Always evaluated against execution_tf: context_index is a positional
+    # index into the execution-timeframe dataframe, so indexing any other
+    # timeframe's dataframe with it would read an unrelated bar.
+    if current_ticker not in data_dict or execution_tf not in data_dict[current_ticker]:
         return None, None
     try:
         val = indicatorCalculators.get_volume(
-            data_dict[current_ticker][timeframe],
-            offset=merged_args.get("offset", 0),
+            data_dict[current_ticker][execution_tf],
+            offset=offset,
             context={"i": context_index}
         )
         return val, None
@@ -139,15 +161,21 @@ def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
 
         merged_args = {**_INDICATOR_REGISTRY.get(func_name, {}).get("defaults", {}), **func_args}
         timeframe    = merged_args.pop("timeframe", global_timeframe)
-        offset       = merged_args.pop("offset", 0)
+
+        # Offsets look backward only. A negative offset would index FUTURE
+        # bars — a crystal ball no backtest may have.
+        try:
+            offset = max(0, int(merged_args.pop("offset", 0) or 0))
+        except (TypeError, ValueError):
+            offset = 0
 
         upper = func_name.upper()
 
         if upper == "PRICE":
-            return _eval_price(func_args, merged_args, current_ticker, context_index, data_dict, execution_tf)
+            return _eval_price(merged_args, offset, current_ticker, context_index, data_dict, execution_tf)
 
         if upper == "VOLUME":
-            return _eval_volume(merged_args, current_ticker, timeframe, context_index, data_dict)
+            return _eval_volume(offset, current_ticker, context_index, data_dict, execution_tf)
 
         # Custom (user-authored) indicators — dispatched by exact-case name, always
         # against execution_tf, using the (data, context, **params) contract. Must
@@ -176,10 +204,30 @@ def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
         if pd.isna(last_idx):
             return None, None
 
-        series = indicator_df.loc[:last_idx]["Close"]
+        df_slice = indicator_df.loc[:last_idx]
+
+        # Higher-timeframe bars that haven't completed yet are excluded: at
+        # 10:00 the current daily bar's Close is tonight's price — using it
+        # would leak the future into the signal. A bar counts as complete once
+        # its end (start + duration) is at or before the decision time (the
+        # close of the current execution bar).
+        if timeframe != execution_tf and len(df_slice) > 0:
+            tf_dur = _tf_duration(timeframe)
+            exec_dur = _tf_duration(execution_tf) or pd.Timedelta(0)
+            if tf_dur is not None:
+                decision_time = row.name + exec_dur
+                if df_slice.index[-1] + tf_dur > decision_time:
+                    df_slice = df_slice.iloc[:-1]
+        if df_slice.empty:
+            return None, timeframe
+
+        # ATR/STOCH/CCI/OBV need High/Low/Volume — passing only the Close
+        # series (as before) made them raise internally and evaluate as None,
+        # silently disabling every condition that used them.
+        payload = df_slice if upper in _OHLCV_INDICATORS else df_slice["Close"]
 
         try:
-            value = func(series, **merged_args)
+            value = func(payload, **merged_args)
         except Exception:
             return None, None
 
