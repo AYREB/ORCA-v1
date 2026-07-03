@@ -1440,6 +1440,28 @@ def backtestDSLJSON(request):
                 "success": False,
             }, status=400)
 
+    # Guard: fees and risk percentages must not be negative. The engine also
+    # clamps these defensively, but rejecting here tells API users what was
+    # wrong instead of silently ignoring the value.
+    for _field in ("fee_value", "fee_fixed", "spread", "stopLossPercent", "takeProfitPercent"):
+        _raw = _open_args.get(_field)
+        if _raw is None:
+            continue
+        try:
+            _num = float(_raw)
+        except (TypeError, ValueError):
+            return JsonResponse({
+                "error": f"{_field} must be a number.",
+                "code": "invalid_argument",
+                "success": False,
+            }, status=400)
+        if _num < 0:
+            return JsonResponse({
+                "error": f"{_field} cannot be negative.",
+                "code": "invalid_argument",
+                "success": False,
+            }, status=400)
+
     # Guard: cap tickers per request to prevent excessive data fetching
     MAX_TICKERS_PER_BACKTEST = 5
     _tickers = _extract_tickers(dsl)

@@ -100,6 +100,11 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
         fee_mode  = "commission"
         fee_value = 0.0
 
+    # Fees can never be negative — a negative fee would pay the trader on
+    # every order (entry below market, exit above), turning any strategy
+    # into a guaranteed money printer.
+    fee_value = max(0.0, fee_value)
+
     if fee_mode == "spread":
         cost_factor = fee_value / 200.0   # half-spread per leg → full spread round-trip
     else:
@@ -118,10 +123,21 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
     rec_amt       = open_args.get("recurringInvestAmount", 0.1)
     max_recurs    = open_args.get("maxRecurringCount", 0)
 
+    # SL/TP percentages must be positive to mean anything. A negative SL on a
+    # long places the "stop" above the entry price, so it fires immediately at
+    # a profit — treat non-positive values as disabled instead.
+    sl_pct = sl_pct if (sl_pct is not None and float(sl_pct) > 0) else None
+    tp_pct = tp_pct if (tp_pct is not None and float(tp_pct) > 0) else None
+
+    # A recurring period below 1 bar would re-buy on every single bar.
+    rec_period = max(1, int(rec_period or 1))
+
     # Close arguments (all measured in execution-timeframe bars, 0 = disabled).
-    min_hold_bars    = int(close_args.get("minHoldBars", 0) or 0)
-    max_hold_bars    = int(close_args.get("maxHoldBars", 0) or 0)
-    reentry_cooldown = int(close_args.get("reentryCooldownBars", 0) or 0)
+    # Negative values would make comparisons like `bars_held >= max_hold` true
+    # on every bar — clamp to 0 (disabled).
+    min_hold_bars    = max(0, int(close_args.get("minHoldBars", 0) or 0))
+    max_hold_bars    = max(0, int(close_args.get("maxHoldBars", 0) or 0))
+    reentry_cooldown = max(0, int(close_args.get("reentryCooldownBars", 0) or 0))
 
     # -------- DATA SETUP -------- #
     exec_dfs = {
@@ -245,6 +261,16 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                         last_recurring_index[ticker] = i
                         recurring_count[ticker] += 1
 
+                        # Carry the position's SL/TP levels forward — the exit
+                        # logic reads them off the most recent entry, so leaving
+                        # them off a recurring entry would silently disable
+                        # stop-loss/take-profit protection after any DCA add.
+                        prev_entry = next(
+                            (t for t in reversed(trade_log)
+                             if t["ticker"] == ticker and t["type"] in ENTRY_TYPES),
+                            None
+                        )
+
                         trade_log.append({
                             "type": "Recurring_Entry",
                             "ticker": ticker,
@@ -253,11 +279,17 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
                             "shares": shares,
                             "balance": cash,
                             "timestamp": row.name.isoformat(),
+                            "sl_price": prev_entry.get("sl_price") if prev_entry else None,
+                            "tp_price": prev_entry.get("tp_price") if prev_entry else None,
                             "fee": round(shares * abs(exec_price - market_price) + fee_fixed, 4),
                         })
 
             # ---------------- CLOSE ---------------- #
-            if in_position:
+            # Exits are only evaluated from the bar AFTER entry. The entry
+            # executes at this bar's close, but the bar's High/Low happened
+            # earlier — checking them against a just-set SL/TP would let the
+            # backtest "exit" on price action from before the position existed.
+            if in_position and entry_index[ticker] is not None and i > entry_index[ticker]:
                 last_entry = next(
                     (t for t in reversed(trade_log)
                      if t["ticker"] == ticker and t["type"] in ENTRY_TYPES),
