@@ -45,12 +45,15 @@ TRAINING_CONFIG = {
     "per_device_train_batch_size": 1,
     "per_device_eval_batch_size": 1,
     "gradient_accumulation_steps": 8,
-    "warmup_steps": 50,
-    "max_steps": 1500,
+    "warmup_steps": 30,
+    # 600 steps x effective batch 8 = ~1.8 epochs over 2,700 examples. On a
+    # free T4 with gradient offloading (~37s/step) that's ~6.5h — fits inside
+    # Kaggle's ~9h session cap. 1500 steps would be killed at ~60%.
+    "max_steps": 600,
     "learning_rate": 2e-4,
     "logging_steps": 25,
-    "eval_steps": 100,
-    "save_steps": 100,
+    "eval_steps": 200,
+    "save_steps": 200,
     "optim": "adamw_8bit",
     "weight_decay": 0.01,
     "lr_scheduler_type": "cosine",
