@@ -40,8 +40,11 @@ LORA_CONFIG = {
 
 TRAINING_CONFIG = {
     "max_seq_length": 2048,
-    "per_device_train_batch_size": 2,
-    "gradient_accumulation_steps": 4,
+    # T4 (14.5GB usable) can only fit ONE 2048-token sequence through a 7B
+    # QLoRA forward pass. Effective batch stays 8 via gradient accumulation.
+    "per_device_train_batch_size": 1,
+    "per_device_eval_batch_size": 1,
+    "gradient_accumulation_steps": 8,
     "warmup_steps": 50,
     "max_steps": 1500,
     "learning_rate": 2e-4,
@@ -126,9 +129,18 @@ def train(data_path: Path = TRAINING_DATA):
     Fine-tune Qwen2.5-Coder-7B-Instruct with LoRA.
     Saves adapter to ADAPTER_OUTPUT.
     """
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     from unsloth import FastLanguageModel
     from trl import SFTTrainer
-    from transformers import TrainingArguments
+    try:
+        # Modern TRL wants its own SFTConfig; plain TrainingArguments can be
+        # silently overridden (observed batch_size=4 on Kaggle despite passing 2).
+        from trl import SFTConfig as TrainingArguments
+        _USING_SFT_CONFIG = True
+    except ImportError:
+        from transformers import TrainingArguments
+        _USING_SFT_CONFIG = False
 
     print("\n🚀 Starting Orca LLM fine-tuning")
     print(f"   Model:     {MODEL_NAME}")
@@ -170,9 +182,14 @@ def train(data_path: Path = TRAINING_DATA):
     train_dataset, val_dataset = load_and_format_dataset(data_path, system_prompt)
 
     # ---- Training args ----
+    _sft_extra = (
+        {"dataset_text_field": "text", "max_seq_length": TRAINING_CONFIG["max_seq_length"], "packing": False}
+        if _USING_SFT_CONFIG else {}
+    )
     training_args = TrainingArguments(
         output_dir=str(ADAPTER_OUTPUT),
         per_device_train_batch_size=TRAINING_CONFIG["per_device_train_batch_size"],
+        per_device_eval_batch_size=TRAINING_CONFIG["per_device_eval_batch_size"],
         gradient_accumulation_steps=TRAINING_CONFIG["gradient_accumulation_steps"],
         warmup_steps=TRAINING_CONFIG["warmup_steps"],
         max_steps=TRAINING_CONFIG["max_steps"],
@@ -192,19 +209,26 @@ def train(data_path: Path = TRAINING_DATA):
         fp16=TRAINING_CONFIG["fp16"],
         bf16=TRAINING_CONFIG["bf16"],
         report_to="none",  # disable wandb
+        **_sft_extra,
     )
 
     # ---- Trainer ----
+    _trainer_extra = (
+        {} if _USING_SFT_CONFIG
+        else {"dataset_text_field": "text", "max_seq_length": TRAINING_CONFIG["max_seq_length"], "packing": False}
+    )
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        dataset_text_field="text",
-        max_seq_length=TRAINING_CONFIG["max_seq_length"],
         args=training_args,
-        packing=False,
+        **_trainer_extra,
     )
+
+    print(f"   Effective batch: {training_args.per_device_train_batch_size} x "
+          f"{training_args.gradient_accumulation_steps} = "
+          f"{training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps}")
 
     # ---- Train ----
     print("\n📊 Training started - watch for loss decreasing...\n")
