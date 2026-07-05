@@ -18,8 +18,8 @@ interface ChatMessage extends StrategyAssistantMessage {
 }
 
 const EXAMPLE_PROMPTS = [
-  "Buy AAPL when RSI drops below 30 and sell when it goes above 70. Use 10% stop loss.",
-  "Long TSLA when the 50 EMA crosses above the 200 EMA on the 1h timeframe.",
+  "Buy AAPL when RSI drops below 30 and sell when it goes above 70. On the Daily timeframe and Use 10% stop loss.",
+  "Long TSLA when the 50 EMA crosses above the 200 EMA on the 4h timeframe.",
   "Short SPY when price breaks below the lower Bollinger Band with a 5% take profit.",
 ];
 
@@ -30,20 +30,60 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
   const [isSending, setIsSending] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [parsedDsl, setParsedDsl] = useState<Record<string, unknown> | null>(null);
-  const [confidence, setConfidence] = useState<number | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [readyToRun, setReadyToRun] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const lastSentRef = useRef<string>("");
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, isSending]);
 
+  // When the strategy card appears (it renders below the chat), bring it into
+  // view — otherwise users with a tall chat never notice it arrived.
+  useEffect(() => {
+    if (parsedDsl) {
+      const id = window.setTimeout(
+        () => cardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+        150,
+      );
+      return () => window.clearTimeout(id);
+    }
+  }, [parsedDsl]);
+
+  // Keep the keyboard flowing: focus the input once the assistant replies.
+  useEffect(() => {
+    if (!isSending) inputRef.current?.focus();
+  }, [isSending]);
+
+  // Parsing takes 8–30s (local model) — show staged progress instead of a
+  // static "Thinking..." so the wait feels intentional, not broken.
+  useEffect(() => {
+    if (!isSending) {
+      setThinkingSeconds(0);
+      return;
+    }
+    const id = window.setInterval(() => setThinkingSeconds((s) => s + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [isSending]);
+
+  const thinkingLabel =
+    thinkingSeconds < 4
+      ? "Reading your strategy…"
+      : thinkingSeconds < 12
+        ? "Building the trading rules…"
+        : thinkingSeconds < 30
+          ? "Structuring conditions — nearly there…"
+          : "Still working — the first request after a restart loads the model (~30s)…";
+
   const sendMessage = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
+    lastSentRef.current = trimmed;
     const userMsg: ChatMessage = { role: "user", content: trimmed };
     const history = [...messages, userMsg];
     setMessages(history);
@@ -62,12 +102,15 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
         ]);
       } else if (data.status === "complete") {
         setParsedDsl(data.dsl_json);
-        setReadyToRun(true);
         setWarnings(data.warnings ?? []);
         setSessionId(null);
+        const explanation = data.explanation || "Strategy ready.";
         setMessages([
           ...history,
-          { role: "assistant", content: data.explanation || "Strategy ready." },
+          {
+            role: "assistant",
+            content: `${explanation}\n\nReview the card below — tweak any field, then hit Run Backtest. Want something different? Just describe a new strategy.`,
+          },
         ]);
       } else {
         throw new Error(data.error || "Assistant failed to respond");
@@ -94,9 +137,7 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
     setMessages([]);
     setSessionId(null);
     setParsedDsl(null);
-    setConfidence(null);
     setWarnings([]);
-    setReadyToRun(false);
     setError(null);
     setInput("");
   };
@@ -138,29 +179,44 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
             </Button>
           )}
         </div>
-        <p className="text-xs text-muted-foreground mb-3">
-          Chat with the AI to refine your strategy. It will ask questions and build the rules with you.
-        </p>
-
         {/* Chat history */}
         <div
           ref={scrollRef}
           className="min-h-[280px] max-h-[420px] overflow-y-auto rounded border border-border bg-background/40 p-3 space-y-3 mb-3"
         >
           {messages.length === 0 && (
-            <div className="text-xs text-muted-foreground space-y-2">
-              <p>Start by describing your strategy idea. Try one of these:</p>
-              <div className="flex flex-wrap gap-1.5">
-                {EXAMPLE_PROMPTS.map((ex, i) => (
-                  <button
-                    key={i}
-                    onClick={() => sendMessage(ex)}
-                    className="text-[10px] text-left px-2 py-1.5 rounded border border-border bg-background/60 hover:bg-primary/10 hover:border-primary/40 transition-colors max-w-xs"
-                    disabled={isSending}
-                  >
-                    {ex}
-                  </button>
-                ))}
+            <div className="flex h-full min-h-[250px] flex-col items-center justify-center gap-4 text-center px-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+                <Sparkles className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">Describe a strategy in plain English</p>
+                <p className="mt-1 text-xs text-muted-foreground max-w-sm">
+                  The AI turns your words into trading rules, shows you exactly what it
+                  understood, and runs the backtest — no coding, typos welcome.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground/70">
+                <span className="flex items-center gap-1"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold">1</span> Describe</span>
+                <span className="text-muted-foreground/30">→</span>
+                <span className="flex items-center gap-1"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold">2</span> Review</span>
+                <span className="text-muted-foreground/30">→</span>
+                <span className="flex items-center gap-1"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold">3</span> Backtest</span>
+              </div>
+              <div className="w-full max-w-md space-y-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60">Try one of these</p>
+                <div className="flex flex-col gap-1.5">
+                  {EXAMPLE_PROMPTS.map((ex, i) => (
+                    <button
+                      key={i}
+                      onClick={() => sendMessage(ex)}
+                      className="text-[11px] text-left px-3 py-2 rounded-lg border border-border bg-background/60 hover:bg-primary/10 hover:border-primary/40 transition-colors"
+                      disabled={isSending}
+                    >
+                      “{ex}”
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
@@ -183,17 +239,20 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
                   {m.content}
                 </div>
                 {m.role === "assistant" && m.examples && m.examples.length > 0 && i === messages.length - 1 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {m.examples.map((ex, j) => (
-                      <button
-                        key={j}
-                        onClick={() => sendMessage(ex)}
-                        disabled={isSending}
-                        className="text-[10px] px-2 py-1 rounded-full border border-primary/30 bg-primary/10 hover:bg-primary/20 text-foreground transition-colors"
-                      >
-                        {ex}
-                      </button>
-                    ))}
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap gap-1.5">
+                      {m.examples.map((ex, j) => (
+                        <button
+                          key={j}
+                          onClick={() => sendMessage(ex)}
+                          disabled={isSending}
+                          className="text-[10px] px-2 py-1 rounded-full border border-primary/30 bg-primary/10 hover:bg-primary/20 text-foreground transition-colors"
+                        >
+                          {ex}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground/60">Tap an option or type your own answer</p>
                   </div>
                 )}
               </div>
@@ -212,7 +271,10 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
               </div>
               <div className="rounded-lg px-3 py-2 text-xs bg-card border border-border flex items-center gap-2">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                Thinking...
+                <span>{thinkingLabel}</span>
+                {thinkingSeconds >= 4 && (
+                  <span className="text-muted-foreground/50 font-mono text-[10px]">{thinkingSeconds}s</span>
+                )}
               </div>
             </div>
           )}
@@ -221,10 +283,16 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
         {/* Input */}
         <div className="flex gap-2">
           <Textarea
+            ref={inputRef}
+            autoFocus
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Reply to the assistant or describe a change..."
+            placeholder={
+              messages.length === 0
+                ? "Describe your strategy in plain English — typos welcome…"
+                : "Reply to the assistant or describe a new strategy…"
+            }
             className="min-h-[60px] text-sm bg-background/50 resize-none"
             disabled={isSending}
           />
@@ -244,33 +312,45 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
         <Card className="p-4 border-destructive/40 bg-destructive/5">
           <div className="flex items-start gap-2">
             <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-            <div className="text-xs">
-              <div className="font-medium text-destructive mb-0.5">Assistant error</div>
+            <div className="text-xs flex-1">
+              <div className="font-medium text-destructive mb-0.5">Something went wrong</div>
               <div className="text-muted-foreground">{error}</div>
             </div>
+            {lastSentRef.current && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] shrink-0"
+                onClick={() => {
+                  setError(null);
+                  setMessages((prev) => prev.filter((_, i) => i !== prev.length - 1));
+                  sendMessage(lastSentRef.current);
+                }}
+                disabled={isSending}
+              >
+                <RotateCcw className="h-3 w-3 mr-1" />
+                Try again
+              </Button>
+            )}
           </div>
         </Card>
       )}
 
       {parsedDsl && (
-        <>
+        <motion.div
+          ref={cardRef}
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: "easeOut" }}
+        >
           <EditableStrategyCard
             dsl={parsedDsl}
             onChange={setParsedDsl}
             onRun={handleRun}
             isRunning={isRunning}
             warnings={warnings}
-            confidence={confidence}
           />
-          <details className="text-xs">
-            <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">
-              View raw JSON
-            </summary>
-            <pre className="mt-2 p-3 rounded bg-background/70 border border-border overflow-auto max-h-[400px] font-mono text-[11px]">
-              {JSON.stringify(parsedDsl, null, 2)}
-            </pre>
-          </details>
-        </>
+        </motion.div>
       )}
     </motion.div>
   );

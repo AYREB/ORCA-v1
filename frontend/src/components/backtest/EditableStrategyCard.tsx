@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Play, Loader2, X, CheckCircle2, AlertCircle } from "lucide-react";
+import { Play, Loader2, X, CheckCircle2, AlertCircle, LogIn, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,7 +14,6 @@ interface Props {
   onRun: () => void;
   isRunning: boolean;
   warnings?: string[];
-  confidence?: number | null;
 }
 
 // case-insensitive key lookup, returns the actual key name in the object
@@ -72,7 +71,7 @@ const conditionsToText = (conds: any): string => {
     .join("");
 };
 
-const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], confidence }: Props) => {
+const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [] }: Props) => {
   const { tickers: registryTickers, timeframes: registryTimeframes } = useRegistry();
   // Determine direction block
   const longKey = findKey(dsl, "LONG", "long");
@@ -135,13 +134,32 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
   const openCondsText = conditionsToText(openCondsKey ? openBlock[openCondsKey] : undefined);
   const closeCondsText = conditionsToText(closeCondsKey ? closeBlock[closeCondsKey] : undefined);
 
-  // local state for new-ticker input & percent text inputs (so user can clear field)
+  // Percent text inputs (local state so the user can clear the field).
+  // TP/SL are stored as WHOLE numbers in the DSL (10 = 10%) — no scaling.
   const [tpText, setTpText] = useState<string>(
-    tpVal !== undefined && tpVal !== null ? String(Number(tpVal) * 100) : ""
+    tpVal !== undefined && tpVal !== null ? String(Number(tpVal)) : ""
   );
   const [slText, setSlText] = useState<string>(
-    slVal !== undefined && slVal !== null ? String(Number(slVal) * 100) : ""
+    slVal !== undefined && slVal !== null ? String(Number(slVal)) : ""
   );
+
+  // Resync the text fields when a NEW strategy arrives (the component stays
+  // mounted between parses). Skips overwriting while the user is typing by
+  // only syncing when the numeric values actually differ.
+  useEffect(() => {
+    const incoming = tpVal === undefined || tpVal === null ? null : Number(tpVal);
+    const current = parseFloat(tpText);
+    if (incoming === null) return;
+    if (isNaN(current) || current !== incoming) setTpText(String(incoming));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tpVal]);
+  useEffect(() => {
+    const incoming = slVal === undefined || slVal === null ? null : Number(slVal);
+    const current = parseFloat(slText);
+    if (incoming === null) return;
+    if (isNaN(current) || current !== incoming) setSlText(String(incoming));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slVal]);
 
   const unknownTickers = useMemo(
     () => tickers.filter((t) => !registryTickers[t]),
@@ -235,8 +253,11 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
         }
       }
       const key = which === "tp" ? tpKey : slKey;
+      // Stored as whole-number percent (10 = 10%) — the backtester divides
+      // by 100 itself. Storing percent/100 here silently turned an edited
+      // "10% stop loss" into 0.1%.
       if (percent === null) delete target[key];
-      else target[key] = percent / 100;
+      else target[key] = percent;
     });
 
   const setDirection = (dir: "LONG" | "SHORT") =>
@@ -250,31 +271,81 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
     });
 
   return (
-    <Card className="p-5 bg-card/50 border-border">
+    <Card className="p-5 bg-card/50 border-primary/20">
+      {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 text-primary" />
-          <h3 className="text-sm font-semibold">Review & Run</h3>
-          {confidence != null && (
-            <Badge variant="outline" className="text-[10px]">
-              {Math.round(confidence * 100)}% confidence
-            </Badge>
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15">
+            <CheckCircle2 className="h-4 w-4 text-primary" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold leading-tight">Your Strategy</h3>
+            <p className="text-[11px] text-muted-foreground leading-tight">
+              Check the details, tweak anything, then run
+            </p>
+          </div>
+          <Badge
+            variant="outline"
+            className={`ml-1 text-[10px] font-bold ${
+              direction === "LONG"
+                ? "border-green-500/40 text-green-500 bg-green-500/10"
+                : "border-red-500/40 text-red-500 bg-red-500/10"
+            }`}
+          >
+            {direction}
+          </Badge>
+        </div>
+        <div className="flex flex-col items-end gap-0.5">
+          <Button
+            onClick={onRun}
+            disabled={isRunning || tickers.length === 0}
+            size="sm"
+            className="shadow-sm"
+          >
+            {isRunning ? (
+              <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Running...</>
+            ) : (
+              <><Play className="h-3.5 w-3.5 mr-2" />Run Backtest</>
+            )}
+          </Button>
+          {tickers.length === 0 && (
+            <span className="text-[10px] text-yellow-500">Add at least one ticker</span>
           )}
         </div>
-        <Button onClick={onRun} disabled={isRunning} size="sm">
-          {isRunning ? (
-            <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Running...</>
-          ) : (
-            <><Play className="h-3.5 w-3.5 mr-2" />Run Backtest</>
-          )}
-        </Button>
       </div>
 
+      {/* Strategy logic — first, because verifying what the AI understood
+          matters more than any editable field */}
+      {(openCondsText || closeCondsText) && (
+        <div className="mb-4 rounded-lg border border-border bg-background/50 divide-y divide-border/60">
+          {openCondsText && (
+            <div className="flex items-start gap-2.5 px-3 py-2.5">
+              <LogIn className="h-3.5 w-3.5 mt-0.5 shrink-0 text-green-500" />
+              <div className="text-xs leading-relaxed">
+                <span className="font-medium text-green-500">Enter</span>
+                <span className="text-muted-foreground"> when </span>
+                <span className="font-mono text-[11px] text-foreground">{openCondsText}</span>
+              </div>
+            </div>
+          )}
+          {closeCondsText && (
+            <div className="flex items-start gap-2.5 px-3 py-2.5">
+              <LogOut className="h-3.5 w-3.5 mt-0.5 shrink-0 text-red-500" />
+              <div className="text-xs leading-relaxed">
+                <span className="font-medium text-red-500">Exit</span>
+                <span className="text-muted-foreground"> when </span>
+                <span className="font-mono text-[11px] text-foreground">{closeCondsText}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {warnings.length > 0 && (
-        <div className="mb-4 p-3 rounded border border-yellow-500/30 bg-yellow-500/5 text-xs space-y-1">
+        <div className="mb-4 p-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 text-xs space-y-1">
           <div className="font-medium text-yellow-500 flex items-center gap-1.5">
             <AlertCircle className="h-3.5 w-3.5" />
-            Warnings
+            Heads up
           </div>
           <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
             {warnings.map((w, i) => <li key={i}>{w}</li>)}
@@ -285,7 +356,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Tickers */}
         <div className="md:col-span-2 space-y-1.5">
-          <Label className="text-xs">Tickers</Label>
+          <Label className="text-xs text-muted-foreground">Tickers</Label>
           <div className="flex flex-wrap items-center gap-1.5 p-2 rounded border border-border bg-background/40 min-h-[38px]">
             {tickers.map((t) => {
               const known = !!registryTickers[t];
@@ -334,7 +405,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
 
         {/* Timeframe */}
         <div className="space-y-1.5">
-          <Label className="text-xs">Timeframe</Label>
+          <Label className="text-xs text-muted-foreground">Timeframe</Label>
           <TimeframeSelect
             value={timeframe}
             onChange={setTimeframe}
@@ -346,7 +417,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
 
         {/* Direction */}
         <div className="space-y-1.5">
-          <Label className="text-xs">Direction</Label>
+          <Label className="text-xs text-muted-foreground">Direction</Label>
           <div className="flex rounded border border-border overflow-hidden bg-background/40 h-8">
             {(["LONG", "SHORT"] as const).map((d) => (
               <button
@@ -368,7 +439,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
 
         {/* Dates */}
         <div className="space-y-1.5">
-          <Label className="text-xs">Start date</Label>
+          <Label className="text-xs text-muted-foreground">Start date</Label>
           <Input
             type="date"
             value={startDate}
@@ -377,7 +448,7 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
           />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs">End date</Label>
+          <Label className="text-xs text-muted-foreground">End date</Label>
           <Input
             type="date"
             value={endDate}
@@ -388,57 +459,48 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [], 
 
         {/* TP / SL */}
         <div className="space-y-1.5">
-          <Label className="text-xs">Take Profit %</Label>
-          <Input
-            type="number"
-            step="0.1"
-            value={tpText}
-            onChange={(e) => {
-              setTpText(e.target.value);
-              const n = parseFloat(e.target.value);
-              setTpSl("tp", isNaN(n) ? null : n);
-            }}
-            placeholder="e.g. 15"
-            className="h-8 text-xs bg-background/40"
-          />
+          <Label className="text-xs text-muted-foreground">
+            Take Profit <span className="text-green-500/80">(lock in gains)</span>
+          </Label>
+          <div className="relative">
+            <Input
+              type="number"
+              step="0.1"
+              min="0"
+              value={tpText}
+              onChange={(e) => {
+                setTpText(e.target.value);
+                const n = parseFloat(e.target.value);
+                setTpSl("tp", isNaN(n) ? null : n);
+              }}
+              placeholder="e.g. 15"
+              className="h-8 text-xs bg-background/40 pr-7"
+            />
+            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">%</span>
+          </div>
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs">Stop Loss %</Label>
-          <Input
-            type="number"
-            step="0.1"
-            value={slText}
-            onChange={(e) => {
-              setSlText(e.target.value);
-              const n = parseFloat(e.target.value);
-              setTpSl("sl", isNaN(n) ? null : n);
-            }}
-            placeholder="e.g. 10"
-            className="h-8 text-xs bg-background/40"
-          />
+          <Label className="text-xs text-muted-foreground">
+            Stop Loss <span className="text-red-500/80">(cap losses)</span>
+          </Label>
+          <div className="relative">
+            <Input
+              type="number"
+              step="0.1"
+              min="0"
+              value={slText}
+              onChange={(e) => {
+                setSlText(e.target.value);
+                const n = parseFloat(e.target.value);
+                setTpSl("sl", isNaN(n) ? null : n);
+              }}
+              placeholder="e.g. 10"
+              className="h-8 text-xs bg-background/40 pr-7"
+            />
+            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">%</span>
+          </div>
         </div>
       </div>
-
-      {/* Read-only conditions */}
-      {(openCondsText || closeCondsText) && (
-        <div className="mt-4 p-3 rounded border border-border bg-background/40 space-y-1.5">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
-            Strategy logic
-          </div>
-          {openCondsText && (
-            <div className="text-xs">
-              <span className="text-muted-foreground">Enter when </span>
-              <span className="text-foreground">{openCondsText}</span>
-            </div>
-          )}
-          {closeCondsText && (
-            <div className="text-xs">
-              <span className="text-muted-foreground">Exit when </span>
-              <span className="text-foreground">{closeCondsText}</span>
-            </div>
-          )}
-        </div>
-      )}
     </Card>
   );
 };

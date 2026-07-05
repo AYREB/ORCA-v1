@@ -1809,12 +1809,53 @@ def strategy_to_dsl(request):
     })
 
 
+def _operand_to_text(node):
+    """Render one side of a DSL condition as plain English."""
+    if not isinstance(node, dict):
+        return str(node)
+    if "value" in node:
+        return str(node["value"])
+    if "func" in node:
+        func = str(node["func"])
+        args = node.get("arg", {}) or {}
+        offset = args.get("offset") or 0
+        suffix = f" ({int(offset)} bar{'s' if int(offset) != 1 else ''} ago)" if offset else ""
+        if func.upper() == "PRICE":
+            return f"{args.get('OHLC', 'close')} price{suffix}"
+        if func.upper() == "VOLUME":
+            return f"volume{suffix}"
+        shown = [str(v) for k, v in args.items()
+                 if k not in ("timeframe", "offset") and v not in (None, "")]
+        label = f"{func}({', '.join(shown)})" if shown else func
+        tf = args.get("timeframe")
+        if tf:
+            label += f" on {tf}"
+        return label + suffix
+    if "op" in node:
+        return f"{_operand_to_text(node.get('left'))} {node.get('op')} {_operand_to_text(node.get('right'))}"
+    return "?"
+
+
+def _conditions_to_text(cond):
+    """Render a DSL condition tree (with AND/OR nesting) as plain English."""
+    if not isinstance(cond, dict):
+        return "?"
+    if "AND" in cond:
+        return " AND ".join(_conditions_to_text(c) for c in cond["AND"])
+    if "OR" in cond:
+        return " OR ".join(_conditions_to_text(c) for c in cond["OR"])
+    return (f"{_operand_to_text(cond.get('left'))} "
+            f"{cond.get('operator', '?')} "
+            f"{_operand_to_text(cond.get('right'))}")
+
+
 def build_explanation(strategy):
     direction = "LONG" if "LONG" in strategy else "SHORT"
     body = strategy[direction]
     ctx = body["context"]
-    open_args = body["OPEN"]["ARGUMENTS"]
-    has_close = "CLOSE" in body
+    open_block = body.get("OPEN", {})
+    open_args = open_block.get("ARGUMENTS", {})
+    close_block = body.get("CLOSE")
 
     tickers = ", ".join(ctx["tickers"])
     tf = ctx["execution_timeframe"]
@@ -1824,25 +1865,33 @@ def build_explanation(strategy):
     tp = open_args.get("takeProfitPercent")
     sl = open_args.get("stopLossPercent")
 
-    lines = []
-    lines.append(f"{'Long' if direction == 'LONG' else 'Short'} {tickers} on {tf} timeframe")
-    lines.append(f"Backtest period: {start} to {end}")
+    lines = [f"Here's your strategy — {'Long' if direction == 'LONG' else 'Short'} {tickers} on the {tf} chart:"]
 
+    entry_text = _conditions_to_text(open_block.get("CONDITIONS"))
+    if entry_text and entry_text != "?":
+        lines.append(f"• Enter when: {entry_text}")
+
+    risk_bits = []
     if tp:
-        # Values are already whole numbers after fix_percentage_fields
-        lines.append(f"Take profit: {round(float(tp), 1)}%")
+        risk_bits.append(f"take profit {round(float(tp), 1)}%")
     if sl:
-        lines.append(f"Stop loss: {round(float(sl), 1)}%")
+        risk_bits.append(f"stop loss {round(float(sl), 1)}%")
+    if risk_bits:
+        lines.append(f"• Risk: {' · '.join(risk_bits)}")
 
-    if has_close:
-        lines.append("Exit: Explicit close condition set")
-    else:
-        lines.append("Exit: Via take profit / stop loss")
+    if close_block and close_block.get("CONDITIONS"):
+        exit_text = _conditions_to_text(close_block.get("CONDITIONS"))
+        lines.append(f"• Also exit when: {exit_text}")
+    elif not risk_bits:
+        lines.append("• Exit: none set — position closes at the end of the backtest")
 
     if open_args.get("recurring"):
-        lines.append("Recurring DCA enabled")
+        rec_period = open_args.get("recurringPeriod")
+        lines.append(f"• DCA: adds to the position every {rec_period} bars" if rec_period else "• DCA enabled")
 
-    return " | ".join(lines)
+    lines.append(f"• Backtest period: {start} → {end}")
+
+    return "\n".join(lines)
 
 
 def log_query(

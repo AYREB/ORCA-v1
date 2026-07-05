@@ -1,11 +1,38 @@
+import json
 import re
+from pathlib import Path
 
 # ---------------- FIELD DETECTORS ----------------
 
-TICKER_PATTERNS = [
-    r'\b(AAPL|TSLA|MSFT|GOOGL|AMZN|NVDA|META|SPY|QQQ|BTC-USD)\b',
-    r'\b(apple|tesla|microsoft|google|amazon|nvidia|meta|bitcoin|btc|ethereum|eth|nasdaq|s&p)\b',
+_REGISTRY_DIR = Path(__file__).resolve().parent.parent / "registries"
+
+# Colloquial forms users type that may not be registry aliases.
+_EXTRA_TICKER_WORDS = [
+    "apple", "tesla", "microsoft", "google", "alphabet", "amazon", "nvidia",
+    "meta", "facebook", "bitcoin", "btc", "nasdaq", "s&p", "sp500", "spy",
 ]
+
+
+def _build_ticker_patterns():
+    """Ticker detection built from the registry so it stays in sync with what
+    the platform actually supports (a hardcoded list previously recognised
+    'ethereum', which isn't a supported ticker — the parse then failed)."""
+    words = set(_EXTRA_TICKER_WORDS)
+    try:
+        with open(_REGISTRY_DIR / "tickerRegistry.json") as f:
+            registry = json.load(f).get("TICKERS", {})
+        for ticker, data in registry.items():
+            words.add(ticker)
+            for alias in data.get("aliases", []):
+                words.add(alias)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    # Longest first so multi-word aliases win over substrings.
+    escaped = sorted((re.escape(w) for w in words if w), key=len, reverse=True)
+    return [r'\b(' + '|'.join(escaped) + r')\b'] if escaped else []
+
+
+TICKER_PATTERNS = _build_ticker_patterns()
 
 TIMEFRAME_PATTERNS = [
     r'\b(1m|5m|15m|1h|4h|1D|1d)\b',
@@ -13,8 +40,8 @@ TIMEFRAME_PATTERNS = [
 ]
 
 DIRECTION_PATTERNS = [
-    r'\b(buy|long|enter long|go long|enter a long)\b',
-    r'\b(sell|short|go short|enter short|fade|sell short)\b',
+    r'\b(buy|long|purchase|enter long|go long|enter a long|get long)\b',
+    r'\b(sell|short|go short|enter short|fade|sell short|dump)\b',
 ]
 
 INDICATOR_PATTERNS = [
