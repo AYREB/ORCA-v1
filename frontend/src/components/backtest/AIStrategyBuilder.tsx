@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Sparkles, Loader2, Send, AlertCircle, User, Bot, RotateCcw } from "lucide-react";
+import { Sparkles, Loader2, Send, AlertCircle, User, Bot, RotateCcw, HelpCircle } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useRegistry } from "@/context/RegistryContext";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
@@ -26,6 +28,7 @@ const EXAMPLE_PROMPTS = [
 
 const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
   const { settings } = useSettings();
+  const { tickers: registryTickers, registry } = useRegistry();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -192,17 +195,65 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
           <Sparkles className="h-4 w-4 text-primary" />
           <h3 className="text-sm font-semibold">Strategy Assistant</h3>
           <Badge variant="outline" className="text-[10px]">Beta</Badge>
-          {messages.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleReset}
-              className="ml-auto h-7 text-[11px] text-muted-foreground"
-            >
-              <RotateCcw className="h-3 w-3 mr-1" />
-              New chat
-            </Button>
-          )}
+          <div className="ml-auto flex items-center gap-1">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 text-[11px] text-muted-foreground gap-1">
+                  <HelpCircle className="h-3 w-3" />
+                  What can I say?
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-96 max-h-[420px] overflow-y-auto text-xs space-y-3">
+                <div>
+                  <p className="font-semibold mb-1">Markets</p>
+                  <div className="flex flex-wrap gap-1">
+                    {Object.keys(registryTickers).map((t) => (
+                      <span key={t} className="px-1.5 py-0.5 rounded bg-secondary/60 font-mono text-[10px]">{t}</span>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-muted-foreground text-[11px]">
+                    Plain names work too — “apple”, “bitcoin”, “the S&P”.
+                  </p>
+                </div>
+                <div>
+                  <p className="font-semibold mb-1">Indicators</p>
+                  <p className="text-muted-foreground text-[11px]">
+                    {Object.keys(registry.indicators?.INDICATORS ?? {}).join(" · ") ||
+                      "RSI · MACD · SMA · EMA · BBANDS · STOCH · CCI · OBV · ATR · PRICE · VOLUME"}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-semibold mb-1">Details you can include</p>
+                  <ul className="list-disc list-inside text-muted-foreground space-y-0.5 text-[11px]">
+                    <li>Direction — “buy” / “go long” / “short”</li>
+                    <li>Entry rules — combine with “and” / “or”</li>
+                    <li>An exit rule — “sell when RSI goes above 70”</li>
+                    <li>Take profit &amp; stop loss — “TP 15%, SL 5%”</li>
+                    <li>Timeframe — 1m, 15m, 1h, 4h, daily…</li>
+                    <li>Date range — “last 2 years”, “throughout 2024”</li>
+                    <li>DCA — “add 5% every 10 candles, up to 3 times”</li>
+                  </ul>
+                </div>
+                <div className="rounded border border-border bg-background/50 p-2 text-[11px] text-muted-foreground">
+                  <span className="font-medium text-foreground">Tips:</span> one full sentence works
+                  best · typos are fine · anything you leave out gets a sensible default or a quick
+                  follow-up question · after parsing, edit everything on the review card — no need
+                  to re-prompt for small tweaks.
+                </div>
+              </PopoverContent>
+            </Popover>
+            {messages.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleReset}
+                className="h-7 text-[11px] text-muted-foreground"
+              >
+                <RotateCcw className="h-3 w-3 mr-1" />
+                New chat
+              </Button>
+            )}
+          </div>
         </div>
         {/* Chat history */}
         <div
