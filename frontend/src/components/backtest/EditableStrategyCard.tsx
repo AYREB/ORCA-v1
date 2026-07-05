@@ -126,6 +126,15 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [] }
   const tpVal = tpSl.obj?.[tpKey];
   const slVal = tpSl.obj?.[slKey];
 
+  // Transaction costs (injected from the user's defaults; editable here so
+  // nothing about the backtest's pricing is hidden).
+  const feeModeVal: "commission" | "spread" =
+    argsObj?.fee_mode === "spread" || (argsObj?.spread !== undefined && argsObj?.fee_value === undefined)
+      ? "spread"
+      : "commission";
+  const feeValueVal = Number(argsObj?.fee_value ?? argsObj?.spread ?? 0) || 0;
+  const feeFixedVal = Number(argsObj?.fee_fixed ?? 0) || 0;
+
   // Conditions (read-only)
   const closeKey = block ? findKey(block, "CLOSE", "close", "exit") : undefined;
   const closeBlock = closeKey ? block[closeKey] : undefined;
@@ -258,6 +267,21 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [] }
       // "10% stop loss" into 0.1%.
       if (percent === null) delete target[key];
       else target[key] = percent;
+    });
+
+  const setFee = (field: "fee_mode" | "fee_value" | "fee_fixed", value: string | number) =>
+    update((d) => {
+      const dKey = findKey(d, "LONG", "long", "SHORT", "short");
+      const blk = dKey ? d[dKey] : d;
+      const oKey = blk ? findKey(blk, "OPEN", "open", "entry") : undefined;
+      const oBlk = oKey ? blk[oKey] : undefined;
+      if (!oBlk) return;
+      if (!oBlk.ARGUMENTS) oBlk.ARGUMENTS = {};
+      const args = oBlk.ARGUMENTS;
+      delete args.spread; // migrate legacy key if present
+      args[field] = value;
+      if (args.fee_mode === undefined) args.fee_mode = feeModeVal;
+      if (args.fee_value === undefined) args.fee_value = feeValueVal;
     });
 
   const setDirection = (dir: "LONG" | "SHORT") =>
@@ -499,6 +523,56 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [] }
             />
             <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">%</span>
           </div>
+        </div>
+
+        {/* Transaction costs — pre-filled from the user's Settings defaults */}
+        <div className="md:col-span-2 space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Transaction Costs</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded border border-border overflow-hidden bg-background/40 h-8">
+              {(["commission", "spread"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setFee("fee_mode", m)}
+                  className={`px-3 text-[11px] font-medium transition-colors ${
+                    feeModeVal === m
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:bg-muted/40"
+                  }`}
+                >
+                  {m === "commission" ? "Commission" : "Spread"}
+                </button>
+              ))}
+            </div>
+            <div className="relative w-24">
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={feeValueVal}
+                onChange={(e) => setFee("fee_value", Math.max(0, parseFloat(e.target.value) || 0))}
+                className="h-8 text-xs bg-background/40 pr-7"
+              />
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">%</span>
+            </div>
+            <span className="text-xs text-muted-foreground/60">+</span>
+            <div className="relative w-24">
+              <Input
+                type="number"
+                step="0.5"
+                min="0"
+                value={feeFixedVal}
+                onChange={(e) => setFee("fee_fixed", Math.max(0, parseFloat(e.target.value) || 0))}
+                className="h-8 text-xs bg-background/40 pl-6"
+              />
+              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">$</span>
+            </div>
+            <span className="text-[11px] text-muted-foreground/60">per order</span>
+          </div>
+          <p className="text-[10px] text-muted-foreground/60">
+            Applied on entry and exit, from your defaults in Settings — tweak here for this run.
+          </p>
         </div>
       </div>
     </Card>

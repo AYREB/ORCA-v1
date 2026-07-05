@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { api, BacktestResult, StrategyAssistantMessage } from "@/lib/api";
 import { toast } from "sonner";
 import EditableStrategyCard from "./EditableStrategyCard";
+import { useSettings } from "@/hooks/useSettings";
 
 interface AIStrategyBuilderProps {
   onRunBacktest: (result: BacktestResult) => void;
@@ -24,6 +25,7 @@ const EXAMPLE_PROMPTS = [
 ];
 
 const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
+  const { settings } = useSettings();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -79,6 +81,29 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
           ? "Structuring conditions — nearly there…"
           : "Still working — the first request after a restart loads the model (~30s)…";
 
+  // The model outputs pure strategy logic — transaction costs are account
+  // settings, not strategy language. Inject the user's saved fee defaults so
+  // AI-mode backtests price in costs exactly like Easy Mode (previously they
+  // ran commission-free, quietly inflating results).
+  const withDefaultFees = (dsl: Record<string, unknown>): Record<string, unknown> => {
+    const bt = settings.backtestDefaults;
+    const next = JSON.parse(JSON.stringify(dsl)) as Record<string, any>;
+    const dirKey = "LONG" in next ? "LONG" : "SHORT" in next ? "SHORT" : null;
+    if (!dirKey) return next;
+    const block = next[dirKey];
+    if (!block.OPEN || typeof block.OPEN !== "object") block.OPEN = {};
+    if (!block.OPEN.ARGUMENTS || typeof block.OPEN.ARGUMENTS !== "object") block.OPEN.ARGUMENTS = {};
+    const args = block.OPEN.ARGUMENTS;
+    if (args.fee_value === undefined && args.spread === undefined) {
+      args.fee_mode = bt.feeMode;
+      args.fee_value = bt.feeValue;
+    }
+    if (args.fee_fixed === undefined && (bt.feeFixed ?? 0) > 0) {
+      args.fee_fixed = bt.feeFixed;
+    }
+    return next;
+  };
+
   const sendMessage = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -101,7 +126,7 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
           { role: "assistant", content: data.question, examples: data.examples },
         ]);
       } else if (data.status === "complete") {
-        setParsedDsl(data.dsl_json);
+        setParsedDsl(withDefaultFees(data.dsl_json));
         setWarnings(data.warnings ?? []);
         setSessionId(null);
         const explanation = data.explanation || "Strategy ready.";
