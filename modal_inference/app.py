@@ -39,12 +39,18 @@ app = modal.App("orca-parser")
 # A Volume holds the multi-GB GGUF instead of baking it into the image.
 model_volume = modal.Volume.from_name("orca-models", create_if_missing=True)
 
-# CUDA base image + llama-cpp-python built with GPU offload enabled.
+# CUDA runtime image + PREBUILT llama-cpp-python CUDA wheel. Compiling from
+# source (CMAKE_ARGS=-DGGML_CUDA=on) is slow and failed in Modal's builder;
+# the official prebuilt cu124 wheels sidestep the compiler entirely.
 image = (
-    modal.Image.from_registry("nvidia/cuda:12.4.1-devel-ubuntu22.04", add_python="3.11")
-    .apt_install("build-essential", "cmake", "git")
-    .env({"CMAKE_ARGS": "-DGGML_CUDA=on"})
-    .pip_install("llama-cpp-python==0.3.2", "fastapi[standard]")
+    modal.Image.from_registry("nvidia/cuda:12.4.1-runtime-ubuntu22.04", add_python="3.11")
+    .pip_install(
+        # Must be a version with a prebuilt cp311 linux wheel on the cu124
+        # index — otherwise pip silently falls back to a source build.
+        "llama-cpp-python==0.3.19",
+        extra_index_url="https://abetlen.github.io/llama-cpp-python/whl/cu124",
+    )
+    .pip_install("fastapi[standard]")
 )
 
 
