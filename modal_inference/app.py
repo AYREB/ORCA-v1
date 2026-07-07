@@ -25,6 +25,8 @@ import os
 
 import modal
 
+import fastapi
+
 # ---- Config ---------------------------------------------------------------
 GGUF_FILENAME = os.environ.get("ORCA_GGUF_FILENAME", "orca-qwen2.5.gguf")
 MODEL_DIR = "/models"
@@ -44,6 +46,7 @@ model_volume = modal.Volume.from_name("orca-models", create_if_missing=True)
 # the official prebuilt cu124 wheels sidestep the compiler entirely.
 image = (
     modal.Image.from_registry("nvidia/cuda:12.4.1-runtime-ubuntu22.04", add_python="3.11")
+    .apt_install("libgomp1")  # OpenMP runtime — required by the prebuilt llama.cpp lib
     .pip_install(
         # Must be a version with a prebuilt cp311 linux wheel on the cu124
         # index — otherwise pip silently falls back to a source build.
@@ -80,20 +83,16 @@ class Parser:
         )
 
     @modal.fastapi_endpoint(method="POST")
-    async def infer(self, request):
-        from fastapi import HTTPException
-
+    def infer(self, item: dict, authorization: str = fastapi.Header(default="")):
         # --- Auth: require Authorization: Bearer <ORCA_MODAL_API_KEY> ---
         expected = os.environ.get("ORCA_MODAL_API_KEY", "")
-        provided = request.headers.get("authorization", "")
-        if not expected or provided != f"Bearer {expected}":
-            raise HTTPException(status_code=401, detail="unauthorized")
+        if not expected or authorization != f"Bearer {expected}":
+            raise fastapi.HTTPException(status_code=401, detail="unauthorized")
 
-        data = await request.json()
-        prompt = (data or {}).get("prompt", "")
-        max_tokens = int((data or {}).get("max_tokens", 1024))
+        prompt = (item or {}).get("prompt", "")
+        max_tokens = int((item or {}).get("max_tokens", 1024))
         if not prompt:
-            raise HTTPException(status_code=400, detail="missing 'prompt'")
+            raise fastapi.HTTPException(status_code=400, detail="missing 'prompt'")
 
         out = self.llm(
             prompt,
