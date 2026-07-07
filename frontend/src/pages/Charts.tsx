@@ -44,11 +44,18 @@ const Charts = () => {
     }
   }, [tickerSymbols, selectedTicker]);
 
-  // Timeframes available for the currently selected ticker.
+  const allTimeframes = useMemo(
+    () => (Object.keys(timeframes).length ? Object.keys(timeframes) : ["1D", "1h", "4h", "1wk", "1mo"]),
+    [timeframes],
+  );
+
+  // Timeframes available for the currently selected ticker. A typed ticker that
+  // isn't in the registry falls back to all timeframes so it can still be
+  // fetched from Yahoo Finance.
   const availableTimeframes = useMemo(() => {
-    if (!selectedTicker) return Object.keys(timeframes);
+    if (!selectedTicker || !tickers[selectedTicker]) return allTimeframes;
     return availableTimeframesFor([selectedTicker], tickers, timeframes);
-  }, [selectedTicker, tickers, timeframes]);
+  }, [selectedTicker, tickers, timeframes, allTimeframes]);
 
   // Keep the selected timeframe valid when switching tickers.
   useEffect(() => {
@@ -131,14 +138,45 @@ const Charts = () => {
               <Input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search tickers..."
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    const typed = search.trim().toUpperCase();
+                    if (typed) {
+                      setSelectedTicker(typed);
+                      setSearch("");
+                    }
+                  }
+                }}
+                placeholder="Type a ticker (e.g. TSLA, BTC-USD)…"
                 className="h-9 border-border bg-secondary/60 pl-9"
               />
             </div>
           </div>
           <div className="flex-1 overflow-y-auto p-2">
+            {(() => {
+              const typed = search.trim().toUpperCase();
+              const showLoadTyped = typed.length > 0 && !tickerSymbols.includes(typed);
+              if (!showLoadTyped) return null;
+              return (
+                <button
+                  onClick={() => {
+                    setSelectedTicker(typed);
+                    setSearch("");
+                  }}
+                  className="mb-2 flex w-full items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2.5 text-left transition-all hover:bg-primary/15"
+                >
+                  <Search className="h-4 w-4 shrink-0 text-primary" />
+                  <div className="min-w-0">
+                    <p className="font-mono text-sm font-semibold">Load {typed}</p>
+                    <p className="truncate text-xs text-muted-foreground">Fetch from Yahoo Finance</p>
+                  </div>
+                </button>
+              );
+            })()}
             {filteredTickers.length === 0 ? (
-              <p className="p-4 text-center text-sm text-muted-foreground">No tickers match.</p>
+              <p className="p-4 text-center text-sm text-muted-foreground">
+                {search.trim() ? "Press Enter to load this ticker from Yahoo Finance." : "No tickers match."}
+              </p>
             ) : (
               filteredTickers.map((symbol) => {
                 const isSelected = symbol === selectedTicker;

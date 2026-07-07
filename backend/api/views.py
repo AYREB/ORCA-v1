@@ -2375,25 +2375,35 @@ def chart_data(request):
 
     registry = _load_ticker_registry()
     ticker_config = registry.get(ticker)
-    if ticker_config is None:
-        raise APIError(f"Unknown ticker '{ticker}'.", status_code=404)
 
-    available = ticker_config.get("available_timeframes", [])
-    if timeframe not in available:
-        raise APIError(
-            f"Timeframe '{timeframe}' is not available for {ticker}. "
-            f"Available: {', '.join(available) or 'none'}."
-        )
+    if ticker_config is not None:
+        available = ticker_config.get("available_timeframes", [])
+        if timeframe not in available:
+            raise APIError(
+                f"Timeframe '{timeframe}' is not available for {ticker}. "
+                f"Available: {', '.join(available) or 'none'}."
+            )
+        name = ticker_config.get("name", ticker)
+    else:
+        # Not in the pre-pulled registry: treat it as a free-text ticker fetched
+        # live from Yahoo Finance, as long as the timeframe maps to a yfinance
+        # interval (some timeframes like 4h only exist in the stored CSVs).
+        if timeframe not in _TIMEFRAME_TO_YF_INTERVAL:
+            raise APIError(
+                f"Timeframe '{timeframe}' isn't supported for custom tickers "
+                f"(only stored tickers have it). Try: {', '.join(_TIMEFRAME_TO_YF_INTERVAL) or 'none'}."
+            )
+        name = ticker
 
     df, error_message = _load_chart_dataframe(ticker, timeframe)
     if error_message:
-        raise APIError(error_message)
+        raise APIError(error_message, status_code=404)
 
     records = dataframe_to_response_records(df)
 
     return no_store(JsonResponse({
         "ticker": ticker,
-        "name": ticker_config.get("name", ticker),
+        "name": name,
         "timeframe": timeframe,
         "candles": records,
     }))
