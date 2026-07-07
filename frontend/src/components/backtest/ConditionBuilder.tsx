@@ -1,6 +1,20 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, X, ChevronsUpDown, ArrowLeftRight, Calculator, GripVertical } from "lucide-react";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCorners,
+  useDroppable,
+  type DragStartEvent,
+  type DragOverEvent,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
 import { getParamDomain, clampToDomain } from "@/lib/paramDomains";
 import IndicatorCommandPalette from "./IndicatorCommandPalette";
@@ -72,6 +86,15 @@ const flattenGroups = (groups: SingleCondition[][]): SingleCondition[] => {
   return out;
 };
 
+// Derive the dnd container map ("g0","g1"… -> condition ids) from a flat list.
+const containersFromConditions = (conds: SingleCondition[]): Record<string, string[]> => {
+  const obj: Record<string, string[]> = {};
+  computeVisualGroups(conds).forEach((grp, i) => {
+    obj[`g${i}`] = grp.map((c) => c.id);
+  });
+  return obj;
+};
+
 // ── Main Component ───────────────────────────────────────────
 
 const OPERATORS = ["<", ">", "<=", ">=", "==", "!="];
@@ -97,13 +120,31 @@ export function MultiConditionBuilder({
   const [pendingOp, setPendingOp] = useState<string | null>(null);
   // Which group the add-flow targets. A value >= groups.length means "new OR group".
   const [addTarget, setAddTarget] = useState<number | null>(null);
-  // Drag-and-drop: which condition is being dragged, and which group is hovered.
-  const [dragged, setDragged] = useState<{ gi: number; ci: number } | null>(null);
-  const [dragOverGroup, setDragOverGroup] = useState<number | null>(null);
-
   const isOpen = blockName === "OPEN";
   const hasConditions = conditionGroup.conditions.length > 0;
   const groups = computeVisualGroups(conditionGroup.conditions);
+
+  // ── Drag-and-drop (dnd-kit) ──
+  const byId = useMemo(
+    () => new Map(conditionGroup.conditions.map((c) => [c.id, c])),
+    [conditionGroup.conditions],
+  );
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [containers, setContainers] = useState<Record<string, string[]>>(() =>
+    containersFromConditions(conditionGroup.conditions),
+  );
+  const containersRef = useRef(containers);
+  containersRef.current = containers;
+  useEffect(() => {
+    if (activeId === null) setContainers(containersFromConditions(conditionGroup.conditions));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conditionGroup.conditions, activeId]);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const findContainer = (id: string) =>
+    id in containersRef.current
+      ? id
+      : Object.keys(containersRef.current).find((k) => containersRef.current[k].includes(id)) ?? null;
 
   const commitGroups = (g: SingleCondition[][]) => {
     setConditionGroup({ conditions: flattenGroups(g) });
@@ -143,17 +184,61 @@ export function MultiConditionBuilder({
     commitGroups(groups.map((grp) => grp.filter((c) => c.id !== id)));
   };
 
-  const moveConditionToGroup = (targetGi: number) => {
-    if (!dragged) return;
-    const next = groups.map((grp) => [...grp]);
-    const [cond] = next[dragged.gi].splice(dragged.ci, 1);
-    if (cond) {
-      if (targetGi >= next.length) next.push([cond]);
-      else next[targetGi].push(cond);
-      commitGroups(next);
+  const commitFromContainers = (conts: Record<string, string[]>) => {
+    const newGroups = Object.keys(conts)
+      .map((k) => conts[k].map((id) => byId.get(id)).filter(Boolean) as SingleCondition[])
+      .filter((g) => g.length > 0);
+    commitGroups(newGroups);
+  };
+
+  const handleDragStart = (e: DragStartEvent) => setActiveId(String(e.active.id));
+
+  const handleDragOver = (e: DragOverEvent) => {
+    const { active, over } = e;
+    if (!over) return;
+    const activeIdStr = String(active.id);
+    const overIdStr = String(over.id);
+    const activeC = findContainer(activeIdStr);
+    const overC = overIdStr in containersRef.current ? overIdStr : findContainer(overIdStr);
+    if (!activeC || !overC || activeC === overC) return;
+    setContainers((prev) => {
+      const activeItems = prev[activeC];
+      const overItems = prev[overC];
+      const overIndex = overItems.indexOf(overIdStr);
+      const newIndex = overIdStr in prev ? overItems.length : overIndex >= 0 ? overIndex : overItems.length;
+      return {
+        ...prev,
+        [activeC]: activeItems.filter((id) => id !== activeIdStr),
+        [overC]: [...overItems.slice(0, newIndex), activeIdStr, ...overItems.slice(newIndex)],
+      };
+    });
+  };
+
+  const handleDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    let finalContainers = { ...containersRef.current };
+    if (over) {
+      const activeIdStr = String(active.id);
+      const overIdStr = String(over.id);
+      const activeC = findContainer(activeIdStr);
+      const overC = overIdStr in finalContainers ? overIdStr : findContainer(overIdStr);
+      if (activeC && overC && activeC === overC) {
+        const items = finalContainers[activeC];
+        const oldIndex = items.indexOf(activeIdStr);
+        const newIndex = overIdStr in finalContainers ? items.length - 1 : items.indexOf(overIdStr);
+        if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+          finalContainers = { ...finalContainers, [activeC]: arrayMove(items, oldIndex, newIndex) };
+        }
+      }
     }
-    setDragged(null);
-    setDragOverGroup(null);
+    setActiveId(null);
+    setContainers(finalContainers);
+    commitFromContainers(finalContainers);
+  };
+
+  const handleDragCancel = () => {
+    setActiveId(null);
+    setContainers(containersFromConditions(conditionGroup.conditions));
   };
 
   const logicPreview = generateLogicPreview(conditionGroup.conditions);
@@ -230,130 +315,200 @@ export function MultiConditionBuilder({
   );
 
   return (
-    <div className="space-y-2">
-      {groups.map((group, gi) => (
-        <div key={gi}>
-          {gi > 0 && (
-            <div className="flex items-center py-1">
-              <div className="flex-1 h-px bg-warning/30" />
-              <span className="mx-2 px-2.5 py-0.5 rounded text-[10px] font-bold tracking-wide bg-warning/15 text-warning border border-warning/30">
-                OR
-              </span>
-              <div className="flex-1 h-px bg-warning/30" />
-            </div>
-          )}
-          <div
-            onDragOver={(e) => {
-              if (dragged) {
-                e.preventDefault();
-                if (dragOverGroup !== gi) setDragOverGroup(gi);
-              }
-            }}
-            onDragLeave={() => setDragOverGroup((g) => (g === gi ? null : g))}
-            onDrop={(e) => {
-              e.preventDefault();
-              moveConditionToGroup(gi);
-            }}
-            className={`rounded-lg border bg-secondary/10 p-2 transition-colors border-l-2 ${
-              dragOverGroup === gi ? "border-primary ring-1 ring-primary/40" : "border-border/50"
-            } ${isOpen ? "border-l-success/50" : "border-l-destructive/50"}`}
-          >
-            <div className="mb-1.5 px-0.5 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
-              Group {gi + 1} · ALL of these <span className="text-primary/70">(AND)</span>
-            </div>
-            <div className="space-y-1">
-              {group.map((cond, ci) => (
-                <div key={cond.id}>
-                  {ci > 0 && (
-                    <div className="flex items-center gap-1.5 py-0.5 pl-6">
-                      <span className="text-[9px] font-bold text-primary/60">AND</span>
-                      <div className="flex-1 h-px bg-border/40" />
-                    </div>
-                  )}
-                  <div className="flex items-start gap-1">
-                    <button
-                      type="button"
-                      draggable
-                      onDragStart={() => setDragged({ gi, ci })}
-                      onDragEnd={() => {
-                        setDragged(null);
-                        setDragOverGroup(null);
-                      }}
-                      title="Drag to move between groups"
-                      className="mt-2.5 shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-muted-foreground"
-                    >
-                      <GripVertical className="h-3.5 w-3.5" />
-                    </button>
-                    <div className="min-w-0 flex-1">
-                      <ConditionRow
-                        condition={cond}
-                        onChange={(updated) => updateCondition(cond.id, updated)}
-                        onRemove={() => removeCondition(cond.id)}
-                        registry={registry}
-                        isOpen={isOpen}
-                        availableTimeframes={availableTimeframes}
-                        executionTimeframe={executionTimeframe}
-                      />
-                    </div>
-                  </div>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCorners}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
+    >
+      <div className="space-y-2">
+        {Object.keys(containers).map((cid, gi) => {
+          const ids = containers[cid];
+          return (
+            <div key={cid}>
+              {gi > 0 && (
+                <div className="flex items-center py-1">
+                  <div className="flex-1 h-px bg-warning/30" />
+                  <span className="mx-2 px-2.5 py-0.5 rounded text-[10px] font-bold tracking-wide bg-warning/15 text-warning border border-warning/30">
+                    OR
+                  </span>
+                  <div className="flex-1 h-px bg-warning/30" />
                 </div>
-              ))}
+              )}
+              <GroupDropZone id={cid} isOpen={isOpen}>
+                <div className="mb-1.5 px-0.5 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                  Group {gi + 1} · ALL of these <span className="text-primary/70">(AND)</span>
+                </div>
+                <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+                  <div className="space-y-1">
+                    {ids.map((id, ci) => {
+                      const cond = byId.get(id);
+                      if (!cond) return null;
+                      return (
+                        <SortableCondition
+                          key={id}
+                          id={id}
+                          ci={ci}
+                          condition={cond}
+                          registry={registry}
+                          isOpen={isOpen}
+                          availableTimeframes={availableTimeframes}
+                          executionTimeframe={executionTimeframe}
+                          onChange={(updated) => updateCondition(id, updated)}
+                          onRemove={() => removeCondition(id)}
+                        />
+                      );
+                    })}
+                  </div>
+                </SortableContext>
+                {adding !== null && addTarget === gi ? (
+                  <div className="mt-1.5">{renderInlineBuilder()}</div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => startAdd(gi)}
+                    className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Plus className="h-2.5 w-2.5" /> Add condition
+                  </button>
+                )}
+              </GroupDropZone>
             </div>
-            {adding !== null && addTarget === gi ? (
-              <div className="mt-1.5">{renderInlineBuilder()}</div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => startAdd(gi)}
-                className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Plus className="h-2.5 w-2.5" /> Add condition
-              </button>
-            )}
-          </div>
-        </div>
-      ))}
+          );
+        })}
 
-      {/* New OR group / first condition */}
-      {adding !== null && (addTarget === null || addTarget >= groups.length) ? (
-        renderInlineBuilder()
-      ) : hasConditions ? (
+        {/* New OR group / first condition */}
+        {adding !== null && (addTarget === null || addTarget >= groups.length) ? (
+          renderInlineBuilder()
+        ) : hasConditions ? (
+          <button
+            type="button"
+            onClick={() => startAdd(groups.length)}
+            className="inline-flex items-center gap-1 text-[11px] text-warning/80 hover:text-warning transition-colors"
+          >
+            <Plus className="h-2.5 w-2.5" /> Add OR group
+          </button>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => startAdd(0)}
+            className={`w-full h-8 border-dashed text-xs ${
+              isOpen
+                ? "border-success/30 text-success hover:bg-success/10 hover:border-success/50"
+                : "border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
+            }`}
+          >
+            <Plus className="h-3 w-3 mr-1" /> Add your first condition
+          </Button>
+        )}
+
+        {/* Logic Preview */}
+        {conditionGroup.conditions.length >= 2 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="px-2 py-1 rounded bg-muted/40 border border-border"
+          >
+            <div className="flex items-start gap-1.5">
+              <span className="text-[10px] text-muted-foreground font-medium shrink-0">Logic:</span>
+              <code className="text-[10px] font-mono text-foreground break-all">{logicPreview}</code>
+            </div>
+          </motion.div>
+        )}
+      </div>
+
+      {/* Floating card that follows the cursor while dragging */}
+      <DragOverlay dropAnimation={null}>
+        {activeId && byId.get(activeId) ? (
+          <div className="flex items-center gap-2 rounded-lg border border-primary/60 bg-secondary/90 px-3 py-2 text-xs font-mono shadow-xl">
+            <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-primary">{formatSideLabel(byId.get(activeId)!.left)}</span>
+            <span className="text-foreground">{byId.get(activeId)!.operator}</span>
+            <span className="text-primary">{formatSideLabel(byId.get(activeId)!.right)}</span>
+          </div>
+        ) : null}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
+// ── Drag-and-drop sub-components ─────────────────────────────
+
+function GroupDropZone({ id, isOpen, children }: { id: string; isOpen: boolean; children: ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`rounded-lg border bg-secondary/10 p-2 transition-colors border-l-2 ${
+        isOver ? "border-primary ring-1 ring-primary/40" : "border-border/50"
+      } ${isOpen ? "border-l-success/50" : "border-l-destructive/50"}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SortableCondition({
+  id,
+  ci,
+  condition,
+  registry,
+  isOpen,
+  availableTimeframes,
+  executionTimeframe,
+  onChange,
+  onRemove,
+}: {
+  id: string;
+  ci: number;
+  condition: SingleCondition;
+  registry: Registry;
+  isOpen: boolean;
+  availableTimeframes?: string[];
+  executionTimeframe?: string;
+  onChange: (cond: SingleCondition) => void;
+  onRemove: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  };
+  return (
+    <div ref={setNodeRef} style={style}>
+      {ci > 0 && (
+        <div className="flex items-center gap-1.5 py-0.5 pl-6">
+          <span className="text-[9px] font-bold text-primary/60">AND</span>
+          <div className="flex-1 h-px bg-border/40" />
+        </div>
+      )}
+      <div className="flex items-start gap-1">
         <button
           type="button"
-          onClick={() => startAdd(groups.length)}
-          className="inline-flex items-center gap-1 text-[11px] text-warning/80 hover:text-warning transition-colors"
+          {...attributes}
+          {...listeners}
+          title="Drag to reorder or move between groups"
+          className="mt-2.5 shrink-0 cursor-grab touch-none text-muted-foreground/50 hover:text-muted-foreground active:cursor-grabbing"
         >
-          <Plus className="h-2.5 w-2.5" /> Add OR group
+          <GripVertical className="h-3.5 w-3.5" />
         </button>
-      ) : (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => startAdd(0)}
-          className={`w-full h-8 border-dashed text-xs ${
-            isOpen
-              ? "border-success/30 text-success hover:bg-success/10 hover:border-success/50"
-              : "border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
-          }`}
-        >
-          <Plus className="h-3 w-3 mr-1" /> Add your first condition
-        </Button>
-      )}
-
-      {/* Logic Preview */}
-      {conditionGroup.conditions.length >= 2 && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="px-2 py-1 rounded bg-muted/40 border border-border"
-        >
-          <div className="flex items-start gap-1.5">
-            <span className="text-[10px] text-muted-foreground font-medium shrink-0">Logic:</span>
-            <code className="text-[10px] font-mono text-foreground break-all">{logicPreview}</code>
-          </div>
-        </motion.div>
-      )}
+        <div className="min-w-0 flex-1">
+          <ConditionRow
+            condition={condition}
+            onChange={onChange}
+            onRemove={onRemove}
+            registry={registry}
+            isOpen={isOpen}
+            availableTimeframes={availableTimeframes}
+            executionTimeframe={executionTimeframe}
+          />
+        </div>
+      </div>
     </div>
   );
 }
