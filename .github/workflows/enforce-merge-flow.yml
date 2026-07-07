@@ -1,0 +1,21 @@
+name: enforce-merge-flow
+
+# Enforces the promotion flow: nothing reaches prod (main) except by way of qa.
+# Feature branches must be merged into qa first, and only qa may open a PR into main.
+# This job runs from main's copy of the workflow (base branch) on every PR into main.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  only-from-qa:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure the PR into main comes from qa
+        run: |
+          if [ "${{ github.head_ref }}" != "qa" ]; then
+            echo "::error::PRs into 'main' must come from the 'qa' branch."
+            echo "::error::This PR is from '${{ github.head_ref }}'. Merge your work into qa first, then open qa -> main."
+            exit 1
+          fi
+          echo "OK: PR into main originates from qa."

@@ -1,0 +1,7 @@
+# Code owners are auto-requested for review on pull requests.
+# Combined with the branch-protection rule on main (1 required approval that the
+# PR author cannot supply themselves), this routes prod reviews to a human.
+#
+# TODO: add your collaborator's GitHub handle below (e.g. `* @AYREB @their-handle`)
+# so they are auto-requested on every PR.
+* @AYREB
