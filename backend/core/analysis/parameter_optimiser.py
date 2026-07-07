@@ -457,7 +457,7 @@ def genetic_optimizer(parsed_dsl, param_choices=None, initial_balance=10000,
     parsed_dsl, data_dict, indicator_functions = _prepare(parsed_dsl)
  
     ga = ga_settings or {}
-    population_size = int(ga.get("population",     20))
+    population_size = int(ga.get("population",     10))
     generations     = int(ga.get("generations",    10))
     mutation_rate   = float(ga.get("mutation_rate",  0.1))
     crossover_rate  = float(ga.get("crossover_rate", 0.7))
@@ -638,7 +638,7 @@ def pso_optimizer(parsed_dsl, param_choices=None, initial_balance=10000,
     best position and the swarm's global best."""
     parsed_dsl, data_dict, indicator_functions = _prepare(parsed_dsl)
     s = settings or {}
-    swarm_size = max(2, int(s.get("swarm_size", 15)))
+    swarm_size = max(2, int(s.get("swarm_size", 10)))
     iterations = max(1, int(s.get("iterations", 8)))
     inertia = float(s.get("inertia", 0.7))
     cognitive = float(s.get("cognitive", 1.5))
@@ -736,7 +736,7 @@ def differential_evolution_optimizer(parsed_dsl, param_choices=None, initial_bal
     trial replaces the target only if it backtests at least as well."""
     parsed_dsl, data_dict, indicator_functions = _prepare(parsed_dsl)
     s = settings or {}
-    pop_size = max(4, int(s.get("population", 15)))
+    pop_size = max(4, int(s.get("population", 10)))
     generations = max(1, int(s.get("generations", 8)))
     F = float(s.get("mutation", 0.8))
     CR = float(s.get("crossover", 0.7))
@@ -788,9 +788,9 @@ def estimate_total_runs(method, settings=None):
     if method == "random":
         return max(1, int(s.get("iterations", 30)))
     if method == "pso":
-        return max(2, int(s.get("swarm_size", 15))) * max(1, int(s.get("iterations", 8)))
+        return max(2, int(s.get("swarm_size", 10))) * max(1, int(s.get("iterations", 8)))
     if method == "annealing":
         return max(2, int(s.get("iterations", 40)))
     if method == "differential":
-        return max(4, int(s.get("population", 15))) * max(1, int(s.get("generations", 8)))
+        return max(4, int(s.get("population", 10))) * max(1, int(s.get("generations", 8)))
     return 0

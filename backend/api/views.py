@@ -213,7 +213,9 @@ MAX_INDICATOR_CODE_LENGTH = 20000
 DEFAULT_RATE_LIMITS = {
     "auth": {"max_requests": 20, "window_seconds": 300},
     "backtest": {"max_requests": 60, "window_seconds": 60},
+    "backtest_daily": {"max_requests": 10, "window_seconds": 86400},
     "compute": {"max_requests": 10, "window_seconds": 60},
+    "optimize_daily": {"max_requests": 3, "window_seconds": 86400},
     "status": {"max_requests": 120, "window_seconds": 60},
     "assistant": {"max_requests": 30, "window_seconds": 60},
     "general": {"max_requests": 180, "window_seconds": 60},
@@ -373,6 +375,25 @@ def rate_limit(bucket: str) -> Callable:
         return wrapped
 
     return decorator
+
+
+def enforce_optimize_intensity(total_runs: int) -> None:
+    """Reject optimizations that would run too many backtests.
+
+    `total_runs` is how many backtests the optimization will execute (grid = the
+    product of parameter-value counts; genetic = population x generations;
+    metaheuristics = their own estimate). Capping it keeps a single optimization
+    "small" so users can't launch an enormous sweep. Tunable via
+    MAX_OPTIMIZE_TOTAL_RUNS.
+    """
+    cap = int(getattr(settings, "MAX_OPTIMIZE_TOTAL_RUNS", 300))
+    if total_runs > cap:
+        raise APIError(
+            f"This optimization would run {total_runs} backtests, over the limit of "
+            f"{cap}. Reduce the parameters/values (grid) or the population x "
+            f"generations so the search stays small.",
+            status_code=400,
+        )
 
 
 def get_user_from_request(request):
@@ -1378,6 +1399,7 @@ def indicator_assistant_chat(request):
 @require_methods("POST")
 @token_required
 @rate_limit("backtest")
+@rate_limit("backtest_daily")
 def backtestDSLText(request):
     user = get_authenticated_user(request)
     body = parse_body(request)
@@ -1410,6 +1432,7 @@ def backtestDSLText(request):
 @require_methods("POST")
 @token_required
 @rate_limit("backtest")
+@rate_limit("backtest_daily")
 def backtestDSLJSON(request):
     user = get_authenticated_user(request)
     body = parse_body(request)
@@ -1511,6 +1534,7 @@ def backtestDSLJSON(request):
 @require_methods("POST")
 @token_required
 @rate_limit("compute")
+@rate_limit("optimize_daily")
 def dslParameterOptimiser(request):
     user = get_authenticated_user(request)
     body = parse_body(request)
@@ -1519,16 +1543,18 @@ def dslParameterOptimiser(request):
     initial_balance = parse_initial_balance(body.get("initial_balance", DEFAULT_INITIAL_BALANCE))
     async_mode = bool(body.get("async", False))
 
+    # Size the grid up front and cap it (applies to both sync and async paths).
+    param_grid, _ = build_param_grid(dsl, parameter_choice)
+    if not param_grid:
+        raise APIError("No parameters selected for optimization")
+    total_runs = 1
+    for vals in param_grid.values():
+        total_runs *= len(vals)
+    enforce_optimize_intensity(total_runs)
+
     if async_mode:
         cleanup_jobs(optimizer_jobs)
         ensure_user_can_create_job(optimizer_jobs, user.id)
-
-        param_grid, _ = build_param_grid(dsl, parameter_choice)
-        if not param_grid:
-            raise APIError("No parameters selected for optimization")
-        total_runs = 1
-        for vals in param_grid.values():
-            total_runs *= len(vals)
 
         job_id = run_async_job(
             optimizer_jobs,
@@ -1583,6 +1609,7 @@ def dslParameterOptimiserStatus(request, job_id):
 @require_methods("POST")
 @token_required
 @rate_limit("compute")
+@rate_limit("optimize_daily")
 def dslGeneticOptimiser(request):
     user = get_authenticated_user(request)
     body = parse_body(request)
@@ -1595,6 +1622,15 @@ def dslGeneticOptimiser(request):
     if ga_settings and not isinstance(ga_settings, dict):
         raise APIError("ga_settings must be a JSON object when provided.")
 
+    # Size the search (population x generations) up front and cap it.
+    try:
+        population = int(ga_settings.get("population", 10))
+        generations = int(ga_settings.get("generations", 10))
+    except (TypeError, ValueError):
+        raise APIError("ga_settings population and generations must be integers.")
+    total_runs = max(1, population) * max(1, generations)
+    enforce_optimize_intensity(total_runs)
+
     if async_mode:
         cleanup_jobs(genetic_jobs)
         ensure_user_can_create_job(genetic_jobs, user.id)
@@ -1602,8 +1638,6 @@ def dslGeneticOptimiser(request):
         param_values, _ = build_param_values(dsl, parameter_choice)
         if not param_values:
             raise APIError("No parameters selected for optimization")
-
-        total_runs = int(ga_settings.get("population", 20)) * int(ga_settings.get("generations", 10))
 
         job_id = run_async_job(
             genetic_jobs,
@@ -1673,6 +1707,7 @@ def dslGeneticOptimiserStatus(request, job_id):
 @require_methods("POST")
 @token_required
 @rate_limit("compute")
+@rate_limit("optimize_daily")
 def dslOptimiser(request):
     """Generic entrypoint for the metaheuristic optimizers (random search,
     particle swarm, simulated annealing, differential evolution). Dispatches on
@@ -1694,11 +1729,13 @@ def dslOptimiser(request):
         raise APIError("settings must be a JSON object when provided.")
     async_mode = bool(body.get("async", False))
 
+    # Size the search up front and cap it (applies to both sync and async paths).
+    total_runs = estimate_total_runs(method, opt_settings)
+    enforce_optimize_intensity(total_runs)
+
     if async_mode:
         cleanup_jobs(optimiser_jobs)
         ensure_user_can_create_job(optimiser_jobs, user.id)
-
-        total_runs = estimate_total_runs(method, opt_settings)
 
         job_id = run_async_job(
             optimiser_jobs,

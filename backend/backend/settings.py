@@ -328,6 +328,12 @@ MAX_INITIAL_BALANCE = env_float("MAX_INITIAL_BALANCE", 100000000.0, minimum=1.0)
 ASYNC_JOB_TTL_SECONDS = env_int("ASYNC_JOB_TTL_SECONDS", 3600, minimum=60)
 ASYNC_JOB_MAX_ENTRIES = env_int("ASYNC_JOB_MAX_ENTRIES", 500, minimum=20)
 ASYNC_JOB_MAX_PER_USER = env_int("ASYNC_JOB_MAX_PER_USER", 3, minimum=1)
+# Cap on how many backtests a single optimization may execute (its "intensity").
+# Grid = product of parameter-value counts; genetic = population x generations;
+# metaheuristics = their own run estimate. Keeps optimizations "small" so a user
+# can't launch a massive sweep. Env-tunable; the built-in defaults (genetic 100,
+# pso/differential 80, random 30, annealing 40) all fit under 100.
+MAX_OPTIMIZE_TOTAL_RUNS = env_int("MAX_OPTIMIZE_TOTAL_RUNS", 100, minimum=1)
 API_RATE_LIMITS = {
     "auth": {
         "max_requests": env_int("RATE_LIMIT_AUTH_MAX_REQUESTS", 20, minimum=1),
@@ -338,9 +344,21 @@ API_RATE_LIMITS = {
         "max_requests": env_int("RATE_LIMIT_COMPUTE_MAX_REQUESTS", 20, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_COMPUTE_WINDOW_SECONDS", 60, minimum=1),
     },
+    # Per-DAY quota on how many optimizations a user may start (on top of the
+    # per-minute "compute" burst above). Defaults to 3/day.
+    "optimize_daily": {
+        "max_requests": env_int("RATE_LIMIT_OPTIMIZE_DAILY_MAX_REQUESTS", 3, minimum=1),
+        "window_seconds": env_int("RATE_LIMIT_OPTIMIZE_DAILY_WINDOW_SECONDS", 86400, minimum=1),
+    },
     "backtest": {
         "max_requests": env_int("RATE_LIMIT_BACKTEST_MAX_REQUESTS", 60, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_BACKTEST_WINDOW_SECONDS", 60, minimum=1),
+    },
+    # Per-DAY quota on standalone backtests (on top of the per-minute burst above).
+    # Defaults to 10/day.
+    "backtest_daily": {
+        "max_requests": env_int("RATE_LIMIT_BACKTEST_DAILY_MAX_REQUESTS", 10, minimum=1),
+        "window_seconds": env_int("RATE_LIMIT_BACKTEST_DAILY_WINDOW_SECONDS", 86400, minimum=1),
     },
     # Job-status polling: must comfortably cover several optimizers polling
     # at once (3 concurrent pollers at 1s each = 180/min).

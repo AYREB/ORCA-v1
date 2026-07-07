@@ -87,7 +87,7 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
   const chartColors = settings.appearance.chartColors;
   const [paramChoices, setParamChoices] = useState<Record<string, ParameterChoice>>({});
   const [gaSettings, setGaSettings] = useState({
-    population: 20,
+    population: 10,
     generations: 10,
     mutation_rate: 0.1,
     crossover_rate: 0.7,

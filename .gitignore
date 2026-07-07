@@ -71,3 +71,5 @@ backend/LLM/training_data.jsonl
 *.safetensors
 mlx_model/
 backend/LLM/__pycache__/
+.vercel
+.env*
