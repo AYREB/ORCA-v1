@@ -97,7 +97,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
           >
             {[
               { value: "Custom", label: "Indicator Builder" },
-              { value: "20yr", label: "Daily Chart Data" },
+              { value: "1yr", label: "Daily Chart Data" },
               { value: "Free", label: "To Get Started" },
             ].map((stat, index) => (
               <div key={index} className="text-center">
