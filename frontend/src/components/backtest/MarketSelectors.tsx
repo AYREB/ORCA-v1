@@ -32,16 +32,28 @@ export const TickerCombobox = ({
   value,
   onChange,
   exclude = [],
-  placeholder = "Select ticker…",
+  placeholder = "Type a ticker…",
   className,
 }: TickerComboboxProps) => {
   const { tickers } = useRegistry();
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const entries = Object.entries(tickers).filter(
     ([sym]) => sym === value || !exclude.includes(sym),
   );
   const current = value ? tickers[value] : undefined;
   const known = !value || !!current;
+
+  const typed = query.trim().toUpperCase();
+  // Offer to use whatever the user typed as a custom ticker (fetched from Yahoo
+  // Finance by the backend) whenever it isn't already an exact known symbol.
+  const showCustom = typed.length > 0 && !tickers[typed];
+
+  const commit = (sym: string) => {
+    onChange(sym.trim().toUpperCase());
+    setQuery("");
+    setOpen(false);
+  };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -60,20 +72,40 @@ export const TickerCombobox = ({
           <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="p-0 w-[260px]" align="start">
-        <Command>
-          <CommandInput placeholder="Search ticker…" className="h-9" />
+      <PopoverContent className="p-0 w-[280px]" align="start">
+        {/* Free-text: type any symbol (e.g. TSLA, BTC-USD). Known tickers show as
+            suggestions; anything else is fetched from Yahoo Finance by the backend. */}
+        <Command shouldFilter>
+          <CommandInput
+            placeholder="Type a ticker (e.g. AAPL, BTC-USD)…"
+            className="h-9"
+            value={query}
+            onValueChange={setQuery}
+          />
           <CommandList>
-            <CommandEmpty>No tickers found.</CommandEmpty>
-            <CommandGroup>
+            {showCustom && (
+              <CommandGroup heading="Use what you typed">
+                <CommandItem
+                  key={`__custom_${typed}`}
+                  value={typed}
+                  onSelect={() => commit(typed)}
+                  className="flex items-center gap-2"
+                >
+                  <Check className="h-3.5 w-3.5 opacity-0" />
+                  <span className="font-mono font-semibold text-xs">{typed}</span>
+                  <span className="text-[11px] text-muted-foreground truncate">
+                    fetch from Yahoo Finance
+                  </span>
+                </CommandItem>
+              </CommandGroup>
+            )}
+            <CommandEmpty>Type a symbol and press Enter to use it.</CommandEmpty>
+            <CommandGroup heading={entries.length ? "Known tickers" : undefined}>
               {entries.map(([sym, meta]) => (
                 <CommandItem
                   key={sym}
                   value={`${sym} ${meta.name}`}
-                  onSelect={() => {
-                    onChange(sym);
-                    setOpen(false);
-                  }}
+                  onSelect={() => commit(sym)}
                   className="flex items-center gap-2"
                 >
                   <Check
