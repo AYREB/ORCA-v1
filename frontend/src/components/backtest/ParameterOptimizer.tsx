@@ -221,15 +221,6 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
     return hasActiveParam ? total : 0;
   }, [paramChoices]);
 
-  const estimatedSeconds = useMemo(() => {
-    if (estimatedCombinations === 0) return 0;
-    return Math.ceil(estimatedCombinations * 1.5);
-  }, [estimatedCombinations]);
-
-  const estimatedTime = useMemo(() => {
-    return formatDuration(estimatedSeconds);
-  }, [estimatedSeconds]);
-
   const runningEtaSeconds = useMemo(() => {
     if (!loading) return null;
 
@@ -802,10 +793,8 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
               <p className="text-xs text-muted-foreground">Combinations</p>
             </div>
             <div>
-              <p className="text-2xl font-bold font-mono">
-                {estimatedTime}
-              </p>
-              <p className="text-xs text-muted-foreground">Est. Time</p>
+              <p className="text-2xl font-bold font-mono text-muted-foreground/40">—</p>
+              <p className="text-xs text-muted-foreground">Est. Time · measured once running</p>
             </div>
           </div>
         </div>
@@ -827,8 +816,8 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
               {loading
                 ? runningEtaSeconds !== null
                   ? `${formatDuration(runningEtaSeconds)} remaining`
-                  : `Sampling... ${Math.min(sampledCycleCount, 3)}/3 runs`
-                : estimatedTime}
+                  : `Calibrating… ${Math.min(sampledCycleCount, 3)}/3 runs`
+                : "Available once running"}
             </span>
           </div>
         </div>

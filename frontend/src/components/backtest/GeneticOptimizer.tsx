@@ -253,8 +253,6 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
   );
 
   const estimatedRuns = useMemo(() => gaSettings.population * gaSettings.generations, [gaSettings]);
-  const estimatedSeconds = useMemo(() => Math.ceil(estimatedRuns * 1.5), [estimatedRuns]);
-  const estimatedTime = useMemo(() => formatDuration(estimatedSeconds), [estimatedSeconds]);
 
   const runningEtaSeconds = useMemo(() => {
     if (!loading) return null;
@@ -648,7 +646,7 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
               Estimated runs: {estimatedRuns}
             </p>
             <p className="text-xs text-muted-foreground">
-              Estimated time: {estimatedTime}
+              Estimated time: measured live from the first few runs
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={setAllEnabled}>
@@ -742,8 +740,8 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
               {loading
                 ? runningEtaSeconds !== null
                   ? `${formatDuration(runningEtaSeconds)} remaining`
-                  : `Sampling... ${Math.min(sampledCycleCount, 3)}/3 runs`
-                : estimatedTime}
+                  : `Calibrating… ${Math.min(sampledCycleCount, 3)}/3 runs`
+                : "Available once running"}
             </span>
           </div>
           <div className="pt-2 space-y-2">

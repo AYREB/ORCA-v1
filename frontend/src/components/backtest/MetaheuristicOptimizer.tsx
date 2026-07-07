@@ -276,8 +276,6 @@ const MetaheuristicOptimizer = ({
   );
 
   const estimatedRuns = useMemo(() => Math.max(0, Math.round(estimateRuns(optSettings))), [estimateRuns, optSettings]);
-  const estimatedSeconds = useMemo(() => Math.ceil(estimatedRuns * 1.5), [estimatedRuns]);
-  const estimatedTime = useMemo(() => formatDuration(estimatedSeconds), [estimatedSeconds]);
 
   const runningEtaSeconds = useMemo(() => {
     if (!loading) return null;
@@ -442,7 +440,7 @@ const MetaheuristicOptimizer = ({
               <span className="font-mono text-primary">{activeParams}</span> parameters selected
             </p>
             <p className="text-xs text-muted-foreground">Estimated runs: {estimatedRuns}</p>
-            <p className="text-xs text-muted-foreground">Estimated time: {estimatedTime}</p>
+            <p className="text-xs text-muted-foreground">Estimated time: measured live from the first few runs</p>
           </div>
           <Button variant="outline" size="sm" onClick={setAllEnabled}>
             Enable all
@@ -535,8 +533,8 @@ const MetaheuristicOptimizer = ({
               {loading
                 ? runningEtaSeconds !== null
                   ? `${formatDuration(runningEtaSeconds)} remaining`
-                  : `Sampling... ${Math.min(sampledCycleCount, 3)}/3 runs`
-                : estimatedTime}
+                  : `Calibrating… ${Math.min(sampledCycleCount, 3)}/3 runs`
+                : "Available once running"}
             </span>
           </div>
         </div>
