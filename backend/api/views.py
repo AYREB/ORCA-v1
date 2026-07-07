@@ -2380,24 +2380,22 @@ def chart_data(request):
     registry = _load_ticker_registry()
     ticker_config = registry.get(ticker)
 
+    # Allowed timeframes = anything yfinance can fetch live (1m…1h, 1D) plus, for
+    # stored tickers, the extra ones baked into their CSVs (e.g. 4h). So a known
+    # ticker like AAPL can still be viewed on 1h — it just comes from Yahoo.
+    yf_timeframes = set(_TIMEFRAME_TO_YF_INTERVAL)
     if ticker_config is not None:
-        available = ticker_config.get("available_timeframes", [])
-        if timeframe not in available:
-            raise APIError(
-                f"Timeframe '{timeframe}' is not available for {ticker}. "
-                f"Available: {', '.join(available) or 'none'}."
-            )
         name = ticker_config.get("name", ticker)
+        allowed = set(ticker_config.get("available_timeframes", [])) | yf_timeframes
     else:
-        # Not in the pre-pulled registry: treat it as a free-text ticker fetched
-        # live from Yahoo Finance, as long as the timeframe maps to a yfinance
-        # interval (some timeframes like 4h only exist in the stored CSVs).
-        if timeframe not in _TIMEFRAME_TO_YF_INTERVAL:
-            raise APIError(
-                f"Timeframe '{timeframe}' isn't supported for custom tickers "
-                f"(only stored tickers have it). Try: {', '.join(_TIMEFRAME_TO_YF_INTERVAL) or 'none'}."
-            )
         name = ticker
+        allowed = yf_timeframes
+
+    if timeframe not in allowed:
+        raise APIError(
+            f"Timeframe '{timeframe}' isn't available for {ticker}. "
+            f"Try one of: {', '.join(sorted(allowed)) or 'none'}."
+        )
 
     df, error_message = _load_chart_dataframe(ticker, timeframe)
     if error_message:

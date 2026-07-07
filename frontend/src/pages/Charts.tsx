@@ -44,18 +44,20 @@ const Charts = () => {
     }
   }, [tickerSymbols, selectedTicker]);
 
-  const allTimeframes = useMemo(
-    () => (Object.keys(timeframes).length ? Object.keys(timeframes) : ["1D", "1h", "4h", "1wk", "1mo"]),
-    [timeframes],
-  );
-
-  // Timeframes available for the currently selected ticker. A typed ticker that
-  // isn't in the registry falls back to all timeframes so it can still be
-  // fetched from Yahoo Finance.
+  // Timeframes shown for any ticker = what Yahoo Finance can fetch live (mirrors
+  // the backend), plus any extra timeframes a stored ticker has in its CSVs
+  // (e.g. 4h). So hourly (1h) is available on every ticker, known or typed.
   const availableTimeframes = useMemo(() => {
-    if (!selectedTicker || !tickers[selectedTicker]) return allTimeframes;
-    return availableTimeframesFor([selectedTicker], tickers, timeframes);
-  }, [selectedTicker, tickers, timeframes, allTimeframes]);
+    const YF_TIMEFRAMES = ["1m", "5m", "15m", "1h", "1D"];
+    const TF_ORDER = ["1m", "5m", "15m", "1h", "4h", "1D", "1wk", "1mo"];
+    const registryTfs =
+      selectedTicker && tickers[selectedTicker]
+        ? availableTimeframesFor([selectedTicker], tickers, timeframes)
+        : [];
+    const set = new Set<string>([...registryTfs, ...YF_TIMEFRAMES]);
+    const ordered = TF_ORDER.filter((tf) => set.has(tf));
+    return ordered.length ? ordered : YF_TIMEFRAMES;
+  }, [selectedTicker, tickers, timeframes]);
 
   // Keep the selected timeframe valid when switching tickers.
   useEffect(() => {
