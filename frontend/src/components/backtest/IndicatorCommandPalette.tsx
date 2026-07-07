@@ -69,7 +69,9 @@ export default function IndicatorCommandPalette({
     | { type: "indicator"; func: string };
 
   const items: Item[] = [];
-  if (isNumeric) items.push({ type: "value", value: numericValue });
+  // "Value" is always the first option so users can pick "enter a number"
+  // directly (editable inline after selecting) instead of only when they type one.
+  items.push({ type: "value", value: isNumeric ? numericValue : 0 });
 
   const grouped: Record<string, string[]> = {};
   for (const ind of filtered) {
@@ -265,7 +267,7 @@ export default function IndicatorCommandPalette({
           <div className="px-3 py-3 text-center text-xs text-muted-foreground">No matches</div>
         )}
 
-        {isNumeric && (() => {
+        {(() => {
           itemIndex++;
           const idx = itemIndex;
           return (
@@ -280,7 +282,14 @@ export default function IndicatorCommandPalette({
                 }`}
               >
                 <Hash className="h-3 w-3 text-muted-foreground" />
-                <span className="font-mono font-medium">{numericValue}</span>
+                {isNumeric ? (
+                  <span className="font-mono font-medium">{numericValue}</span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    Enter a number
+                    <span className="text-muted-foreground/50"> — pick this, then edit the value inline</span>
+                  </span>
+                )}
               </button>
             </div>
           );
