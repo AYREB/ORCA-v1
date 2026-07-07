@@ -55,6 +55,7 @@ function formatDuration(seconds: number): string {
 }
 
 import { isOptimizableParameterPath } from "@/lib/paramDomains";
+import OptimizerParameterList from "./OptimizerParameterList";
 
 function extractOptimizableParameters(
   node: unknown,
@@ -462,59 +463,12 @@ const MetaheuristicOptimizer = ({
         </div>
 
         <ScrollArea className="h-[340px] pr-4">
-          <div className="space-y-4">
-            {Object.entries(paramChoices).map(([param, choice]) => (
-              <div key={param} className="p-4 rounded-lg bg-secondary/30 border border-border">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      checked={(choice as ParameterChoice).enabled !== false}
-                      onCheckedChange={(checked) => toggleParam(param, Boolean(checked))}
-                    />
-                    <Label className="font-medium font-mono text-sm">
-                      {getDisplayName(param, choice.indicator || null)}
-                    </Label>
-                  </div>
-                  <div className="text-xs text-muted-foreground">Auto search</div>
-                </div>
-
-                {(choice as ParameterChoice).enabled !== false && (
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Start (optional)</Label>
-                      <Input
-                        type="number"
-                        value={choice.start ?? ""}
-                        onChange={(e) => handleRangeChange(param, "start", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                        placeholder="auto"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground">End (optional)</Label>
-                      <Input
-                        type="number"
-                        value={choice.end ?? ""}
-                        onChange={(e) => handleRangeChange(param, "end", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                        placeholder="auto"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Steps (≥2)</Label>
-                      <Input
-                        type="number"
-                        value={choice.steps ?? ""}
-                        onChange={(e) => handleRangeChange(param, "steps", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                        placeholder="3"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+          <OptimizerParameterList
+            paramChoices={paramChoices}
+            getDisplayName={getDisplayName}
+            onToggle={toggleParam}
+            onRangeChange={handleRangeChange}
+          />
         </ScrollArea>
 
         <div className="mt-4 p-4 rounded-lg bg-secondary/30 border border-border space-y-3">

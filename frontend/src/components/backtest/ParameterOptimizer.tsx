@@ -578,6 +578,21 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
           </div>
         </div>
 
+        <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">How this optimizer works</p>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Grid search tries every combination of the values you choose and reports the best. It's exhaustive and
+            simple — great when you have a few parameters and want to see the full landscape. Total backtests multiply
+            together (e.g. 3 params × 5 values each = 125 runs), so keep the counts modest. Set each parameter's mode:
+          </p>
+          <ul className="mt-2 grid grid-cols-1 gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
+            <li><span className="font-semibold text-foreground">No change</span> — leave it at its current value (not searched).</li>
+            <li><span className="font-semibold text-foreground">Auto</span> — the optimizer picks ~5 sensible values.</li>
+            <li><span className="font-semibold text-foreground">Range</span> — evenly-spaced values from a start, end and step count.</li>
+            <li><span className="font-semibold text-foreground">Manual</span> — the exact list of values you type.</li>
+          </ul>
+        </div>
+
         {/* Initial Balance */}
         <div className="mb-6 p-4 rounded-lg bg-secondary/20 border border-border">
           <div className="flex items-center justify-between">

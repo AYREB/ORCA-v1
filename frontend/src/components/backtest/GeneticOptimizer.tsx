@@ -18,6 +18,7 @@ import {
   SavedStrategy,
 } from "@/lib/api";
 import { Checkbox } from "@/components/ui/checkbox";
+import OptimizerParameterList from "./OptimizerParameterList";
 import React from "react";
 import { useSettings } from "@/hooks/useSettings";
 import { safeColor, colorWithAlpha, mixColors } from "@/lib/chartTheme";
@@ -574,8 +575,18 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
           </div>
           <div>
             <h3 className="text-lg font-semibold">Genetic Optimizer</h3>
-            <p className="text-sm text-muted-foreground">Configure GA parameters and search space</p>
+            <p className="text-sm text-muted-foreground">Evolve your parameters over generations to find strong combinations</p>
           </div>
+        </div>
+
+        <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">How this optimizer works</p>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            A genetic algorithm treats each set of parameters as an "individual". It backtests a whole population, keeps
+            the best performers, and breeds new individuals from them — mixing their parameters (crossover) and making
+            small random tweaks (mutation) — over several generations. It's good at finding strong combinations across
+            many parameters without testing every possibility. Total backtests = population × generations.
+          </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -587,6 +598,10 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
               onChange={(e) => setGaSettings({ ...gaSettings, population: Number(e.target.value) })}
               className="mt-1 bg-secondary border-border font-mono"
             />
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              How many parameter sets compete each generation. Larger = more diversity and better coverage, but more
+              backtests per generation.
+            </p>
           </div>
           <div>
             <Label className="text-sm text-muted-foreground">Generations</Label>
@@ -596,6 +611,9 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
               onChange={(e) => setGaSettings({ ...gaSettings, generations: Number(e.target.value) })}
               className="mt-1 bg-secondary border-border font-mono"
             />
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              How many rounds of breeding to run. More generations refine the result further, at the cost of more runs.
+            </p>
           </div>
           <div>
             <Label className="text-sm text-muted-foreground">Mutation Rate</Label>
@@ -606,6 +624,10 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
               onChange={(e) => setGaSettings({ ...gaSettings, mutation_rate: Number(e.target.value) })}
               className="mt-1 bg-secondary border-border font-mono"
             />
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              Chance (0–1) each parameter gets a random tweak. Higher explores more widely and avoids getting stuck;
+              too high turns it into random search.
+            </p>
           </div>
           <div>
             <Label className="text-sm text-muted-foreground">Crossover Rate</Label>
@@ -616,6 +638,10 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
               onChange={(e) => setGaSettings({ ...gaSettings, crossover_rate: Number(e.target.value) })}
               className="mt-1 bg-secondary border-border font-mono"
             />
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              Chance (0–1) two good parents mix their parameters to make a child. Higher recombines strong traits
+              faster; lower keeps individuals more intact.
+            </p>
           </div>
           <div>
             <Label className="text-sm text-muted-foreground">Elite Size</Label>
@@ -625,6 +651,10 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
               onChange={(e) => setGaSettings({ ...gaSettings, elite_size: Number(e.target.value) })}
               className="mt-1 bg-secondary border-border font-mono"
             />
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              How many top performers carry over to the next generation unchanged, so the best result is never lost.
+              Keep this small relative to population.
+            </p>
           </div>
           <div>
             <Label className="text-sm text-muted-foreground">Initial Balance</Label>
@@ -634,6 +664,9 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
               onChange={(e) => setInitialBalance(Number(e.target.value))}
               className="mt-1 bg-secondary border-border font-mono"
             />
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              Starting capital used for every backtest in the search, so results are comparable.
+            </p>
           </div>
         </div>
 
@@ -669,59 +702,12 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
         </div>
 
         <ScrollArea className="h-[340px] pr-4">
-          <div className="space-y-4">
-            {Object.entries(paramChoices).map(([param, choice]) => (
-              <div key={param} className="p-4 rounded-lg bg-secondary/30 border border-border">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      checked={(choice as any).enabled !== false}
-                      onCheckedChange={(checked) => toggleParam(param, Boolean(checked))}
-                    />
-                    <Label className="font-medium font-mono text-sm">
-                      {getDisplayName(param, choice.indicator || null)}
-                    </Label>
-                  </div>
-                  <div className="text-xs text-muted-foreground">Auto search</div>
-                </div>
-
-                {(choice as any).enabled !== false && (
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Start (optional)</Label>
-                      <Input
-                        type="number"
-                        value={choice.start ?? ""}
-                        onChange={(e) => handleRangeChange(param, "start", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                        placeholder="auto"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground">End (optional)</Label>
-                      <Input
-                        type="number"
-                        value={choice.end ?? ""}
-                        onChange={(e) => handleRangeChange(param, "end", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                        placeholder="auto"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Steps (≥2)</Label>
-                      <Input
-                        type="number"
-                        value={choice.steps ?? ""}
-                        onChange={(e) => handleRangeChange(param, "steps", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                        placeholder="3"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+          <OptimizerParameterList
+            paramChoices={paramChoices}
+            getDisplayName={getDisplayName}
+            onToggle={toggleParam}
+            onRangeChange={handleRangeChange}
+          />
         </ScrollArea>
 
         <div className="mt-4 p-4 rounded-lg bg-secondary/30 border border-border space-y-3">
