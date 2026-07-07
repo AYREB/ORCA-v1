@@ -27,16 +27,26 @@ import { useAuth } from "@/context/AuthContext";
 type OptimizerMethod = "parameter" | "genetic" | OptimiserMethod;
 type WizardStep = 1 | 2 | 3;
 
+type MethodGroup = "Recommended" | "General";
+
 interface MethodEntry {
   id: OptimizerMethod;
   label: string;
   blurb: string;
   icon: LucideIcon;
+  group: MethodGroup;
 }
+
+// Sections render in this order; "General" (the metaheuristics) sits at the bottom.
+const METHOD_GROUP_ORDER: { group: MethodGroup; caption: string }[] = [
+  { group: "Recommended", caption: "Start here — the most common ways to tune a strategy." },
+  { group: "General", caption: "General-purpose metaheuristics — flexible searches for fine-tuning numeric parameters." },
+];
 
 // Config for the metaheuristic optimizers that share MetaheuristicOptimizer.
 interface MetaConfig {
   description: string;
+  howItWorks: string;
   settingsSchema: OptimiserSettingField[];
   defaults: Record<string, number>;
   estimateRuns: (s: Record<string, number>) => number;
@@ -45,39 +55,121 @@ interface MetaConfig {
 const META_CONFIGS: Record<OptimiserMethod, MetaConfig> = {
   random: {
     description: "Randomly sample parameter combinations from the search space",
-    settingsSchema: [{ key: "iterations", label: "Iterations" }],
+    howItWorks:
+      "Random Search tries completely random combinations of your parameters and keeps the best one. It doesn't learn between tries, but it's simple, unbiased, and surprisingly effective for a quick, broad sweep. Each iteration is one backtest.",
+    settingsSchema: [
+      {
+        key: "iterations",
+        label: "Iterations",
+        description:
+          "How many random parameter combinations to test. Each iteration = one backtest. More iterations explore more of the space (better odds of finding a strong combo) but take longer, and this equals your total run count.",
+      },
+    ],
     defaults: { iterations: 30 },
     estimateRuns: (s) => s.iterations,
   },
   pso: {
     description: "Swarm of particles drawn toward the best parameters found",
+    howItWorks:
+      "Particle Swarm sends a group of 'particles' roaming the parameter space; each is pulled toward its own best find and the swarm's best find, so they converge together on promising regions. Total backtests = swarm size × iterations.",
     settingsSchema: [
-      { key: "swarm_size", label: "Swarm Size" },
-      { key: "iterations", label: "Iterations" },
-      { key: "inertia", label: "Inertia (w)", step: 0.05 },
-      { key: "cognitive", label: "Cognitive (c1)", step: 0.1 },
-      { key: "social", label: "Social (c2)", step: 0.1 },
+      {
+        key: "swarm_size",
+        label: "Swarm Size",
+        description:
+          "Number of particles searching at once. Larger = broader coverage each round and less chance of missing a good region, but more backtests per iteration.",
+      },
+      {
+        key: "iterations",
+        label: "Iterations",
+        description:
+          "How many rounds the swarm moves and refines. More iterations let the swarm settle deeper into the best region, at the cost of more runs.",
+      },
+      {
+        key: "inertia",
+        label: "Inertia (w)",
+        step: 0.05,
+        description:
+          "How much a particle keeps its current momentum. Higher (≈0.8–0.9) explores more widely; lower (≈0.4–0.6) settles faster on what's found.",
+      },
+      {
+        key: "cognitive",
+        label: "Cognitive (c1)",
+        step: 0.1,
+        description:
+          "Pull toward each particle's own best result. Higher makes particles trust their individual discoveries more (more exploration, more spread out).",
+      },
+      {
+        key: "social",
+        label: "Social (c2)",
+        step: 0.1,
+        description:
+          "Pull toward the swarm's shared best result. Higher makes the swarm converge together faster (more exploitation, risk of local optima).",
+      },
     ],
     defaults: { swarm_size: 10, iterations: 8, inertia: 0.7, cognitive: 1.5, social: 1.5 },
     estimateRuns: (s) => s.swarm_size * s.iterations,
   },
   annealing: {
     description: "Random walk that cools over time, escaping local optima early",
+    howItWorks:
+      "Simulated Annealing wanders from a starting point, sometimes accepting worse results early on to escape local optima, then 'cools' so it accepts fewer bad moves and settles on the best area. Total backtests ≈ iterations.",
     settingsSchema: [
-      { key: "iterations", label: "Iterations" },
-      { key: "initial_temp", label: "Initial Temp", step: 0.1 },
-      { key: "cooling_rate", label: "Cooling Rate", step: 0.01 },
+      {
+        key: "iterations",
+        label: "Iterations",
+        description:
+          "How many steps the walk takes (≈ your total backtests). More iterations = a more thorough search and a better final result, but longer runtime.",
+      },
+      {
+        key: "initial_temp",
+        label: "Initial Temp",
+        step: 0.1,
+        description:
+          "How adventurous the search starts. Higher temperature accepts more 'worse' moves early (explores widely before narrowing); lower stays near the start.",
+      },
+      {
+        key: "cooling_rate",
+        label: "Cooling Rate",
+        step: 0.01,
+        description:
+          "How fast it stops exploring (per step, e.g. 0.95). Closer to 1 cools slowly = more exploration; lower cools fast = converges quickly but may miss better areas.",
+      },
     ],
     defaults: { iterations: 40, initial_temp: 1.0, cooling_rate: 0.95 },
     estimateRuns: (s) => s.iterations,
   },
   differential: {
     description: "Evolve candidates by combining the differences of others",
+    howItWorks:
+      "Differential Evolution keeps a population of candidates and creates new ones by adding the scaled difference between others, keeping a new candidate only if it backtests better. Strong at fine-tuning numeric parameters. Total backtests = population × generations.",
     settingsSchema: [
-      { key: "population", label: "Population" },
-      { key: "generations", label: "Generations" },
-      { key: "mutation", label: "Mutation (F)", step: 0.1 },
-      { key: "crossover", label: "Crossover (CR)", step: 0.05 },
+      {
+        key: "population",
+        label: "Population",
+        description:
+          "How many candidate strategies evolve in parallel. Larger keeps more diversity (less likely to get stuck) but adds backtests every generation.",
+      },
+      {
+        key: "generations",
+        label: "Generations",
+        description:
+          "How many rounds of evolution to run. More generations refine the parameters further, at the cost of more runs.",
+      },
+      {
+        key: "mutation",
+        label: "Mutation (F)",
+        step: 0.1,
+        description:
+          "How big the jumps are when combining candidates (typically 0.5–1.0). Higher = bolder exploration; lower = smaller, careful refinements.",
+      },
+      {
+        key: "crossover",
+        label: "Crossover (CR)",
+        step: 0.05,
+        description:
+          "Chance each parameter is taken from the new mutated candidate (0–1). Higher changes more parameters at once (faster, bolder); lower changes fewer (steadier).",
+      },
     ],
     defaults: { population: 10, generations: 8, mutation: 0.8, crossover: 0.7 },
     estimateRuns: (s) => s.population * s.generations,
@@ -90,17 +182,19 @@ const OPTIMIZER_METHODS: MethodEntry[] = [
     label: "Parameter Optimizer",
     blurb: "Grid, range, and auto search across your indicator parameters",
     icon: Sliders,
+    group: "Recommended",
   },
   {
     id: "genetic",
     label: "Genetic Algorithm",
     blurb: "Evolve parameters over generations to find strong combinations",
     icon: Dna,
+    group: "Recommended",
   },
-  { id: "random", label: "Random Search", blurb: META_CONFIGS.random.description, icon: Shuffle },
-  { id: "pso", label: "Particle Swarm", blurb: META_CONFIGS.pso.description, icon: Orbit },
-  { id: "annealing", label: "Simulated Annealing", blurb: META_CONFIGS.annealing.description, icon: Thermometer },
-  { id: "differential", label: "Differential Evolution", blurb: META_CONFIGS.differential.description, icon: Network },
+  { id: "random", label: "Random Search", blurb: META_CONFIGS.random.description, icon: Shuffle, group: "General" },
+  { id: "pso", label: "Particle Swarm", blurb: META_CONFIGS.pso.description, icon: Orbit, group: "General" },
+  { id: "annealing", label: "Simulated Annealing", blurb: META_CONFIGS.annealing.description, icon: Thermometer, group: "General" },
+  { id: "differential", label: "Differential Evolution", blurb: META_CONFIGS.differential.description, icon: Network, group: "General" },
 ];
 
 const VALID_METHOD_IDS = new Set(OPTIMIZER_METHODS.map((m) => m.id));
@@ -266,42 +360,56 @@ const Optimizers = () => {
                 >
                   <h2 className="text-lg font-semibold mb-1">Choose an optimizer</h2>
                   <p className="text-sm text-muted-foreground mb-5">
-                    Pick how you want to search for better strategy parameters.
+                    Pick how you want to search for stronger strategy parameters. Each optimizer explores your
+                    indicator settings differently — you'll get a full explanation of the one you choose, and of every
+                    setting, on the next screens.
                   </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {OPTIMIZER_METHODS.map((m) => {
-                      const isSelected = m.id === method;
-                      return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => handlePickMethod(m.id)}
-                          className={`group flex flex-col gap-3 rounded-xl border p-5 text-left transition-colors ${
-                            isSelected
-                              ? "border-primary/40 bg-primary/10 shadow-[0_0_24px_-8px_hsl(var(--primary)/0.4)]"
-                              : "glass-card glass-hover border-border/70"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div
-                              className={`p-2.5 rounded-lg border ${
-                                isSelected
-                                  ? "bg-primary/15 border-primary/30 text-primary"
-                                  : "bg-secondary border-border text-muted-foreground group-hover:text-primary"
-                              }`}
-                            >
-                              <m.icon className="h-6 w-6" />
-                            </div>
-                            <ArrowRight className="h-5 w-5 text-muted-foreground transition-transform group-hover:translate-x-1 group-hover:text-primary" />
-                          </div>
-                          <div>
-                            <div className="font-semibold">{m.label}</div>
-                            <p className="text-sm text-muted-foreground mt-1">{m.blurb}</p>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {METHOD_GROUP_ORDER.map(({ group, caption }) => {
+                    const entries = OPTIMIZER_METHODS.filter((m) => m.group === group);
+                    if (!entries.length) return null;
+                    return (
+                      <div key={group} className="mb-8 last:mb-0">
+                        <div className="mb-3">
+                          <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{group}</h3>
+                          <p className="text-xs text-muted-foreground">{caption}</p>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          {entries.map((m) => {
+                            const isSelected = m.id === method;
+                            return (
+                              <button
+                                key={m.id}
+                                type="button"
+                                onClick={() => handlePickMethod(m.id)}
+                                className={`group flex flex-col gap-3 rounded-xl border p-5 text-left transition-colors ${
+                                  isSelected
+                                    ? "border-primary/40 bg-primary/10 shadow-[0_0_24px_-8px_hsl(var(--primary)/0.4)]"
+                                    : "glass-card glass-hover border-border/70"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div
+                                    className={`p-2.5 rounded-lg border ${
+                                      isSelected
+                                        ? "bg-primary/15 border-primary/30 text-primary"
+                                        : "bg-secondary border-border text-muted-foreground group-hover:text-primary"
+                                    }`}
+                                  >
+                                    <m.icon className="h-6 w-6" />
+                                  </div>
+                                  <ArrowRight className="h-5 w-5 text-muted-foreground transition-transform group-hover:translate-x-1 group-hover:text-primary" />
+                                </div>
+                                <div>
+                                  <div className="font-semibold">{m.label}</div>
+                                  <p className="text-sm text-muted-foreground mt-1">{m.blurb}</p>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </motion.div>
               )}
 
@@ -420,6 +528,7 @@ const Optimizers = () => {
                       settingsSchema={META_CONFIGS[method].settingsSchema}
                       defaults={META_CONFIGS[method].defaults}
                       estimateRuns={META_CONFIGS[method].estimateRuns}
+                      howItWorks={META_CONFIGS[method].howItWorks}
                       dslJson={selectedStrategy.dslJson || null}
                       strategyId={selectedStrategy.id}
                       strategyName={selectedStrategy.name}

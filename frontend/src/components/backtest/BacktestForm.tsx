@@ -857,10 +857,24 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                           step="0.1"
                           value={takeProfitPercent}
                           onChange={(e) => setTakeProfitPercent(numberInputValue(e.currentTarget.valueAsNumber))}
-                          className="bg-secondary/50 border-border/50 h-9"
+                          disabled={takeProfitPercent <= 0}
+                          className="bg-secondary/50 border-border/50 h-9 disabled:opacity-40"
                         />
+                        <label className="flex cursor-pointer select-none items-center gap-1.5 text-[11px]">
+                          <input
+                            type="checkbox"
+                            checked={takeProfitPercent <= 0}
+                            onChange={(e) => setTakeProfitPercent(e.target.checked ? 0 : (btDefaults.takeProfitPercent || 10))}
+                            className="h-3 w-3 accent-yellow-500"
+                          />
+                          <span className={takeProfitPercent <= 0 ? "text-yellow-500" : "text-muted-foreground"}>
+                            No take profit{takeProfitPercent <= 0 && " — not advised"}
+                          </span>
+                        </label>
                         {takeProfitPercent <= 0 && (
-                          <p className="text-[11px] text-muted-foreground/60">0 = disabled </p>
+                          <p className="text-[11px] text-yellow-500/80 leading-snug">
+                            Trades won't automatically lock in gains — the position only closes on your close conditions or stop loss.
+                          </p>
                         )}
                       </div>
                       <div className="space-y-2">
@@ -879,11 +893,27 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                                 step="0.1"
                                 value={stopLossPercent}
                                 onChange={(e) => setStopLossPercent(numberInputValue(e.currentTarget.valueAsNumber))}
-                                className={`h-9 ${slMissing ? "border-destructive bg-destructive/5" : "bg-secondary/50 border-border/50"}`}
+                                disabled={stopLossPercent <= 0 && !isRiskBased}
+                                className={`h-9 disabled:opacity-40 ${slMissing ? "border-destructive bg-destructive/5" : "bg-secondary/50 border-border/50"}`}
                               />
+                              {!isRiskBased && (
+                                <label className="flex cursor-pointer select-none items-center gap-1.5 text-[11px]">
+                                  <input
+                                    type="checkbox"
+                                    checked={stopLossPercent <= 0}
+                                    onChange={(e) => setStopLossPercent(e.target.checked ? 0 : (btDefaults.stopLossPercent || 5))}
+                                    className="h-3 w-3 accent-yellow-500"
+                                  />
+                                  <span className={stopLossPercent <= 0 ? "text-yellow-500" : "text-muted-foreground"}>
+                                    No stop loss{stopLossPercent <= 0 && " — not advised"}
+                                  </span>
+                                </label>
+                              )}
                               {slMissing
                                 ? <p className="text-[11px] text-destructive">Required for risk-based sizing</p>
-                                : stopLossPercent <= 0 && <p className="text-[11px] text-muted-foreground/60">0 = disabled</p>
+                                : stopLossPercent <= 0 && <p className="text-[11px] text-yellow-500/80 leading-snug">
+                                    Losing trades won't be cut automatically — the position can run down until a close condition or take profit triggers.
+                                  </p>
                               }
                             </>
                           );
@@ -1185,6 +1215,12 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                     className="bg-secondary/50 border-border/50 h-9 w-full max-w-[220px]"
                     placeholder="10000"
                   />
+                  <p className="text-xs text-muted-foreground leading-relaxed max-w-prose">
+                    This is the starting capital this strategy can commit to the position — the cash it draws on to open
+                    and add to trades. The position's total value <span className="text-foreground">can exceed</span> this
+                    amount, but only from profits the strategy has already made and reinvested; it won't put in more
+                    outside cash than the initial balance.
+                  </p>
                 </div>
               </div>
 

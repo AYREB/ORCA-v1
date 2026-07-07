@@ -23,6 +23,8 @@ export interface OptimiserSettingField {
   key: string;
   label: string;
   step?: number;
+  /** Explains what the parameter controls and how changing it affects the search. */
+  description?: string;
 }
 
 interface MetaheuristicOptimizerProps {
@@ -33,6 +35,8 @@ interface MetaheuristicOptimizerProps {
   settingsSchema: OptimiserSettingField[];
   defaults: Record<string, number>;
   estimateRuns: (settings: Record<string, number>) => number;
+  /** Plain-language explanation of how this optimizer works, shown at the top. */
+  howItWorks?: string;
   dslJson: Record<string, unknown> | null;
   strategyId?: number | null;
   strategyName?: string | null;
@@ -99,6 +103,7 @@ const MetaheuristicOptimizer = ({
   settingsSchema,
   defaults,
   estimateRuns,
+  howItWorks,
   dslJson,
   strategyId,
   strategyName,
@@ -395,6 +400,15 @@ const MetaheuristicOptimizer = ({
           </div>
         </div>
 
+        {howItWorks && (
+          <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-primary mb-1">
+              How this optimizer works
+            </p>
+            <p className="text-sm text-muted-foreground leading-relaxed">{howItWorks}</p>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           {settingsSchema.map((field) => (
             <div key={field.key}>
@@ -406,6 +420,9 @@ const MetaheuristicOptimizer = ({
                 onChange={(e) => setOptSettings((prev) => ({ ...prev, [field.key]: Number(e.target.value) }))}
                 className="mt-1 bg-secondary border-border font-mono"
               />
+              {field.description && (
+                <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{field.description}</p>
+              )}
             </div>
           ))}
           <div>
