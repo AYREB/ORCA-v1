@@ -1,0 +1,53 @@
+name: CI
+
+# Runs on every PR into (and push to) main and qa.
+# The `backend-check` and `frontend-build` jobs are the required status checks
+# that gate merges into main (see BRANCHING.md).
+on:
+  pull_request:
+    branches: [main, qa]
+  push:
+    branches: [main, qa]
+
+jobs:
+  backend-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Prod-like config so `check` exercises the real code paths. The secret key
+      # is a throwaway used only to satisfy the DEBUG=False guard in settings.py.
+      DEBUG: "False"
+      DJANGO_SECRET_KEY: "ci-dummy-secret-key-not-used-anywhere-real"
+      ALLOWED_HOSTS: "localhost"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Django system check
+        run: python manage.py check
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
