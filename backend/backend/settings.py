@@ -331,9 +331,9 @@ ASYNC_JOB_MAX_PER_USER = env_int("ASYNC_JOB_MAX_PER_USER", 3, minimum=1)
 # Cap on how many backtests a single optimization may execute (its "intensity").
 # Grid = product of parameter-value counts; genetic = population x generations;
 # metaheuristics = their own run estimate. Keeps optimizations "small" so a user
-# can't launch a massive sweep. Env-tunable; the built-in defaults (genetic 200,
-# pso/differential 120, random 30, annealing 40) all fit under 300.
-MAX_OPTIMIZE_TOTAL_RUNS = env_int("MAX_OPTIMIZE_TOTAL_RUNS", 300, minimum=1)
+# can't launch a massive sweep. Env-tunable; the built-in defaults (genetic 100,
+# pso/differential 80, random 30, annealing 40) all fit under 100.
+MAX_OPTIMIZE_TOTAL_RUNS = env_int("MAX_OPTIMIZE_TOTAL_RUNS", 100, minimum=1)
 API_RATE_LIMITS = {
     "auth": {
         "max_requests": env_int("RATE_LIMIT_AUTH_MAX_REQUESTS", 20, minimum=1),
@@ -345,9 +345,9 @@ API_RATE_LIMITS = {
         "window_seconds": env_int("RATE_LIMIT_COMPUTE_WINDOW_SECONDS", 60, minimum=1),
     },
     # Per-DAY quota on how many optimizations a user may start (on top of the
-    # per-minute "compute" burst above). Defaults to 20/day.
+    # per-minute "compute" burst above). Defaults to 3/day.
     "optimize_daily": {
-        "max_requests": env_int("RATE_LIMIT_OPTIMIZE_DAILY_MAX_REQUESTS", 20, minimum=1),
+        "max_requests": env_int("RATE_LIMIT_OPTIMIZE_DAILY_MAX_REQUESTS", 3, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_OPTIMIZE_DAILY_WINDOW_SECONDS", 86400, minimum=1),
     },
     "backtest": {
@@ -355,9 +355,9 @@ API_RATE_LIMITS = {
         "window_seconds": env_int("RATE_LIMIT_BACKTEST_WINDOW_SECONDS", 60, minimum=1),
     },
     # Per-DAY quota on standalone backtests (on top of the per-minute burst above).
-    # Defaults to 100/day.
+    # Defaults to 10/day.
     "backtest_daily": {
-        "max_requests": env_int("RATE_LIMIT_BACKTEST_DAILY_MAX_REQUESTS", 100, minimum=1),
+        "max_requests": env_int("RATE_LIMIT_BACKTEST_DAILY_MAX_REQUESTS", 10, minimum=1),
         "window_seconds": env_int("RATE_LIMIT_BACKTEST_DAILY_WINDOW_SECONDS", 86400, minimum=1),
     },
     # Job-status polling: must comfortably cover several optimizers polling

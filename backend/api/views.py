@@ -213,9 +213,9 @@ MAX_INDICATOR_CODE_LENGTH = 20000
 DEFAULT_RATE_LIMITS = {
     "auth": {"max_requests": 20, "window_seconds": 300},
     "backtest": {"max_requests": 60, "window_seconds": 60},
-    "backtest_daily": {"max_requests": 100, "window_seconds": 86400},
+    "backtest_daily": {"max_requests": 10, "window_seconds": 86400},
     "compute": {"max_requests": 10, "window_seconds": 60},
-    "optimize_daily": {"max_requests": 20, "window_seconds": 86400},
+    "optimize_daily": {"max_requests": 3, "window_seconds": 86400},
     "status": {"max_requests": 120, "window_seconds": 60},
     "assistant": {"max_requests": 30, "window_seconds": 60},
     "general": {"max_requests": 180, "window_seconds": 60},
@@ -1624,7 +1624,7 @@ def dslGeneticOptimiser(request):
 
     # Size the search (population x generations) up front and cap it.
     try:
-        population = int(ga_settings.get("population", 20))
+        population = int(ga_settings.get("population", 10))
         generations = int(ga_settings.get("generations", 10))
     except (TypeError, ValueError):
         raise APIError("ga_settings population and generations must be integers.")

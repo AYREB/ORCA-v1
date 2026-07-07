@@ -58,7 +58,7 @@ const META_CONFIGS: Record<OptimiserMethod, MetaConfig> = {
       { key: "cognitive", label: "Cognitive (c1)", step: 0.1 },
       { key: "social", label: "Social (c2)", step: 0.1 },
     ],
-    defaults: { swarm_size: 15, iterations: 8, inertia: 0.7, cognitive: 1.5, social: 1.5 },
+    defaults: { swarm_size: 10, iterations: 8, inertia: 0.7, cognitive: 1.5, social: 1.5 },
     estimateRuns: (s) => s.swarm_size * s.iterations,
   },
   annealing: {
@@ -79,7 +79,7 @@ const META_CONFIGS: Record<OptimiserMethod, MetaConfig> = {
       { key: "mutation", label: "Mutation (F)", step: 0.1 },
       { key: "crossover", label: "Crossover (CR)", step: 0.05 },
     ],
-    defaults: { population: 15, generations: 8, mutation: 0.8, crossover: 0.7 },
+    defaults: { population: 10, generations: 8, mutation: 0.8, crossover: 0.7 },
     estimateRuns: (s) => s.population * s.generations,
   },
 };
