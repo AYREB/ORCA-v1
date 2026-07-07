@@ -21,6 +21,31 @@ interface Props {
   onRangeChange: (param: string, field: "start" | "end" | "steps", value: number) => void;
 }
 
+// Plain-language explanation of what each strategy parameter controls, keyed by
+// the trailing segment of the parameter path (e.g. "…args.period" -> "period").
+const PARAM_DESCRIPTIONS: Record<string, string> = {
+  period: "Lookback window — how many bars the indicator uses. Higher is smoother and slower to react; lower is faster but noisier.",
+  length: "Lookback window — how many bars the indicator uses. Higher is smoother; lower is more reactive.",
+  fast: "Fast EMA length (MACD) — the shorter, more reactive moving average.",
+  slow: "Slow EMA length (MACD) — the longer, smoother moving average.",
+  signal: "Signal-line length (MACD) — smooths the MACD line to trigger crossovers.",
+  stddev: "Number of standard deviations for the bands. Higher makes the bands wider, so they're touched less often.",
+  k_period: "%K lookback (Stochastic) — the main momentum window.",
+  d_period: "%D smoothing (Stochastic) — smooths %K to cut noise.",
+  offset: "How many bars back to read the value (0 = the current bar).",
+  multiplier: "Scaling factor applied to the indicator (e.g. the width of ATR bands).",
+};
+
+function describeParam(paramPath: string, indicator: string | null): string {
+  const name = (paramPath.split(".").pop() || paramPath).toLowerCase();
+  if (PARAM_DESCRIPTIONS[name]) return PARAM_DESCRIPTIONS[name];
+  if (name === "value" || /^\d+$/.test(name)) {
+    return "A threshold your strategy compares against — the optimizer searches for the value that backtests best.";
+  }
+  const ind = indicator ? `${indicator} ` : "";
+  return `A numeric ${ind}setting in your strategy — the optimizer tries different values to find the strongest backtest.`;
+}
+
 function RangeField({
   label,
   tip,
@@ -119,6 +144,10 @@ export function OptimizerParameterList({ paramChoices, getDisplayName, onToggle,
                   {!enabled ? "Skipped" : hasRange ? `${choice.steps} values` : "Auto"}
                 </span>
               </div>
+
+              <p className="mt-1 pl-6 text-[11px] leading-snug text-muted-foreground/90">
+                {describeParam(param, choice.indicator ?? null)}
+              </p>
 
               {enabled && (
                 <div className="mt-2.5 pl-6">
