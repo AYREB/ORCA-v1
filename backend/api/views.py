@@ -1177,7 +1177,7 @@ def strategy_detail(request, strategy_id: int):
 
 def _native_indicators() -> list[dict[str, Any]]:
     """Native indicators, read-only: registry config merged with assistant knowledge."""
-    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
+    base = Path(settings.BASE_DIR) / "core" / "registries"
     try:
         with open(base / "indicatorRegistry.json", encoding="utf-8") as f:
             registry_data = json.load(f)
@@ -2219,7 +2219,7 @@ def strategy_chat(request):
 @require_methods("GET")
 @rate_limit("general")
 def registry(request):
-    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
+    base = Path(settings.BASE_DIR) / "core" / "registries"
 
     with open(base / "commandRegistry.json", encoding="utf-8") as f:
         commands = json.load(f)
@@ -2311,9 +2311,13 @@ _TIMEFRAME_TO_YF_INTERVAL = {
 
 
 def _load_ticker_registry() -> dict:
-    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
-    with open(base / "tickerRegistry.json", encoding="utf-8") as f:
-        return json.load(f).get("TICKERS", {})
+    try:
+        base = Path(settings.BASE_DIR) / "core" / "registries"
+        with open(base / "tickerRegistry.json", encoding="utf-8") as f:
+            return json.load(f).get("TICKERS", {})
+    except (OSError, ValueError) as exc:  # missing/corrupt file -> treat all as custom
+        logger.warning("ticker registry unavailable: %s", exc)
+        return {}
 
 
 def _load_chart_dataframe(ticker: str, timeframe: str):
