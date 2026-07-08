@@ -383,7 +383,7 @@ const Strategies = () => {
       </div>
 
       <Dialog open={isResultsOpen} onOpenChange={setIsResultsOpen}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{selectedStrategy?.name}</DialogTitle>
           </DialogHeader>

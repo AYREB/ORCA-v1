@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useSettings } from "@/hooks/useSettings";
 import { motion, AnimatePresence } from "framer-motion";
@@ -93,7 +93,7 @@ const numericArg = (value: unknown, fallback: number) => {
 
 const numberInputValue = (value: number) => (Number.isFinite(value) ? value : 0);
 
-const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) => {
+const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialDslJson }: BacktestFormProps) => {
   const { settings } = useSettings();
   const btDefaults = settings.backtestDefaults;
   const { tickers: registryTickers, timeframes: registryTimeframes } = useRegistry();
@@ -128,6 +128,11 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
   const [feeMode, setFeeMode] = useState<"commission" | "spread">(btDefaults.feeMode);
   const [feeValue, setFeeValue] = useState(btDefaults.feeValue);
   const [feeFixed, setFeeFixed] = useState(btDefaults.feeFixed ?? 0);
+
+  // Tracks the JSON string of the DSL we last applied-from or emitted-to the
+  // parent, so incoming `initialDslJson` updates that merely echo our own
+  // `onDslChange` output don't re-apply and clobber in-progress edits.
+  const syncedDslRef = useRef<string | null>(null);
 
   useEffect(() => {
     const fetchRegistry = async () => {
@@ -303,20 +308,17 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
     return conditions;
   };
 
-  const loadStrategyFromDsl = (strategy: SavedStrategy) => {
-    try {
-      const dsl = strategy.dslJson && typeof strategy.dslJson === "object" ? strategy.dslJson : JSON.parse(strategy.dsl);
+  // Populate the whole wizard from a raw DSL JSON object. Returns false if the
+  // shape is unusable. Shared by the "Load Strategy" dialog and the
+  // `initialDslJson` prop (used when the form is embedded in a results view).
+  const applyDslJson = (dsl: Record<string, any>, name?: string): boolean => {
+    const detectedSide = dsl.LONG ? "LONG" : dsl.SHORT ? "SHORT" : "LONG";
+    setSide(detectedSide);
 
-      const detectedSide = dsl.LONG ? "LONG" : dsl.SHORT ? "SHORT" : "LONG";
-      setSide(detectedSide);
+    const sideData = dsl[detectedSide];
+    if (!sideData) return false;
 
-      const sideData = dsl[detectedSide];
-      if (!sideData) {
-        toast.error("Invalid strategy format");
-        return;
-      }
-
-      const newConditionGroups: Record<string, ConditionGroup> = {
+    const newConditionGroups: Record<string, ConditionGroup> = {
         OPEN: { conditions: parseConditions(sideData.OPEN?.CONDITIONS || {}) },
         CLOSE: { conditions: parseConditions(sideData.CLOSE?.CONDITIONS || {}) },
       };
@@ -366,8 +368,20 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
 
       setConditionGroups(newConditionGroups);
       setBlocks(nextBlocks);
-      setStrategyName(strategy.name);
+      if (name !== undefined) setStrategyName(name);
       setStep(1);
+      return true;
+  };
+
+  const loadStrategyFromDsl = (strategy: SavedStrategy) => {
+    try {
+      const dsl = strategy.dslJson && typeof strategy.dslJson === "object" ? strategy.dslJson : JSON.parse(strategy.dsl);
+
+      if (!applyDslJson(dsl, strategy.name)) {
+        toast.error("Invalid strategy format");
+        return;
+      }
+
       setShowLoadDialog(false);
       toast.success(`Strategy "${strategy.name}" loaded`);
     } catch (err) {
@@ -520,6 +534,31 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
 
     return dsl;
   };
+
+  // Load a strategy supplied via the `initialDslJson` prop (e.g. when this form
+  // is embedded in a backtest results view). Only re-applies when the incoming
+  // JSON actually differs from what we last synced, so it won't fight the user.
+  useEffect(() => {
+    if (!registry || !initialDslJson || Object.keys(initialDslJson).length === 0) return;
+    const key = JSON.stringify(initialDslJson);
+    if (key === syncedDslRef.current) return;
+    if (applyDslJson(initialDslJson)) {
+      syncedDslRef.current = key;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDslJson, registry]);
+
+  // Keep the parent in sync with edits made in the builder. Guarded by the same
+  // ref so echoing our output back through `initialDslJson` doesn't loop.
+  useEffect(() => {
+    if (!onDslChange || !registry) return;
+    const dsl = buildJsonDsl();
+    const key = JSON.stringify(dsl);
+    if (key === syncedDslRef.current) return;
+    syncedDslRef.current = key;
+    onDslChange(dsl, JSON.stringify(dsl, null, 2));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conditionGroups, blocks, tickers, executionTF, dateStart, dateEnd, side, takeProfitPercent, stopLossPercent, feeMode, feeValue, feeFixed, registry]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
