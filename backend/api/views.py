@@ -2077,6 +2077,42 @@ def log_query(
 @api_error_boundary
 @require_methods("POST")
 @token_required
+@rate_limit("general")
+def strategy_chat_outcome(request):
+    """Post-parse feedback: did the user run the AI-parsed strategy, and which
+    fields did they correct first? Stamped onto the matching query log — this
+    is the ground-truth signal for whether the model's parses are RIGHT
+    (schema-valid but wrong parses show up here as edits, nowhere else)."""
+    user = get_authenticated_user(request)
+    body = parse_body(request)
+
+    session_id = str(body.get("session_id") or "").strip()
+    if not session_id:
+        raise APIError("session_id is required")
+
+    edited = body.get("edited_fields")
+    if not isinstance(edited, list):
+        edited = []
+    edited = [str(f)[:50] for f in edited][:20]
+
+    log = (
+        StrategyQueryLog.objects
+        .filter(user=user, session_id=session_id, status="complete")
+        .order_by("-id")
+        .first()
+    )
+    if log:
+        log.ran_backtest = bool(body.get("ran_backtest", True))
+        log.edited_fields = edited
+        log.save(update_fields=["ran_backtest", "edited_fields"])
+
+    return no_store(JsonResponse({"ok": True}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
 @rate_limit("assistant")
 def strategy_chat(request):
     user = get_authenticated_user(request)

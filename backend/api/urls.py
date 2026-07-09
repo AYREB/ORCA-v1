@@ -47,4 +47,5 @@ urlpatterns = [
     path("paper-accounts/", views.paper_accounts),
     path("strategy-to-dsl/", views.strategy_to_dsl),
     path('strategy/chat/', views.strategy_chat),
+    path('strategy/chat/outcome/', views.strategy_chat_outcome),
 ]

@@ -697,6 +697,20 @@ class DjangoAPI {
     });
   }
 
+
+  /** Fire-and-forget: report whether the user ran an AI-parsed strategy and
+   * which fields they corrected first (model-quality ground truth). */
+  reportAiParseOutcome(sessionId: string, editedFields: string[], ranBacktest = true): void {
+    this.request("/strategy/chat/outcome/", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: sessionId,
+        edited_fields: editedFields,
+        ran_backtest: ranBacktest,
+      }),
+    }).catch(() => undefined); // telemetry must never break the run
+  }
+
   async strategyChatMessage(
     message: string,
     sessionId: string | null

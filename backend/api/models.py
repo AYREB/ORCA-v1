@@ -200,7 +200,15 @@ class StrategyQueryLog(models.Model):
     
     # Track which field was missing if clarification needed
     missing_field = models.CharField(max_length=50, null=True, blank=True)
-    
+
+    # ---- Post-parse outcome (the "did the user agree with the parse?" signal) ----
+    # None = user never ran it (abandoned); True = ran the backtest.
+    ran_backtest = models.BooleanField(null=True, blank=True)
+    # Which fields the user corrected on the review card before running
+    # (e.g. ["timeframe", "stopLoss"]). Empty list + ran_backtest=True is the
+    # strongest "the model got it right" signal available.
+    edited_fields = models.JSONField(default=list, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
