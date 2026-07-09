@@ -743,17 +743,20 @@ def serialize_backtest_run(run: BacktestRun):
 @rate_limit("assistant")
 def strategy_assistant_chat(request):
     user = get_authenticated_user(request)
-    entitlements.check_quota(user, "ai")
     payload = parse_body(request)
     messages = normalize_assistant_messages(payload.get("messages"))
     strategy_context = normalize_strategy_context(payload.get("strategy_context"))
 
+    entitlements.consume_quota(user, "ai")
     try:
         response = ask_strategy_assistant(messages, strategy_context)
     except AssistantError as exc:
+        entitlements.refund_quota(user, "ai")
         raise APIError(exc.message, status_code=exc.status_code)
+    except Exception:
+        entitlements.refund_quota(user, "ai")
+        raise
 
-    entitlements.record_usage(user, "ai")
     return no_store(JsonResponse(response))
 
 
@@ -977,9 +980,10 @@ def plans_public(request):
 def switch_plan(request):
     """Change a user's plan.
 
-    No paywall yet: users self-select their own plan freely (PLAN_SELF_SERVICE,
-    default True). When Stripe goes live, set PLAN_SELF_SERVICE=False so plan
-    changes only come from checkout/webhooks; staff can always switch.
+    PLAN_SELF_SERVICE (default: DEBUG) controls whether a user may change their
+    OWN plan without paying. It is OFF in production so nobody can self-upgrade
+    to Pro for free before billing exists — a non-staff self-switch then 403s.
+    Turn it on only once Stripe gates the upgrade. Staff can always switch.
     Targeting another user by email stays staff-only.
     Body: {"plan": "free|plus|pro", "email": "<optional target user>"}.
     """
@@ -1000,7 +1004,7 @@ def switch_plan(request):
             raise APIError("Only staff can change another user's plan.", status_code=403)
         target = candidate
 
-    self_service = bool(getattr(settings, "PLAN_SELF_SERVICE", True))
+    self_service = bool(getattr(settings, "PLAN_SELF_SERVICE", False))
     if target.id == actor.id and not self_service and not getattr(actor, "is_staff", False):
         raise APIError("Plan changes are handled through checkout.", status_code=403)
 
@@ -1462,18 +1466,21 @@ def custom_indicator_guide(request):
 @rate_limit("assistant")
 def indicator_assistant_chat(request):
     user = get_authenticated_user(request)
-    entitlements.check_quota(user, "ai")
     payload = parse_body(request)
     messages = normalize_assistant_messages(payload.get("messages"))
     indicator_context = normalize_indicator_context(payload.get("indicator_context"))
     mode = "agent" if str(payload.get("mode", "ask")).strip().lower() == "agent" else "ask"
 
+    entitlements.consume_quota(user, "ai")
     try:
         response = ask_indicator_assistant(messages, indicator_context, mode=mode)
     except AssistantError as exc:
+        entitlements.refund_quota(user, "ai")
         raise APIError(exc.message, status_code=exc.status_code)
+    except Exception:
+        entitlements.refund_quota(user, "ai")
+        raise
 
-    entitlements.record_usage(user, "ai")
     return no_store(JsonResponse(response))
 
 
@@ -1485,7 +1492,6 @@ def indicator_assistant_chat(request):
 @rate_limit("backtest_daily")
 def backtestDSLText(request):
     user = get_authenticated_user(request)
-    entitlements.check_quota(user, "backtest")
     body = parse_body(request)
     dsl = validate_dsl_text(body.get("dsl_text", ""), field_name="dsl_text")
     initial_balance = parse_initial_balance(body.get("initial_balance", DEFAULT_INITIAL_BALANCE))
@@ -1501,9 +1507,13 @@ def backtestDSLText(request):
             raise APIError("strategy_id must be an integer.")
         strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-    result = dslTextToJsonBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
+    entitlements.consume_quota(user, "backtest")
+    try:
+        result = dslTextToJsonBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
+    except Exception:
+        entitlements.refund_quota(user, "backtest")
+        raise
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
-    entitlements.record_usage(user, "backtest")
     if strategy:
         strategy.last_result = result
         strategy.dsl_text = dsl or strategy.dsl_text
@@ -1520,7 +1530,6 @@ def backtestDSLText(request):
 @rate_limit("backtest_daily")
 def backtestDSLJSON(request):
     user = get_authenticated_user(request)
-    entitlements.check_quota(user, "backtest")
     body = parse_body(request)
     dsl = validate_dict_payload(body.get("dsl_json", {}), "dsl_json")
     initial_balance = parse_initial_balance(body.get("initial_balance", DEFAULT_INITIAL_BALANCE))
@@ -1581,9 +1590,13 @@ def backtestDSLJSON(request):
             "success": False,
         }, status=400)
 
+    # Reserve quota only now that every cheap validation guard above has passed,
+    # so a rejected request never burns a backtest. Refund on any failure.
+    entitlements.consume_quota(user, "backtest")
     try:
         result = dslJSONBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
     except BacktestError as e:
+        entitlements.refund_quota(user, "backtest")
         return JsonResponse({
             "error": e.message,
             "code": e.code,
@@ -1591,12 +1604,14 @@ def backtestDSLJSON(request):
         }, status=400)
     except ValueError as e:
         # DSL validation errors
+        entitlements.refund_quota(user, "backtest")
         return JsonResponse({
             "error": str(e),
             "code": "validation_error",
             "success": False
         }, status=400)
     except Exception as e:
+        entitlements.refund_quota(user, "backtest")
         logger.exception("Unexpected backtest error")
         return JsonResponse({
             "error": "An unexpected error occurred. Please try again.",
@@ -1605,7 +1620,6 @@ def backtestDSLJSON(request):
         }, status=500)
 
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
-    entitlements.record_usage(user, "backtest")
 
     if strategy:
         strategy.last_result = result
@@ -1638,9 +1652,8 @@ def dslParameterOptimiser(request):
     for vals in param_grid.values():
         total_runs *= len(vals)
     entitlements.enforce_optimizer_method(user, "grid")
-    entitlements.check_quota(user, "optimize")
     entitlements.enforce_optimize_intensity(user, total_runs)
-    entitlements.record_usage(user, "optimize")
+    entitlements.consume_quota(user, "optimize")
 
     if async_mode:
         cleanup_jobs(optimizer_jobs)
@@ -1720,9 +1733,8 @@ def dslGeneticOptimiser(request):
         raise APIError("ga_settings population and generations must be integers.")
     total_runs = max(1, population) * max(1, generations)
     entitlements.enforce_optimizer_method(user, "genetic")
-    entitlements.check_quota(user, "optimize")
     entitlements.enforce_optimize_intensity(user, total_runs)
-    entitlements.record_usage(user, "optimize")
+    entitlements.consume_quota(user, "optimize")
 
     if async_mode:
         cleanup_jobs(genetic_jobs)
@@ -1825,9 +1837,8 @@ def dslOptimiser(request):
     # Size the search up front and cap it (applies to both sync and async paths).
     total_runs = estimate_total_runs(method, opt_settings)
     entitlements.enforce_optimizer_method(user, "meta")
-    entitlements.check_quota(user, "optimize")
     entitlements.enforce_optimize_intensity(user, total_runs)
-    entitlements.record_usage(user, "optimize")
+    entitlements.consume_quota(user, "optimize")
 
     if async_mode:
         cleanup_jobs(optimiser_jobs)
@@ -1900,25 +1911,28 @@ def strategy_to_dsl(request):
     if not message:
         raise APIError("message is required")
 
-    entitlements.check_quota(user, "ai")
+    entitlements.consume_quota(user, "ai")
 
     # 1. Call LLM parser
     try:
         result = parse_strategy(message)
     except LLMUnavailableError as e:
+        entitlements.refund_quota(user, "ai")
         logger.warning(f"LLM unavailable for strategy_to_dsl: {e}")
         return JsonResponse({"success": False, "error": LLM_UNAVAILABLE_MESSAGE}, status=503)
+    except Exception:
+        entitlements.refund_quota(user, "ai")
+        raise
 
     # 2. Handle failure from model
     if isinstance(result, dict) and "error" in result:
+        entitlements.refund_quota(user, "ai")
         return JsonResponse({
             "success": False,
             "error": result["error"],
             "issues": result.get("issues", []),
             "raw_model_output": result.get("raw_output", "")
         }, status=400)
-
-    entitlements.record_usage(user, "ai")
 
     # 3. Optional: immediately run backtest if requested
     run_backtest = body.get("run_backtest", False)
@@ -2189,7 +2203,8 @@ def strategy_chat(request):
     constraints = get_user_constraints(user)
 
     # ---- Plan quota (only the real model call is metered, not clarify turns) ----
-    entitlements.check_quota(user, "ai")
+    # Reserve atomically before the model call; refund if the model is unavailable.
+    entitlements.consume_quota(user, "ai")
 
     # ---- Try to parse with full context ----
     try:
@@ -2199,10 +2214,12 @@ def strategy_chat(request):
             allowed_timeframes=constraints["allowed_timeframes"]
         )
     except LLMUnavailableError as e:
+        entitlements.refund_quota(user, "ai")
         logger.warning(f"LLM unavailable for strategy_chat: {e}")
         return JsonResponse({"success": False, "error": LLM_UNAVAILABLE_MESSAGE}, status=503)
-
-    entitlements.record_usage(user, "ai")
+    except Exception:
+        entitlements.refund_quota(user, "ai")
+        raise
 
     # ---- Check for invalid timeframe in errors ----
     timeframe_errors = [e for e in errors if "Invalid timeframe" in e]

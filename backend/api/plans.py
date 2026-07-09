@@ -40,7 +40,7 @@ PLANS = {
     FREE: {
         "label": "Free",
         "price_usd": 0,
-        "monthly": {"ai": 5, "backtest": 15, "optimize": 3},
+        "monthly": {"ai": 3, "backtest": 15, "optimize": 3},
         "caps": {"strategies": 3, "paper_accounts": 1, "custom_indicators": 1},
         "optimizer_methods": [GRID],
         "optimize_intensity": 100,        # max backtests inside a single optimization

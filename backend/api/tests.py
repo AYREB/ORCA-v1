@@ -108,6 +108,119 @@ class SecurityBehaviorTests(TestCase):
         self.assertEqual(second.status_code, 429)
 
 
+class EntitlementQuotaTests(TestCase):
+    """Atomic monthly-quota enforcement (the reserve/refund gate)."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="quota@example.com",
+            email="quota@example.com",
+            password="P@ssword123!",
+        )
+
+    def test_consume_quota_enforces_limit_atomically(self):
+        from api import entitlements
+        from api.entitlements import PlanLimitError
+        from api.models import UsageCounter
+
+        # Free plan allows 3 AI generations/month. Reserve exactly the limit.
+        for _ in range(3):
+            entitlements.consume_quota(self.user, "ai")
+
+        with self.assertRaises(PlanLimitError):
+            entitlements.consume_quota(self.user, "ai")
+
+        row = UsageCounter.objects.get(
+            user=self.user, metric="ai", period=entitlements.current_period()
+        )
+        # A rejected reservation must NOT have incremented the counter past the cap.
+        self.assertEqual(row.count, 3)
+
+    def test_refund_restores_a_reserved_use(self):
+        from api import entitlements
+
+        entitlements.consume_quota(self.user, "ai")
+        entitlements.consume_quota(self.user, "ai")
+        entitlements.refund_quota(self.user, "ai")
+
+        self.assertEqual(entitlements.usage_count(self.user, "ai"), 1)
+
+    def test_refund_never_drives_counter_negative(self):
+        from api import entitlements
+
+        entitlements.refund_quota(self.user, "ai")
+        self.assertEqual(entitlements.usage_count(self.user, "ai"), 0)
+
+    def test_unlimited_plan_never_blocks(self):
+        from api import entitlements
+
+        profile = entitlements.get_profile(self.user)
+        profile.plan = "pro"
+        profile.save(update_fields=["plan", "updated_at"])
+
+        for _ in range(50):
+            entitlements.consume_quota(self.user, "ai")  # must not raise
+
+
+class PlanSwitchAuthorizationTests(TestCase):
+    """Self-service plan changes must be gated by PLAN_SELF_SERVICE in prod."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="switch@example.com",
+            email="switch@example.com",
+            password="P@ssword123!",
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    def _switch(self, plan, email=None):
+        payload = {"plan": plan}
+        if email is not None:
+            payload["email"] = email
+        return self.client.post(
+            "/api/plan/switch/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    @override_settings(PLAN_SELF_SERVICE=False)
+    def test_self_upgrade_blocked_without_self_service(self):
+        response = self._switch("pro")
+        self.assertEqual(response.status_code, 403)
+        self.user.refresh_from_db()
+        from api import entitlements
+        self.assertEqual(entitlements.plan_of(self.user), "free")
+
+    @override_settings(PLAN_SELF_SERVICE=True)
+    def test_self_upgrade_allowed_when_self_service_on(self):
+        response = self._switch("pro")
+        self.assertEqual(response.status_code, 200)
+        from api import entitlements
+        self.assertEqual(entitlements.plan_of(self.user), "pro")
+
+    @override_settings(PLAN_SELF_SERVICE=False)
+    def test_staff_can_switch_despite_self_service_off(self):
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        response = self._switch("pro")
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(PLAN_SELF_SERVICE=True)
+    def test_non_staff_cannot_target_another_user(self):
+        victim = User.objects.create_user(
+            username="victim@example.com",
+            email="victim@example.com",
+            password="P@ssword123!",
+        )
+        response = self._switch("pro", email="victim@example.com")
+        self.assertEqual(response.status_code, 403)
+        from api import entitlements
+        self.assertEqual(entitlements.plan_of(victim), "free")
+
+
 class StrategyAssistantDiagnosticsTests(TestCase):
     def _sample_context(self):
         return {

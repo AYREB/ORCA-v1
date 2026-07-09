@@ -2,9 +2,14 @@
 
 Views call these helpers to gate metered features:
 
-    check_quota(user, "backtest")          # raise 402 if the monthly quota is used up
-    record_usage(user, "backtest")         # tally one use (call AFTER the work succeeds)
+    consume_quota(user, "backtest")        # atomically reserve one use, else raise 402
+    refund_quota(user, "backtest")         # give it back if the metered work then failed
     enforce_count_cap(user, "strategies", current_count)
+
+Always enforce a monthly quota with ``consume_quota`` (a concurrency-safe reserve),
+NOT the older ``check_quota`` + ``record_usage`` pair — that read-then-increment
+has a race that lets parallel requests overshoot the limit. ``check_quota`` remains
+only as a cheap soft pre-check for friendly early failures.
     enforce_optimizer_method(user, "genetic")
     optimize_intensity_cap(user)           # max backtests allowed in one optimization
     plan_summary(user)                     # plan + limits + usage, for /api/plan/
@@ -80,24 +85,74 @@ def usage_count(user, metric: str) -> int:
     return row.count if row else 0
 
 
+def _quota_exceeded_error(user, metric: str, limit: int) -> "PlanLimitError":
+    plan = plan_of(user)
+    label = plans.METRIC_LABELS.get(metric, metric)
+    upgrade = plans.min_plan_unlocking(
+        lambda cfg, m=metric, l=limit: _allows_more(cfg, m, l)
+    )
+    return PlanLimitError(
+        f"You've used all {limit} {label} on the "
+        f"{plans.plan_config(plan)['label']} plan this month. "
+        f"Upgrade for more.",
+        current_plan=plan,
+        upgrade_to=upgrade,
+    )
+
+
 def check_quota(user, metric: str) -> None:
-    """Raise if the user has no monthly allowance left for ``metric``."""
+    """Raise if the user has no monthly allowance left for ``metric``.
+
+    This is only a *soft* pre-check for a fast, friendly failure. It is NOT the
+    authoritative gate — a read here followed by a later ``record_usage`` has a
+    check-then-act race that lets concurrent requests all slip past the same
+    remaining allowance. Use ``consume_quota`` (atomic reserve) to actually
+    enforce the limit.
+    """
     limit = monthly_limit(user, metric)
     if limit is None:  # unlimited
         return
     if usage_count(user, metric) >= limit:
-        plan = plan_of(user)
-        label = plans.METRIC_LABELS.get(metric, metric)
-        upgrade = plans.min_plan_unlocking(
-            lambda cfg, m=metric, l=limit: _allows_more(cfg, m, l)
-        )
-        raise PlanLimitError(
-            f"You've used all {limit} {label} on the "
-            f"{plans.plan_config(plan)['label']} plan this month. "
-            f"Upgrade for more.",
-            current_plan=plan,
-            upgrade_to=upgrade,
-        )
+        raise _quota_exceeded_error(user, metric, limit)
+
+
+def consume_quota(user, metric: str, n: int = 1) -> None:
+    """Atomically reserve ``n`` uses of ``metric``, raising 402 if that would
+    exceed the monthly allowance.
+
+    Concurrency-safe: the reservation is a single conditional ``UPDATE ... WHERE
+    count <= limit - n`` that the database serializes on the counter row, so
+    parallel requests can never both consume the last unit of quota (the
+    check-then-act window that ``check_quota`` + ``record_usage`` leaves open).
+    Reserve BEFORE doing the metered work; if that work then fails, call
+    ``refund_quota`` so the user isn't charged for it.
+    """
+    limit = monthly_limit(user, metric)
+    if limit is None:  # unlimited
+        return
+    from .models import UsageCounter
+
+    period = current_period()
+    UsageCounter.objects.get_or_create(user=user, metric=metric, period=period)
+    reserved = UsageCounter.objects.filter(
+        user=user, metric=metric, period=period, count__lte=limit - n
+    ).update(count=F("count") + n)
+    if not reserved:
+        raise _quota_exceeded_error(user, metric, limit)
+
+
+def refund_quota(user, metric: str, n: int = 1) -> None:
+    """Return ``n`` previously-reserved uses of ``metric`` (metered work failed).
+
+    Clamps at zero so a double refund or a period rollover can't drive the
+    counter negative.
+    """
+    from .models import UsageCounter
+
+    period = current_period()
+    UsageCounter.objects.filter(
+        user=user, metric=metric, period=period, count__gte=n
+    ).update(count=F("count") - n)
 
 
 def _allows_more(cfg: dict, metric: str, current_limit: int) -> bool:
