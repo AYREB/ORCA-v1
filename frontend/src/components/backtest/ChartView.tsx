@@ -15,6 +15,7 @@ import { useSettings } from "@/hooks/useSettings";
 interface ChartContentProps {
   // Data
   tickers: string[];
+  tickerNames?: Record<string, string>;
   selectedTicker: string;
   availableTimeframes: string[];
   selectedTimeframe: string;
@@ -78,6 +79,7 @@ const FAKE_INDICATORS = [
 // Defined OUTSIDE of ChartView to maintain stable React identity across renders
 const ChartContent = ({
   tickers,
+  tickerNames,
   selectedTicker,
   availableTimeframes,
   selectedTimeframe,
@@ -132,11 +134,23 @@ const ChartContent = ({
             <SelectContent>
               {tickers.map((ticker) => (
                 <SelectItem key={ticker} value={ticker} className="font-mono">
-                  {ticker}
+                  <span className="flex items-baseline gap-2">
+                    <span>{ticker}</span>
+                    {tickerNames?.[ticker] && tickerNames[ticker] !== ticker && (
+                      <span className="text-[11px] font-sans text-muted-foreground">
+                        {tickerNames[ticker]}
+                      </span>
+                    )}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          {tickerNames?.[selectedTicker] && tickerNames[selectedTicker] !== selectedTicker && (
+            <span className="hidden sm:block max-w-[180px] truncate text-xs text-muted-foreground">
+              {tickerNames[selectedTicker]}
+            </span>
+          )}
 
           {availableTimeframes.length > 1 && (
             <Select value={selectedTimeframe} onValueChange={onTimeframeChange}>
@@ -598,6 +612,7 @@ const ChartView = ({ results }: ChartViewProps) => {
   // Shared props for ChartContent
   const chartContentProps: ChartContentProps = {
     tickers,
+    tickerNames: results.ticker_names,
     selectedTicker,
     availableTimeframes,
     selectedTimeframe,

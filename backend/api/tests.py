@@ -546,3 +546,85 @@ class CrossAssetBacktestTests(TestCase):
         )
         self.assertEqual(parsed["LONG"]["context"]["tickers"], ["SPX"])
         self.assertEqual(parsed["LONG"]["context"]["signal_tickers"], ["UKX"])
+
+
+class TickerSearchTests(TestCase):
+    """Yahoo-backed symbol autocomplete + full-name resolution."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="search@example.com",
+            email="search@example.com",
+            password="P@ssword123!",
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    @staticmethod
+    def _fake_yahoo_response(quotes):
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"quotes": quotes}
+
+        return FakeResponse()
+
+    def _search(self, q):
+        return self.client.get(
+            f"/api/tickers/search/?q={q}",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    def test_search_requires_auth(self):
+        response = self.client.get("/api/tickers/search/?q=apple")
+        self.assertEqual(response.status_code, 401)
+
+    def test_search_merges_registry_and_yahoo(self):
+        quotes = [
+            {"symbol": "APLE", "shortname": "Apple Hospitality REIT", "exchDisp": "NYSE", "quoteTypeDisp": "Equity"},
+            {"symbol": "AAPL", "shortname": "Apple Inc.", "exchDisp": "NASDAQ", "quoteTypeDisp": "Equity"},
+        ]
+        with patch("api.views.requests.get", return_value=self._fake_yahoo_response(quotes)):
+            response = self._search("apple")
+
+        self.assertEqual(response.status_code, 200)
+        results = response.json()["results"]
+        symbols = [r["symbol"] for r in results]
+
+        # Registry match (AAPL, local data) first and deduped against Yahoo's AAPL
+        self.assertIn("AAPL", symbols)
+        self.assertEqual(symbols.count("AAPL"), 1)
+        aapl = next(r for r in results if r["symbol"] == "AAPL")
+        self.assertTrue(aapl["local"])
+        self.assertEqual(aapl["name"], "Apple Inc.")
+        # Yahoo-only match included with its full name
+        aple = next(r for r in results if r["symbol"] == "APLE")
+        self.assertFalse(aple["local"])
+        self.assertEqual(aple["name"], "Apple Hospitality REIT")
+
+    def test_search_degrades_when_yahoo_down(self):
+        with patch("api.views.requests.get", side_effect=OSError("network down")):
+            response = self._search("apple")
+
+        self.assertEqual(response.status_code, 200)
+        results = response.json()["results"]
+        # Registry matches still returned
+        self.assertTrue(any(r["symbol"] == "AAPL" for r in results))
+
+    def test_resolve_ticker_names_registry_yahoo_and_fallback(self):
+        from api.views import resolve_ticker_names
+
+        quotes = [{"symbol": "APLE", "shortname": "Apple Hospitality REIT", "quoteTypeDisp": "Equity"}]
+        with patch("api.views.requests.get", return_value=self._fake_yahoo_response(quotes)):
+            names = resolve_ticker_names(["AAPL", "APLE"])
+
+        self.assertEqual(names["AAPL"], "Apple Inc.")               # registry, no network needed
+        self.assertEqual(names["APLE"], "Apple Hospitality REIT")   # live Yahoo lookup
+
+        # Unknown symbol + Yahoo down -> falls back to the symbol itself
+        cache.clear()
+        with patch("api.views.requests.get", side_effect=OSError("down")):
+            names = resolve_ticker_names(["ZZZUNKNOWN"])
+        self.assertEqual(names["ZZZUNKNOWN"], "ZZZUNKNOWN")

@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import requests
 import ssl
 import threading
 import time
@@ -1514,6 +1515,7 @@ def backtestDSLText(request):
     except Exception:
         entitlements.refund_quota(user, "backtest")
         raise
+    result["ticker_names"] = resolve_ticker_names(list(result.get("data", {}).keys()))
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
     if strategy:
         strategy.last_result = result
@@ -1628,6 +1630,7 @@ def backtestDSLJSON(request):
             "success": False
         }, status=500)
 
+    result["ticker_names"] = resolve_ticker_names(list(result.get("data", {}).keys()))
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
 
     if strategy:
@@ -2487,6 +2490,125 @@ def _load_ticker_registry() -> dict:
         return {}
 
 
+# ---------------------------------------------------------------------------
+# Ticker symbol search / name resolution (Yahoo Finance-backed)
+# ---------------------------------------------------------------------------
+_YF_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+# Yahoo rejects requests without a browser-ish UA.
+_YF_SEARCH_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; OrcaBacktester/1.0)"}
+_TICKER_NAME_CACHE_TTL = 7 * 24 * 3600
+_YF_SEARCH_CACHE_TTL = 6 * 3600
+
+
+def _yahoo_symbol_search(query: str) -> list:
+    """Search Yahoo Finance for symbols matching ``query``.
+
+    Returns [{symbol, name, exchange, type}], cached per query so typing in the
+    UI (and repeated name lookups) don't hammer Yahoo. Failures degrade to an
+    empty list with a short negative-cache so an outage doesn't retry per call.
+    """
+    key = f"yf_search:{query.lower()}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        resp = requests.get(
+            _YF_SEARCH_URL,
+            params={"q": query, "quotesCount": 10, "newsCount": 0, "listsCount": 0},
+            headers=_YF_SEARCH_HEADERS,
+            timeout=4,
+        )
+        resp.raise_for_status()
+        quotes = resp.json().get("quotes", []) or []
+    except Exception as exc:  # noqa: BLE001 — any network/parse failure degrades the same way
+        logger.warning("Yahoo ticker search failed for %r: %s", query, exc)
+        cache.set(key, [], 60)
+        return []
+
+    results = []
+    for item in quotes:
+        symbol = str(item.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        name = item.get("shortname") or item.get("longname") or symbol
+        results.append({
+            "symbol": symbol,
+            "name": name,
+            "exchange": item.get("exchDisp") or item.get("exchange") or "",
+            "type": item.get("quoteTypeDisp") or item.get("quoteType") or "",
+        })
+        # Every search doubles as a name lookup for later resolution.
+        cache.set(f"ticker_name:{symbol.upper()}", name, _TICKER_NAME_CACHE_TTL)
+
+    cache.set(key, results, _YF_SEARCH_CACHE_TTL)
+    return results
+
+
+def resolve_ticker_names(symbols) -> dict:
+    """Map each symbol to its full asset name.
+
+    Resolution order: local ticker registry -> cached Yahoo lookups -> a live
+    Yahoo search for that symbol -> the symbol itself (never fails).
+    """
+    registry = _load_ticker_registry()
+    names = {}
+    for sym in symbols:
+        entry = registry.get(sym)
+        if entry and entry.get("name"):
+            names[sym] = entry["name"]
+            continue
+        cached = cache.get(f"ticker_name:{sym.upper()}")
+        if cached:
+            names[sym] = cached
+            continue
+        match = next(
+            (r for r in _yahoo_symbol_search(sym) if r["symbol"].upper() == sym.upper()),
+            None,
+        )
+        names[sym] = match["name"] if match else sym
+    return names
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def ticker_search(request):
+    """Symbol autocomplete: local registry matches first, then live Yahoo Finance.
+
+    Each result: {symbol, name, exchange, type, local}. ``local`` marks symbols
+    with pre-pulled Orca data (they support more timeframes / faster backtests).
+    """
+    query = (request.GET.get("q") or "").strip()[:40]
+    if not query:
+        return no_store(JsonResponse({"results": []}))
+
+    query_lower = query.lower()
+    results, seen = [], set()
+
+    for sym, meta in _load_ticker_registry().items():
+        haystack = " ".join([sym, meta.get("name", ""), *meta.get("aliases", [])]).lower()
+        if query_lower in haystack:
+            results.append({
+                "symbol": sym,
+                "name": meta.get("name", sym),
+                "exchange": "Orca data",
+                "type": "",
+                "local": True,
+            })
+            seen.add(sym.upper())
+
+    for item in _yahoo_symbol_search(query):
+        if item["symbol"].upper() in seen:
+            continue
+        results.append({**item, "local": False})
+        seen.add(item["symbol"].upper())
+
+    return no_store(JsonResponse({"results": results[:15]}))
+
+
 def _load_chart_dataframe(ticker: str, timeframe: str):
     """
     Prefer the pre-pulled CSVs in core/data_csvs (the same source backtests use,
@@ -2555,7 +2677,8 @@ def chart_data(request):
         name = ticker_config.get("name", ticker)
         allowed = set(ticker_config.get("available_timeframes", [])) | yf_timeframes
     else:
-        name = ticker
+        # Unknown ticker: resolve its real asset name (cached Yahoo lookup).
+        name = resolve_ticker_names([ticker]).get(ticker, ticker)
         allowed = yf_timeframes
 
     if timeframe not in allowed:

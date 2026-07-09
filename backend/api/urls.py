@@ -42,6 +42,7 @@ urlpatterns = [
     path("strategy-assistant/market-data/", views.strategy_assistant_market_data),
     path("dashboard/summary/", views.dashboard_summary),
     path("chart-data/", views.chart_data),
+    path("tickers/search/", views.ticker_search),
     path("backtest-runs/", views.backtest_runs),
     path("backtest-runs/<int:run_id>/", views.backtest_run_detail),
     path("paper-accounts/", views.paper_accounts),

@@ -39,6 +39,17 @@ export interface BacktestResult {
       [timeframe: string]: OHLCData[];
     };
   };
+  /** Full asset name per ticker in `data` (e.g. AAPL -> "Apple Inc."). */
+  ticker_names?: Record<string, string>;
+}
+
+export interface TickerSearchResult {
+  symbol: string;
+  name: string;
+  exchange: string;
+  type: string;
+  /** True when the symbol has pre-pulled Orca data (extra timeframes). */
+  local: boolean;
 }
 
 export interface DashboardBacktest {
@@ -1024,6 +1035,17 @@ class DjangoAPI {
       method: 'PUT',
       body: JSON.stringify({ accounts }),
     });
+  }
+
+  // Symbol autocomplete: local registry + live Yahoo Finance search
+  async searchTickers(query: string): Promise<TickerSearchResult[]> {
+    const q = query.trim();
+    if (!q) return [];
+    const params = new URLSearchParams({ q });
+    const { results } = await this.request<{ results: TickerSearchResult[] }>(
+      `/tickers/search/?${params.toString()}`,
+    );
+    return results;
   }
 
   // Raw OHLCV for the standalone Charts page

@@ -14,6 +14,7 @@ import CandlestickChart from "@/components/backtest/CandlestickChart";
 import { Input } from "@/components/ui/input";
 import { api, ChartDataResponse, OHLCData } from "@/lib/api";
 import { useRegistry, availableTimeframesFor } from "@/context/RegistryContext";
+import { useTickerSearch } from "@/hooks/useTickerSearch";
 import type { ChartType } from "@/hooks/useSettings";
 
 const CHART_TYPES: { value: ChartType; label: string; icon: typeof CandlestickIcon }[] = [
@@ -116,6 +117,13 @@ const Charts = () => {
     );
   }, [tickerSymbols, tickers, search]);
 
+  // Live Yahoo Finance symbol search for anything not in the local registry.
+  const { results: searchResults, isSearching } = useTickerSearch(search);
+  const remoteMatches = useMemo(() => {
+    const local = new Set(tickerSymbols.map((s) => s.toUpperCase()));
+    return searchResults.filter((r) => !r.local && !local.has(r.symbol.toUpperCase()));
+  }, [searchResults, tickerSymbols]);
+
   const isPositive = (priceStats?.change ?? 0) >= 0;
 
   return (
@@ -155,9 +163,40 @@ const Charts = () => {
             </div>
           </div>
           <div className="flex-1 overflow-y-auto p-2">
+            {/* Live Yahoo Finance matches for the query (symbols not in the registry) */}
+            {remoteMatches.map((match) => (
+              <button
+                key={match.symbol}
+                onClick={() => {
+                  setSelectedTicker(match.symbol);
+                  setSearch("");
+                }}
+                className="mb-1 flex w-full items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5 text-left transition-all hover:bg-primary/15"
+              >
+                <div className="min-w-0">
+                  <p className="font-mono text-sm font-semibold">{match.symbol}</p>
+                  <p className="truncate text-xs text-muted-foreground">{match.name}</p>
+                </div>
+                {(match.type || match.exchange) && (
+                  <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                    {[match.type, match.exchange].filter(Boolean).join(" · ")}
+                  </span>
+                )}
+              </button>
+            ))}
+            {isSearching && search.trim() && (
+              <div className="mb-2 flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Searching Yahoo Finance…
+              </div>
+            )}
             {(() => {
               const typed = search.trim().toUpperCase();
-              const showLoadTyped = typed.length > 0 && !tickerSymbols.includes(typed);
+              const showLoadTyped =
+                typed.length > 0 &&
+                !tickerSymbols.includes(typed) &&
+                !isSearching &&
+                !remoteMatches.some((m) => m.symbol.toUpperCase() === typed);
               if (!showLoadTyped) return null;
               return (
                 <button
@@ -175,7 +214,7 @@ const Charts = () => {
                 </button>
               );
             })()}
-            {filteredTickers.length === 0 ? (
+            {filteredTickers.length === 0 && remoteMatches.length === 0 && !isSearching ? (
               <p className="p-4 text-center text-sm text-muted-foreground">
                 {search.trim() ? "Press Enter to load this ticker from Yahoo Finance." : "No tickers match."}
               </p>
