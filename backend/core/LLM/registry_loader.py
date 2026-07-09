@@ -112,6 +112,10 @@ AVAILABLE TIMEFRAMES: {timeframes_str}
 
 AVAILABLE TICKERS:
 {aliases_section}
+  Other exchange symbols are also allowed: if the user names a ticker not
+  listed above, copy it into tickers VERBATIM in uppercase (e.g. PLTR, AMD,
+  COIN, HOOD) — never substitute a different asset for an unfamiliar symbol.
+  FX pairs use Yahoo format: EURUSD=X, GBPUSD=X.
 
 JSON SCHEMA RULES:
 - Top level key must be LONG or SHORT

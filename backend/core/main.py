@@ -329,9 +329,9 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
 
             if df is None or df.empty:
                 raise BacktestError(
-                    f"No data available for {t} on the {tf} timeframe "
-                    f"between {start_date} and {end_date}. "
-                    f"Try a different date range or timeframe.",
+                    f"No market data found for '{t}' on the {tf} timeframe "
+                    f"between {start_date} and {end_date}. Check the ticker "
+                    f"symbol exists, or try a different date range/timeframe.",
                     code="no_data"
                 )
 

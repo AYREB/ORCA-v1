@@ -20,6 +20,25 @@ VALID_INDICATORS = {"PRICE", "VOLUME", "SMA", "EMA", "RSI",
                     "MACD", "BBANDS", "ATR", "STOCH", "CCI", "OBV"}
 
 
+# Currency codes for FX pair detection ("EURUSD" -> "EURUSD=X").
+_FX_CODES = {"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"}
+
+_SYMBOL_RE = re.compile(r"^\^?[A-Z0-9]{1,6}(?:[.\-][A-Z0-9]{1,4})?(?:=X)?$")
+
+
+def looks_like_symbol(ticker: str) -> bool:
+    """Plausible exchange symbol: AAPL, BRK-B, BTC-USD, EURUSD=X, ^GSPC."""
+    return bool(_SYMBOL_RE.match(ticker))
+
+
+def normalise_unknown_ticker(ticker: str) -> str:
+    """Uppercase, and convert bare 6-letter FX pairs to Yahoo's PAIR=X form."""
+    t = str(ticker).strip().upper()
+    if len(t) == 6 and t.isalpha() and t[:3] in _FX_CODES and t[3:] in _FX_CODES:
+        return f"{t}=X"
+    return t
+
+
 class LLMUnavailableError(RuntimeError):
     """The parser model is not deployed/configured on this host.
 
@@ -234,12 +253,27 @@ def validate_and_repair(raw: str, registry_context: dict = None) -> tuple:
         return None, errors
 
     if valid_tickers:
-        invalid_tickers = [t for t in ctx["tickers"] if t not in valid_tickers]
-        if invalid_tickers:
-            errors.append(f"Invalid tickers: {invalid_tickers}")
-            ctx["tickers"] = [t for t in ctx["tickers"] if t in valid_tickers]
-            if not ctx["tickers"]:
-                return None, errors
+        kept, dropped = [], []
+        for t in ctx["tickers"]:
+            if t in valid_tickers:
+                kept.append(t)
+                continue
+            candidate = normalise_unknown_ticker(t)
+            if candidate in valid_tickers:
+                kept.append(candidate)
+            elif looks_like_symbol(candidate):
+                # Not in the registry, but symbol-shaped — let it through so
+                # AI mode supports the same open ticker universe as manual
+                # mode. The review card flags it for the user to confirm.
+                kept.append(candidate)
+                errors.append(f"Unrecognised ticker '{candidate}' — verify it before running")
+            else:
+                dropped.append(t)
+        if dropped:
+            errors.append(f"Invalid tickers: {dropped}")
+        ctx["tickers"] = kept
+        if not ctx["tickers"]:
+            return None, errors
 
     if "execution_timeframe" not in ctx:
         errors.append("Missing execution_timeframe")
@@ -250,7 +284,11 @@ def validate_and_repair(raw: str, registry_context: dict = None) -> tuple:
         ctx["execution_timeframe"] = "1h"
 
     if "dateframe" not in ctx:
-        ctx["dateframe"] = {"start": "2025-01-01", "end": "2026-01-01"}
+        _today = datetime.now()
+        ctx["dateframe"] = {
+            "start": (_today - timedelta(days=365)).strftime("%Y-%m-%d"),
+            "end": _today.strftime("%Y-%m-%d"),
+        }
 
     if "OPEN" not in body:
         errors.append("Missing OPEN block")
@@ -281,36 +319,55 @@ def validate_and_repair(raw: str, registry_context: dict = None) -> tuple:
     return strategy, errors
 
 
-TODAY = datetime.now()
+# NOTE: "today" is computed per request, never at import time — a Django
+# process can run for weeks, and a module-level constant would silently make
+# every relative date range ("last 2 years") drift stale as the process ages.
+
+_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
+    "december": 12,
+}
+_MONTH_ALT = "|".join(_MONTHS)
+
+
+def _month_start(m, today):
+    """'since march' → the most recent March 1st; 'since march 2024' → 2024-03-01."""
+    month = _MONTHS[m.group(1)]
+    year = int(m.group(2)) if m.group(2) else (today.year if month <= today.month else today.year - 1)
+    return datetime(year, month, 1)
+
 
 DATE_PATTERNS = [
-    (r"last (\d+) years?",  lambda m: (TODAY - timedelta(days=365 * int(m.group(1))), TODAY)),
-    (r"past (\d+) years?",  lambda m: (TODAY - timedelta(days=365 * int(m.group(1))), TODAY)),
-    (r"last (\d+) months?", lambda m: (TODAY - timedelta(days=30 * int(m.group(1))), TODAY)),
-    (r"past (\d+) months?", lambda m: (TODAY - timedelta(days=30 * int(m.group(1))), TODAY)),
-    (r"last (\d+) days?",   lambda m: (TODAY - timedelta(days=int(m.group(1))), TODAY)),
-    (r"last year",          lambda m: (TODAY - timedelta(days=365), TODAY)),
-    (r"past year",          lambda m: (TODAY - timedelta(days=365), TODAY)),
-    (r"last month",         lambda m: (TODAY - timedelta(days=30), TODAY)),
-    (r"last two years?",    lambda m: (TODAY - timedelta(days=730), TODAY)),
-    (r"past two years?",    lambda m: (TODAY - timedelta(days=730), TODAY)),
-    (r"last quarter",       lambda m: (TODAY - timedelta(days=90), TODAY)),
-    (r"since (\d{4})",      lambda m: (datetime(int(m.group(1)), 1, 1), TODAY)),
-    (r"from (\d{4})",       lambda m: (datetime(int(m.group(1)), 1, 1), TODAY)),
-    (r"throughout (\d{4})", lambda m: (datetime(int(m.group(1)), 1, 1), datetime(int(m.group(1)), 12, 31))),
-    (r"during (\d{4})",     lambda m: (datetime(int(m.group(1)), 1, 1), datetime(int(m.group(1)), 12, 31))),
-    (r"all of (\d{4})",     lambda m: (datetime(int(m.group(1)), 1, 1), datetime(int(m.group(1)), 12, 31))),
+    (r"last (\d+) years?",  lambda m, t: (t - timedelta(days=365 * int(m.group(1))), t)),
+    (r"past (\d+) years?",  lambda m, t: (t - timedelta(days=365 * int(m.group(1))), t)),
+    (r"last (\d+) months?", lambda m, t: (t - timedelta(days=30 * int(m.group(1))), t)),
+    (r"past (\d+) months?", lambda m, t: (t - timedelta(days=30 * int(m.group(1))), t)),
+    (r"last (\d+) days?",   lambda m, t: (t - timedelta(days=int(m.group(1))), t)),
+    (r"last year",          lambda m, t: (t - timedelta(days=365), t)),
+    (r"past year",          lambda m, t: (t - timedelta(days=365), t)),
+    (r"last month",         lambda m, t: (t - timedelta(days=30), t)),
+    (r"last two years?",    lambda m, t: (t - timedelta(days=730), t)),
+    (r"past two years?",    lambda m, t: (t - timedelta(days=730), t)),
+    (r"last quarter",       lambda m, t: (t - timedelta(days=90), t)),
+    (r"since (\d{4})",      lambda m, t: (datetime(int(m.group(1)), 1, 1), t)),
+    (r"from (\d{4})",       lambda m, t: (datetime(int(m.group(1)), 1, 1), t)),
+    (r"throughout (\d{4})", lambda m, t: (datetime(int(m.group(1)), 1, 1), datetime(int(m.group(1)), 12, 31))),
+    (r"during (\d{4})",     lambda m, t: (datetime(int(m.group(1)), 1, 1), datetime(int(m.group(1)), 12, 31))),
+    (r"all of (\d{4})",     lambda m, t: (datetime(int(m.group(1)), 1, 1), datetime(int(m.group(1)), 12, 31))),
+    (rf"(?:since|from) ({_MONTH_ALT})(?: (\d{{4}}))?", lambda m, t: (_month_start(m, t), t)),
 ]
 
 
 def extract_date_range(user_input: str):
+    today = datetime.now()
     lower = user_input.lower()
     for pattern, extractor in DATE_PATTERNS:
         match = re.search(pattern, lower)
         if match:
             try:
-                start, end = extractor(match)
-                end = min(end, TODAY)
+                start, end = extractor(match, today)
+                end = min(end, today)
                 if (end - start).days > 730:
                     start = end - timedelta(days=730)
                 return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
@@ -320,11 +377,20 @@ def extract_date_range(user_input: str):
 
 
 def apply_date_override(strategy: dict, user_input: str) -> dict:
+    """Normalise the backtest window. Dates are a "now" concept the model
+    cannot know: its training data froze "recent" at training time, so its
+    default dateframes go stale. User date language always wins; otherwise
+    the window is the last 12 months ending today.
+    """
     date_range = extract_date_range(user_input)
     if date_range:
         start, end = date_range
-        direction = "LONG" if "LONG" in strategy else "SHORT"
-        strategy[direction]["context"]["dateframe"] = {"start": start, "end": end}
+    else:
+        today = datetime.now()
+        start = (today - timedelta(days=365)).strftime("%Y-%m-%d")
+        end = today.strftime("%Y-%m-%d")
+    direction = "LONG" if "LONG" in strategy else "SHORT"
+    strategy[direction]["context"]["dateframe"] = {"start": start, "end": end}
     return strategy
 
 
@@ -409,7 +475,9 @@ def parse_strategy_with_context(
     if strategy is None:
         return None, errors, raw_output
 
-    last_user_msg = user_messages[-1] if user_messages else ""
-    strategy = apply_date_override(strategy, last_user_msg)
+    # Date language can appear in any turn ("last 2 years" in msg 1,
+    # clarification answers after) — scan the whole user side of the chat.
+    all_user_text = " ".join(user_messages)
+    strategy = apply_date_override(strategy, all_user_text)
 
     return strategy, errors, raw_output
