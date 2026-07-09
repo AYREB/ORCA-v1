@@ -10,7 +10,8 @@ import {
   Sliders,
   Wallet,
   Sigma,
-  CandlestickChart
+  CandlestickChart,
+  Sparkles
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ const navItems = [
 ];
 
 const bottomItems = [
+  { icon: Sparkles, label: "Plans", path: "/dashboard/plans" },
   { icon: Settings, label: "Settings", path: "/dashboard/settings" },
   { icon: HelpCircle, label: "Help", path: "/dashboard/help" },
 ];
@@ -103,7 +105,14 @@ const DashboardSidebar = ({ isCollapsed, onToggle }: DashboardSidebarProps) => {
                 {(user.name || user.email || "?").charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{user.name || "Trader"}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="truncate text-sm font-medium">{user.name || "Trader"}</p>
+                  {user.plan && (
+                    <span className="shrink-0 rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide text-primary">
+                      {user.plan.label}
+                    </span>
+                  )}
+                </div>
                 <p className="truncate text-xs text-muted-foreground">{user.email}</p>
               </div>
             </div>

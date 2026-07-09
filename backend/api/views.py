@@ -55,6 +55,9 @@ from .indicator_sandbox import (
     validate_parameters,
 )
 from .models import BacktestRun, CustomIndicator, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from . import entitlements
+from .entitlements import PlanLimitError
+from .plans import PLANS
 from core.LLM.orca_llm import LLMUnavailableError, parse_strategy, parse_strategy_with_context
 
 LLM_UNAVAILABLE_MESSAGE = (
@@ -248,6 +251,9 @@ def user_payload(user) -> dict[str, Any]:
 
 
 def error_response(exc: Exception) -> JsonResponse:
+    if isinstance(exc, PlanLimitError):
+        return JsonResponse(exc.to_dict(), status=exc.status_code)
+
     if isinstance(exc, APIError):
         return json_error(exc.message, status=exc.status_code)
 
@@ -736,6 +742,8 @@ def serialize_backtest_run(run: BacktestRun):
 @token_required
 @rate_limit("assistant")
 def strategy_assistant_chat(request):
+    user = get_authenticated_user(request)
+    entitlements.check_quota(user, "ai")
     payload = parse_body(request)
     messages = normalize_assistant_messages(payload.get("messages"))
     strategy_context = normalize_strategy_context(payload.get("strategy_context"))
@@ -745,6 +753,7 @@ def strategy_assistant_chat(request):
     except AssistantError as exc:
         raise APIError(exc.message, status_code=exc.status_code)
 
+    entitlements.record_usage(user, "ai")
     return no_store(JsonResponse(response))
 
 
@@ -935,7 +944,74 @@ def me(request):
             raise APIError("Name cannot be empty.")
         user.first_name = name
         user.save(update_fields=["first_name"])
-    return no_store(JsonResponse(user_payload(user)))
+    payload = user_payload(user)
+    payload["plan"] = entitlements.plan_summary(user)
+    return no_store(JsonResponse(payload))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def plan_view(request):
+    """The signed-in user's plan, limits, and month-to-date usage."""
+    user = get_authenticated_user(request)
+    return no_store(JsonResponse(entitlements.plan_summary(user)))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@rate_limit("general")
+def plans_public(request):
+    """The full pricing table for the Plans page (no auth required)."""
+    return JsonResponse({"plans": entitlements.all_plans_public()})
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("general")
+def switch_plan(request):
+    """Change a user's plan.
+
+    No paywall yet: users self-select their own plan freely (PLAN_SELF_SERVICE,
+    default True). When Stripe goes live, set PLAN_SELF_SERVICE=False so plan
+    changes only come from checkout/webhooks; staff can always switch.
+    Targeting another user by email stays staff-only.
+    Body: {"plan": "free|plus|pro", "email": "<optional target user>"}.
+    """
+    actor = get_authenticated_user(request)
+    body = parse_body(request)
+    raw_plan = str(body.get("plan") or "").strip().lower()
+    if raw_plan not in PLANS:
+        raise APIError("Invalid plan. Choose free, plus, or pro.")
+
+    target = actor
+    email = str(body.get("email") or "").strip()
+    if email:
+        User = get_user_model()
+        candidate = User.objects.filter(email__iexact=email).first()
+        if not candidate:
+            raise APIError("No user with that email.", status_code=404)
+        if candidate.id != actor.id and not getattr(actor, "is_staff", False):
+            raise APIError("Only staff can change another user's plan.", status_code=403)
+        target = candidate
+
+    self_service = bool(getattr(settings, "PLAN_SELF_SERVICE", True))
+    if target.id == actor.id and not self_service and not getattr(actor, "is_staff", False):
+        raise APIError("Plan changes are handled through checkout.", status_code=403)
+
+    profile = entitlements.get_profile(target)
+    profile.plan = raw_plan
+    profile.save(update_fields=["plan", "updated_at"])
+    return no_store(JsonResponse({
+        "email": target.email,
+        "plan": profile.plan,
+        "summary": entitlements.plan_summary(target),
+    }))
 
 
 @csrf_exempt
@@ -1113,6 +1189,8 @@ def strategies(request):
     if Strategy.objects.filter(user=user, name__iexact=name).exists():
         raise APIError("Strategy name already exists for this user.")
 
+    entitlements.enforce_count_cap(user, "strategies", Strategy.objects.filter(user=user).count())
+
     strategy = Strategy.objects.create(
         user=user,
         name=name,
@@ -1259,6 +1337,8 @@ def custom_indicators(request):
     if CustomIndicator.objects.filter(user=user, name__iexact=name).exists():
         raise APIError("An indicator with that name already exists.")
 
+    entitlements.enforce_count_cap(user, "custom_indicators", CustomIndicator.objects.filter(user=user).count())
+
     test_result = run_indicator_test(code, parameters)
     if not test_result.get("passed"):
         return JsonResponse(
@@ -1381,6 +1461,8 @@ def custom_indicator_guide(request):
 @token_required
 @rate_limit("assistant")
 def indicator_assistant_chat(request):
+    user = get_authenticated_user(request)
+    entitlements.check_quota(user, "ai")
     payload = parse_body(request)
     messages = normalize_assistant_messages(payload.get("messages"))
     indicator_context = normalize_indicator_context(payload.get("indicator_context"))
@@ -1391,6 +1473,7 @@ def indicator_assistant_chat(request):
     except AssistantError as exc:
         raise APIError(exc.message, status_code=exc.status_code)
 
+    entitlements.record_usage(user, "ai")
     return no_store(JsonResponse(response))
 
 
@@ -1402,6 +1485,7 @@ def indicator_assistant_chat(request):
 @rate_limit("backtest_daily")
 def backtestDSLText(request):
     user = get_authenticated_user(request)
+    entitlements.check_quota(user, "backtest")
     body = parse_body(request)
     dsl = validate_dsl_text(body.get("dsl_text", ""), field_name="dsl_text")
     initial_balance = parse_initial_balance(body.get("initial_balance", DEFAULT_INITIAL_BALANCE))
@@ -1419,6 +1503,7 @@ def backtestDSLText(request):
 
     result = dslTextToJsonBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
+    entitlements.record_usage(user, "backtest")
     if strategy:
         strategy.last_result = result
         strategy.dsl_text = dsl or strategy.dsl_text
@@ -1435,6 +1520,7 @@ def backtestDSLText(request):
 @rate_limit("backtest_daily")
 def backtestDSLJSON(request):
     user = get_authenticated_user(request)
+    entitlements.check_quota(user, "backtest")
     body = parse_body(request)
     dsl = validate_dict_payload(body.get("dsl_json", {}), "dsl_json")
     initial_balance = parse_initial_balance(body.get("initial_balance", DEFAULT_INITIAL_BALANCE))
@@ -1519,6 +1605,7 @@ def backtestDSLJSON(request):
         }, status=500)
 
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
+    entitlements.record_usage(user, "backtest")
 
     if strategy:
         strategy.last_result = result
@@ -1550,7 +1637,10 @@ def dslParameterOptimiser(request):
     total_runs = 1
     for vals in param_grid.values():
         total_runs *= len(vals)
-    enforce_optimize_intensity(total_runs)
+    entitlements.enforce_optimizer_method(user, "grid")
+    entitlements.check_quota(user, "optimize")
+    entitlements.enforce_optimize_intensity(user, total_runs)
+    entitlements.record_usage(user, "optimize")
 
     if async_mode:
         cleanup_jobs(optimizer_jobs)
@@ -1629,7 +1719,10 @@ def dslGeneticOptimiser(request):
     except (TypeError, ValueError):
         raise APIError("ga_settings population and generations must be integers.")
     total_runs = max(1, population) * max(1, generations)
-    enforce_optimize_intensity(total_runs)
+    entitlements.enforce_optimizer_method(user, "genetic")
+    entitlements.check_quota(user, "optimize")
+    entitlements.enforce_optimize_intensity(user, total_runs)
+    entitlements.record_usage(user, "optimize")
 
     if async_mode:
         cleanup_jobs(genetic_jobs)
@@ -1731,7 +1824,10 @@ def dslOptimiser(request):
 
     # Size the search up front and cap it (applies to both sync and async paths).
     total_runs = estimate_total_runs(method, opt_settings)
-    enforce_optimize_intensity(total_runs)
+    entitlements.enforce_optimizer_method(user, "meta")
+    entitlements.check_quota(user, "optimize")
+    entitlements.enforce_optimize_intensity(user, total_runs)
+    entitlements.record_usage(user, "optimize")
 
     if async_mode:
         cleanup_jobs(optimiser_jobs)
@@ -1804,6 +1900,8 @@ def strategy_to_dsl(request):
     if not message:
         raise APIError("message is required")
 
+    entitlements.check_quota(user, "ai")
+
     # 1. Call LLM parser
     try:
         result = parse_strategy(message)
@@ -1819,6 +1917,8 @@ def strategy_to_dsl(request):
             "issues": result.get("issues", []),
             "raw_model_output": result.get("raw_output", "")
         }, status=400)
+
+    entitlements.record_usage(user, "ai")
 
     # 3. Optional: immediately run backtest if requested
     run_backtest = body.get("run_backtest", False)
@@ -2088,6 +2188,9 @@ def strategy_chat(request):
     # ---- Get user constraints ----
     constraints = get_user_constraints(user)
 
+    # ---- Plan quota (only the real model call is metered, not clarify turns) ----
+    entitlements.check_quota(user, "ai")
+
     # ---- Try to parse with full context ----
     try:
         strategy, errors, raw_output = parse_strategy_with_context(
@@ -2098,6 +2201,8 @@ def strategy_chat(request):
     except LLMUnavailableError as e:
         logger.warning(f"LLM unavailable for strategy_chat: {e}")
         return JsonResponse({"success": False, "error": LLM_UNAVAILABLE_MESSAGE}, status=503)
+
+    entitlements.record_usage(user, "ai")
 
     # ---- Check for invalid timeframe in errors ----
     timeframe_errors = [e for e in errors if "Invalid timeframe" in e]
@@ -2497,6 +2602,7 @@ def paper_accounts(request):
         raise APIError("accounts must be a list.")
     if len(accounts) > MAX_PAPER_ACCOUNTS:
         raise APIError(f"Too many paper accounts (max {MAX_PAPER_ACCOUNTS}).")
+    entitlements.enforce_total_count(user, "paper_accounts", len(accounts))
     if len(json.dumps(accounts)) > MAX_PAPER_ACCOUNTS_BYTES:
         raise APIError("Paper account data is too large to save.")
 

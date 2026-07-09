@@ -22,7 +22,9 @@ import { AuthProvider } from "./context/AuthContext";
 import { SettingsProvider } from "./hooks/useSettings";
 import { RegistryProvider } from "@/context/RegistryContext";
 import Settings from "./pages/Settings";
+import Plans from "./pages/Plans";
 import ResetPassword from "./pages/ResetPassword";
+import PlanLimitDialog from "./components/plan/PlanLimitDialog";
 
 const queryClient = new QueryClient();
 
@@ -36,6 +38,7 @@ const App = () => (
               <Toaster />
               <Sonner />
               <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                <PlanLimitDialog />
                 <Routes>
                   <Route path="/" element={<Index />} />
                   <Route path="/reset-password" element={<ResetPassword />} />
@@ -134,6 +137,14 @@ const App = () => (
                     element={
                       <ProtectedRoute>
                         <Settings />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/plans"
+                    element={
+                      <ProtectedRoute>
+                        <Plans />
                       </ProtectedRoute>
                     }
                   />

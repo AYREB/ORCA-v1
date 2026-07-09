@@ -388,11 +388,44 @@ export interface IndicatorAssistantChatResponse {
   mode?: IndicatorAssistantMode;
 }
 
+export type PlanSlug = 'free' | 'plus' | 'pro';
+
+export interface PlanLimits {
+  monthly: Record<string, number | null>;
+  caps: Record<string, number | null>;
+  optimizer_methods: string[];
+  optimize_intensity: number | null;
+  timeframes: string[] | '*';
+}
+
+/** The signed-in user's plan + month-to-date usage (from /api/plan/). */
+export interface PlanSummary {
+  plan: PlanSlug;
+  label: string;
+  price_usd: number;
+  period: string;
+  limits: PlanLimits;
+  usage: Record<string, number>;
+}
+
+/** One row of the public pricing table (from /api/plans/). */
+export interface PublicPlan {
+  plan: PlanSlug;
+  label: string;
+  price_usd: number;
+  monthly: Record<string, number | null>;
+  caps: Record<string, number | null>;
+  optimizer_methods: string[];
+  optimize_intensity: number | null;
+  timeframes: string[] | '*';
+}
+
 export interface AuthUser {
   id: number;
   email: string;
   name?: string;
   date_joined?: string;
+  plan?: PlanSummary;
 }
 
 export interface AuthResponse {
@@ -443,6 +476,8 @@ export type StrategyChatResponse =
 export class ApiError extends Error {
   code?: string;
   status?: number;
+  currentPlan?: string;      // plan the user is on when a plan wall is hit
+  upgradeTo?: string | null; // cheapest plan that clears the wall
   constructor(message: string, code?: string, status?: number) {
     super(message);
     this.name = "ApiError";
@@ -454,9 +489,17 @@ export class ApiError extends Error {
 export const isRateLimitError = (err: unknown): boolean =>
   err instanceof ApiError && err.status === 429;
 
+/** A 402 raised when the user hits a subscription-plan limit. */
+export const isPlanLimitError = (err: unknown): boolean =>
+  err instanceof ApiError && (err.status === 402 || err.code === "plan_limit");
+
 class DjangoAPI {
   private baseUrl: string;
   private token: string | null = null;
+  // Global hook fired whenever any request 402s on a plan limit, so a single
+  // <PlanLimitDialog> can surface an upgrade prompt without every call site
+  // needing its own handler. The error is still thrown for local handling.
+  private planLimitHandler: ((err: ApiError) => void) | null = null;
 
   constructor() {
     this.baseUrl = API_BASE_URL;
@@ -464,6 +507,10 @@ class DjangoAPI {
 
   setToken(token: string) {
     this.token = token;
+  }
+
+  setPlanLimitHandler(fn: ((err: ApiError) => void) | null) {
+    this.planLimitHandler = fn;
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -481,6 +528,11 @@ class DjangoAPI {
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const error = new ApiError(errorData.error || `API Error: ${response.statusText}`, errorData.code, response.status);
+      if (errorData.current_plan) error.currentPlan = errorData.current_plan;
+      if (errorData.upgrade_to !== undefined) error.upgradeTo = errorData.upgrade_to;
+      if (response.status === 402 && this.planLimitHandler) {
+        try { this.planLimitHandler(error); } catch { /* never let the prompt swallow the throw */ }
+      }
       throw error;
     }
 
@@ -556,6 +608,24 @@ class DjangoAPI {
 
   async getCurrentUser(): Promise<AuthUser> {
     return this.request<AuthUser>('/me/');
+  }
+
+  // Subscription plan + usage
+  async getPlan(): Promise<PlanSummary> {
+    return this.request<PlanSummary>('/plan/');
+  }
+
+  async getPublicPlans(): Promise<PublicPlan[]> {
+    const data = await this.request<{ plans: PublicPlan[] }>('/plans/');
+    return data.plans;
+  }
+
+  /** Phase-1 manual plan switch (staff-only on the backend). */
+  async switchPlan(plan: PlanSlug, email?: string): Promise<{ plan: PlanSlug; summary: PlanSummary }> {
+    return this.request<{ plan: PlanSlug; summary: PlanSummary }>('/plan/switch/', {
+      method: 'POST',
+      body: JSON.stringify({ plan, ...(email ? { email } : {}) }),
+    });
   }
 
   async updateProfile(name: string): Promise<AuthUser> {
