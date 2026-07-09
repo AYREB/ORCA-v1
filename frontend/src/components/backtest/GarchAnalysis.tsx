@@ -130,13 +130,29 @@ function computeMetrics(trades: TradeEntry[], results: BacktestResult) {
   };
 }
 
+interface RiskAnalysisProps {
+  results?: BacktestResult | null;
+}
+
 const GarchAnalysis = ({ results }: RiskAnalysisProps) => {
   const { settings } = useSettings();
   const chartColors = settings.appearance.chartColors;
 
-  const m = useMemo(() => computeMetrics(results.trades, results), [results]);
+  const trades = Array.isArray(results?.trades) ? results.trades : [];
+  const m = useMemo(
+    () => (results ? computeMetrics(trades, results) : null),
+    [results, trades]
+  );
 
-  const noTrades = results.trades.length === 0;
+  if (!results || m === null) {
+    return (
+      <div className="p-8 text-center text-sm text-muted-foreground border border-dashed border-border rounded-xl">
+        Run this strategy to generate results before viewing risk metrics.
+      </div>
+    );
+  }
+
+  const noTrades = trades.length === 0;
   const tooFewTrades = m.completedTrades < 2;
 
   const fmtRatio = (v: number | null) => (v === null ? "—" : v.toFixed(3));

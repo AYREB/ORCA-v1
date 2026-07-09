@@ -414,7 +414,7 @@ const Strategies = () => {
                 <ChartView results={selectedStrategy.lastResult} />
               </TabsContent>
               <TabsContent value="garch">
-                <GarchAnalysis />
+                <GarchAnalysis results={selectedStrategy.lastResult} />
               </TabsContent>
               <TabsContent value="montecarlo">
                 {selectedTrades.length >= 2 ? (
