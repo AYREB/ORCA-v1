@@ -46,6 +46,14 @@ class PlanLimitError(Exception):
         }
 
 
+def enforcement_enabled() -> bool:
+    """Master switch (settings.PLAN_ENFORCEMENT). False on QA/staging makes
+    every gate below a no-op so testing isn't blocked by Free-tier limits."""
+    from django.conf import settings
+
+    return bool(getattr(settings, "PLAN_ENFORCEMENT", True))
+
+
 def current_period() -> str:
     """Calendar-month key, e.g. '2026-07'. A new month resets every quota."""
     return timezone.now().strftime("%Y-%m")
@@ -73,6 +81,8 @@ def config_of(user) -> dict:
 # Monthly usage quotas
 # --------------------------------------------------------------------------
 def monthly_limit(user, metric: str):
+    if not enforcement_enabled():
+        return plans.UNLIMITED
     return config_of(user).get("monthly", {}).get(metric, plans.UNLIMITED)
 
 
@@ -179,6 +189,8 @@ def record_usage(user, metric: str, n: int = 1) -> None:
 # Absolute count caps (strategies / paper accounts / custom indicators)
 # --------------------------------------------------------------------------
 def count_cap(user, resource: str):
+    if not enforcement_enabled():
+        return plans.UNLIMITED
     return config_of(user).get("caps", {}).get(resource, plans.UNLIMITED)
 
 
@@ -220,6 +232,8 @@ def allowed_optimizer_methods(user) -> list:
 
 
 def enforce_optimizer_method(user, method: str) -> None:
+    if not enforcement_enabled():
+        return
     if method in allowed_optimizer_methods(user):
         return
     plan = plan_of(user)
@@ -241,6 +255,8 @@ def optimize_intensity_cap(user) -> int:
 
 def enforce_optimize_intensity(user, total_runs: int) -> None:
     """Reject an optimization that would run more backtests than the plan allows."""
+    if not enforcement_enabled():
+        return
     cap = optimize_intensity_cap(user)
     if total_runs > cap:
         plan = plan_of(user)
@@ -266,6 +282,25 @@ def plan_summary(user) -> dict:
     period = current_period()
 
     usage = {m: usage_count(user, m) for m in cfg.get("monthly", {})}
+
+    if not enforcement_enabled():
+        # QA/staging: report what is actually enforced (nothing), so the
+        # frontend doesn't render upgrade walls the backend would never raise.
+        pro = plans.PLANS[plans.PRO]
+        return {
+            "plan": plan,
+            "label": cfg["label"],
+            "price_usd": cfg["price_usd"],
+            "period": period,
+            "limits": {
+                "monthly": {m: plans.UNLIMITED for m in cfg.get("monthly", {})},
+                "caps": {c: plans.UNLIMITED for c in cfg.get("caps", {})},
+                "optimizer_methods": pro["optimizer_methods"],
+                "optimize_intensity": pro["optimize_intensity"],
+                "timeframes": "*",
+            },
+            "usage": usage,
+        }
 
     return {
         "plan": plan,

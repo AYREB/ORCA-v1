@@ -119,6 +119,9 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
   });
 
   const [tickers, setTickers] = useState<string[]>(["AAPL"]);
+  // Watch-only symbols: their data is loaded so conditions can reference them
+  // (e.g. buy AAPL when SPX drops), but they are never traded.
+  const [signalTickers, setSignalTickers] = useState<string[]>([]);
   const [executionTF, setExecutionTF] = useState(btDefaults.timeframe);
   const [dateStart, setDateStart] = useState("2025-01-01");
   const [dateEnd, setDateEnd] = useState("2026-01-01");
@@ -182,14 +185,14 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
 
   useEffect(() => {
     const valid = availableTimeframesFor(
-      tickers.filter(Boolean),
+      [...tickers, ...signalTickers].filter(Boolean),
       registryTickers,
       registryTimeframes,
     );
     if (valid.length > 0 && !valid.includes(executionTF)) {
       setExecutionTF(valid[0]);
     }
-  }, [tickers, registryTickers, registryTimeframes, executionTF]);
+  }, [tickers, signalTickers, registryTickers, registryTimeframes, executionTF]);
 
   useEffect(() => {
     const selectedTickers = tickers.map((ticker) => ticker.trim()).filter(Boolean);
@@ -355,6 +358,9 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
         if (Array.isArray(sideData.context.tickers) && sideData.context.tickers.length > 0) {
           setTickers(sideData.context.tickers);
         }
+        setSignalTickers(
+          Array.isArray(sideData.context.signal_tickers) ? sideData.context.signal_tickers : []
+        );
         if (sideData.context.execution_timeframe) {
           setExecutionTF(sideData.context.execution_timeframe);
         }
@@ -410,6 +416,17 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
     updated[index] = value.toUpperCase();
     setTickers(updated);
   };
+
+  const addSignalTicker = () => setSignalTickers([...signalTickers, ""]);
+  const removeSignalTicker = (index: number) => setSignalTickers(signalTickers.filter((_, i) => i !== index));
+  const updateSignalTicker = (index: number, value: string) => {
+    const updated = [...signalTickers];
+    updated[index] = value.toUpperCase();
+    setSignalTickers(updated);
+  };
+
+  // Every symbol a condition may reference (traded + watch-only), deduped.
+  const conditionTickerOptions = [...new Set([...tickers, ...signalTickers].map((t) => t.trim()).filter(Boolean))];
 
   const updateArgument = (block: "OPEN" | "CLOSE", arg: string, value: any) => {
     setBlocks((prev) => ({
@@ -496,10 +513,15 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
       return { OR: orGroups.map(buildGroup) };
     };
 
+    const cleanSignalTickers = signalTickers
+      .map((t) => t.trim())
+      .filter((t) => t && !tickers.includes(t));
+
     const dsl: any = {
       [side]: {
         context: {
           tickers: tickers.filter(Boolean),
+          ...(cleanSignalTickers.length > 0 ? { signal_tickers: cleanSignalTickers } : {}),
           execution_timeframe: executionTF,
           dateframe: { start: dateStart, end: dateEnd },
         },
@@ -558,7 +580,7 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
     syncedDslRef.current = key;
     onDslChange(dsl, JSON.stringify(dsl, null, 2));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conditionGroups, blocks, tickers, executionTF, dateStart, dateEnd, side, takeProfitPercent, stopLossPercent, feeMode, feeValue, feeFixed, registry]);
+  }, [conditionGroups, blocks, tickers, signalTickers, executionTF, dateStart, dateEnd, side, takeProfitPercent, stopLossPercent, feeMode, feeValue, feeFixed, registry]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -879,8 +901,9 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
                     conditionGroup={conditionGroups.OPEN}
                     setConditionGroup={(group) => setConditionGroups((prev) => ({ ...prev, OPEN: group }))}
                     registry={registry}
-                    availableTimeframes={availableTimeframesFor(tickers.filter(Boolean), registryTickers, registryTimeframes)}
+                    availableTimeframes={availableTimeframesFor(conditionTickerOptions, registryTickers, registryTimeframes)}
                     executionTimeframe={executionTF}
+                    tickerOptions={conditionTickerOptions}
                   />
                   <div className="space-y-3 pt-3 border-t border-border/30">
                     <Label className="text-xs uppercase tracking-wider text-muted-foreground">Risk Management</Label>
@@ -1067,8 +1090,9 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
                     conditionGroup={conditionGroups.CLOSE}
                     setConditionGroup={(group) => setConditionGroups((prev) => ({ ...prev, CLOSE: group }))}
                     registry={registry}
-                    availableTimeframes={availableTimeframesFor(tickers.filter(Boolean), registryTickers, registryTimeframes)}
+                    availableTimeframes={availableTimeframesFor(conditionTickerOptions, registryTickers, registryTimeframes)}
                     executionTimeframe={executionTF}
+                    tickerOptions={conditionTickerOptions}
                   />
                   {Object.keys(allowedArgs.CLOSE || {}).length > 0 && (
                     <div className="space-y-3 pt-3 border-t border-border/30">
@@ -1145,6 +1169,61 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
                       <p className="self-center text-xs text-muted-foreground">Max 5 tickers</p>
                     )}
                   </div>
+                </div>
+
+                <div className="space-y-2 pt-3 border-t border-border/30">
+                  <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                    Watch-only Tickers
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-[300px]">
+                          <p className="text-xs">
+                            Symbols your conditions can reference without trading them — e.g. buy AAPL
+                            when SPY drops 5%. Set the symbol on a condition's indicator via its
+                            "ticker" option in steps 3–4. Watch-only tickers are never bought or sold.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {signalTickers.map((ticker, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
+                        <TickerCombobox
+                          value={ticker}
+                          onChange={(v) => updateSignalTicker(i, v)}
+                          exclude={[...tickers, ...signalTickers.filter((_, j) => j !== i)]}
+                          className="w-44"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeSignalTicker(i)}
+                          className="h-9 w-9 hover:bg-destructive/20 hover:text-destructive"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    {signalTickers.length < 3 ? (
+                      <Button type="button" variant="outline" size="sm" onClick={addSignalTicker} className="h-9 gap-1">
+                        <Plus className="h-4 w-4" />
+                        Add watch-only
+                      </Button>
+                    ) : (
+                      <p className="self-center text-xs text-muted-foreground">Max 3 watch-only tickers</p>
+                    )}
+                  </div>
+                  {signalTickers.filter(Boolean).length > 0 && (
+                    <p className="text-[11px] text-muted-foreground/70 leading-snug">
+                      These symbols are only observed. Point a condition at one via the indicator's
+                      "ticker" option in the Open/Close steps.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1268,6 +1347,8 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
                 <p className="text-xs text-muted-foreground mt-1">
                   {side} • {conditionGroups.OPEN?.conditions.length || 0} open conditions •{" "}
                   {conditionGroups.CLOSE?.conditions.length || 0} close conditions • {tickers.filter(Boolean).join(", ")}
+                  {signalTickers.filter(Boolean).length > 0 &&
+                    ` • watching ${signalTickers.filter(Boolean).join(", ")}`}
                 </p>
               </div>
             </motion.div>

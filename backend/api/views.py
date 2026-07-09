@@ -36,6 +36,7 @@ from core.analysis.parameter_optimiser import (
 )
 from core.main import dslJSONBacktest, dslTextToJsonBacktest, BacktestError, dataframe_to_response_records
 from core.parsing.extractingTickers import extract_tickers as _extract_tickers
+from core.parsing.extractingTickers import extract_signal_tickers as _extract_signal_tickers
 from core.data_pulling.datapull import get_data_with_indicator
 from .assistant import _market_csv_path, _load_market_csv
 from .assistant import (
@@ -1582,10 +1583,18 @@ def backtestDSLJSON(request):
 
     # Guard: cap tickers per request to prevent excessive data fetching
     MAX_TICKERS_PER_BACKTEST = 5
+    MAX_SIGNAL_TICKERS_PER_BACKTEST = 3
     _tickers = _extract_tickers(dsl)
     if len(_tickers) > MAX_TICKERS_PER_BACKTEST:
         return JsonResponse({
             "error": f"Too many tickers. Maximum {MAX_TICKERS_PER_BACKTEST} tickers per backtest.",
+            "code": "too_many_tickers",
+            "success": False,
+        }, status=400)
+    _signal_tickers = _extract_signal_tickers(dsl)
+    if len(_signal_tickers) > MAX_SIGNAL_TICKERS_PER_BACKTEST:
+        return JsonResponse({
+            "error": f"Too many watch-only tickers. Maximum {MAX_SIGNAL_TICKERS_PER_BACKTEST} per backtest.",
             "code": "too_many_tickers",
             "success": False,
         }, status=400)

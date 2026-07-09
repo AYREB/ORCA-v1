@@ -49,32 +49,67 @@ def _default_tf(allowed_timeframes):
     return allowed_timeframes[0] if allowed_timeframes else "1h"
 
 
-def _eval_price(merged_args, offset, current_ticker, context_index, data_dict, execution_tf):
+def _cross_ticker_index(df, row, context_index, is_cross_ticker):
+    """
+    Positional index into `df` for the decision bar.
+
+    Same ticker: `context_index` already points at the row the main loop is on.
+    Cross ticker (condition references another symbol via `ticker=`): the two
+    dataframes can have different rows (holidays, listing dates, missing bars),
+    so positional reuse would read an unrelated date — align by timestamp
+    instead: the referenced symbol's latest bar at or before this row's time.
+    Returns None if no such bar exists.
+    """
+    if not is_cross_ticker:
+        return context_index
+    try:
+        idx = df.index.asof(row.name)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(idx):
+        return None
+    loc = df.index.get_loc(idx)
+    if isinstance(loc, slice):
+        loc = loc.stop - 1
+    return int(loc)
+
+
+def _eval_price(merged_args, offset, current_ticker, context_index, data_dict, execution_tf,
+                row=None, is_cross_ticker=False):
     if current_ticker not in data_dict or execution_tf not in data_dict[current_ticker]:
+        return None, None
+    df = data_dict[current_ticker][execution_tf]
+    i = _cross_ticker_index(df, row, context_index, is_cross_ticker)
+    if i is None:
         return None, None
     try:
         val = indicatorCalculators.get_price(
-            data_dict[current_ticker][execution_tf],
+            df,
             field=merged_args.get("OHLC", "close"),
             offset=offset,
-            context={"i": context_index}
+            context={"i": i}
         )
         return val, None
     except Exception:
         return None, None
 
 
-def _eval_volume(offset, current_ticker, context_index, data_dict, execution_tf):
+def _eval_volume(offset, current_ticker, context_index, data_dict, execution_tf,
+                 row=None, is_cross_ticker=False):
     # Always evaluated against execution_tf: context_index is a positional
     # index into the execution-timeframe dataframe, so indexing any other
     # timeframe's dataframe with it would read an unrelated bar.
     if current_ticker not in data_dict or execution_tf not in data_dict[current_ticker]:
         return None, None
+    df = data_dict[current_ticker][execution_tf]
+    i = _cross_ticker_index(df, row, context_index, is_cross_ticker)
+    if i is None:
+        return None, None
     try:
         val = indicatorCalculators.get_volume(
-            data_dict[current_ticker][execution_tf],
+            df,
             offset=offset,
-            context={"i": context_index}
+            context={"i": i}
         )
         return val, None
     except Exception:
@@ -82,7 +117,7 @@ def _eval_volume(offset, current_ticker, context_index, data_dict, execution_tf)
 
 
 def _eval_custom_indicator(calculate_fn, merged_args, offset, current_ticker, context_index,
-                           data_dict, execution_tf):
+                           data_dict, execution_tf, row=None, is_cross_ticker=False):
     """
     Evaluate a user-authored custom indicator. Mirrors `_eval_price` — always runs
     against `execution_tf` (never `timeframe`) so `context["i"]` aligns positionally
@@ -91,14 +126,18 @@ def _eval_custom_indicator(calculate_fn, merged_args, offset, current_ticker, co
     """
     if current_ticker not in data_dict or execution_tf not in data_dict[current_ticker]:
         return None, None
+    df = data_dict[current_ticker][execution_tf]
+    base_index = _cross_ticker_index(df, row, context_index, is_cross_ticker)
+    if base_index is None:
+        return None, None
     try:
-        i = context_index - int(offset or 0)
+        i = base_index - int(offset or 0)
     except (TypeError, ValueError):
         return None, None
     if i < 0:
         return None, None
     try:
-        value = calculate_fn(data_dict[current_ticker][execution_tf], {"i": i}, **merged_args)
+        value = calculate_fn(df, {"i": i}, **merged_args)
     except Exception:
         return None, None
 
@@ -157,7 +196,16 @@ def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
             else:
                 raise TypeError(f"Indicator args for '{func_name}' must be a dict, got {type(func_args)}")
 
-        current_ticker = func_args.pop("ticker", ticker)
+        # Copy before popping: `func_args` IS the DSL node's arg dict, and the
+        # main loop re-evaluates the same node on every bar — popping in place
+        # would strip `ticker` after the first evaluation and silently retarget
+        # the condition at the traded symbol for the rest of the backtest.
+        func_args = dict(func_args)
+        current_ticker = func_args.pop("ticker", ticker) or ticker
+        # Condition targets a different symbol than the one being traded
+        # (e.g. PRICE(ticker=UKX) while trading SPX) — positional row indices
+        # can't be reused across dataframes, so lookups align by timestamp.
+        is_cross_ticker = ticker is not None and current_ticker != ticker
 
         merged_args = {**_INDICATOR_REGISTRY.get(func_name, {}).get("defaults", {}), **func_args}
         timeframe    = merged_args.pop("timeframe", global_timeframe)
@@ -172,10 +220,12 @@ def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
         upper = func_name.upper()
 
         if upper == "PRICE":
-            return _eval_price(merged_args, offset, current_ticker, context_index, data_dict, execution_tf)
+            return _eval_price(merged_args, offset, current_ticker, context_index, data_dict,
+                               execution_tf, row=row, is_cross_ticker=is_cross_ticker)
 
         if upper == "VOLUME":
-            return _eval_volume(offset, current_ticker, context_index, data_dict, execution_tf)
+            return _eval_volume(offset, current_ticker, context_index, data_dict,
+                                execution_tf, row=row, is_cross_ticker=is_cross_ticker)
 
         # Custom (user-authored) indicators — dispatched by exact-case name, always
         # against execution_tf, using the (data, context, **params) contract. Must
@@ -185,7 +235,8 @@ def eval_operand(op, row, indicator_functions, data_dict, ticker=None,
         if custom_indicator_functions and func_name in custom_indicator_functions:
             return _eval_custom_indicator(
                 custom_indicator_functions[func_name], merged_args, offset,
-                current_ticker, context_index, data_dict, execution_tf
+                current_ticker, context_index, data_dict, execution_tf,
+                row=row, is_cross_ticker=is_cross_ticker
             )
 
         # Remove duplicate timeframe pop that existed in original

@@ -30,6 +30,17 @@ def extract_tickers(parsed_dsl):
     return list(set(context.get("tickers", [])))
 
 
+def extract_signal_tickers(parsed_dsl):
+    """
+    Returns list of signal (watch-only) tickers from strategy context.
+    Signal tickers get market data loaded so conditions can reference them
+    (e.g. PRICE(ticker=UKX)), but the backtester never opens positions on them.
+    """
+    strategy = _get_strategy(parsed_dsl)
+    context = strategy.get("context", {})
+    return list(set(context.get("signal_tickers", [])))
+
+
 def extract_execution_timeframe(parsed_dsl):
     """
     Returns execution timeframe (string).

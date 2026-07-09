@@ -401,6 +401,7 @@ def parse_dsl(dsl_text):
 
     # --- SAFE GLOBAL DEFAULTS ---
     global_tickers = []
+    global_signal_tickers = []
     global_execution_tf = []
     global_data_tfs = []
     global_dateframe = {"start": None, "end": None}
@@ -416,6 +417,15 @@ def parse_dsl(dsl_text):
                 ticker_text = ticker_text[1:-1].strip()
 
             global_tickers = [
+                t.strip() for t in re.split(r"[,\n]+", ticker_text) if t.strip()
+            ]
+
+        elif cmd == "SIGNAL_TICKER":
+            ticker_text = body.strip()
+            if ticker_text.startswith("{") and ticker_text.endswith("}"):
+                ticker_text = ticker_text[1:-1].strip()
+
+            global_signal_tickers = [
                 t.strip() for t in re.split(r"[,\n]+", ticker_text) if t.strip()
             ]
 
@@ -442,12 +452,13 @@ def parse_dsl(dsl_text):
     # --- PARSE MAIN COMMANDS (LONG/SHORT/etc.) ---
     for cmd, body in matches:
         # Skip top-level context declarations
-        if cmd in ("TICKER", "EXECUTION_TIMEFRAME", "DATA_TIMEFRAMES", "DATEFRAME"):
+        if cmd in ("TICKER", "SIGNAL_TICKER", "EXECUTION_TIMEFRAME", "DATA_TIMEFRAMES", "DATEFRAME"):
             continue
 
         subdict = {}
         command_context = {
             "tickers": [],
+            "signal_tickers": [],
             "execution_timeframe": [],
             "data_timeframes": [],
             "dateframe": dict(global_dateframe),
@@ -463,6 +474,10 @@ def parse_dsl(dsl_text):
             if name == "TICKER":
                 tickers = [x.strip() for x in text.split(",") if x.strip()]
                 command_context["tickers"].extend(tickers)
+
+            elif name == "SIGNAL_TICKER":
+                tickers = [x.strip() for x in text.split(",") if x.strip()]
+                command_context["signal_tickers"].extend(tickers)
 
             elif name == "EXECUTION_TIMEFRAME":
                 timeframes = [
@@ -490,7 +505,7 @@ def parse_dsl(dsl_text):
             name = block_name.strip()
             text = content.strip()
 
-            if name in ("TICKER", "EXECUTION_TIMEFRAME", "DATA_TIMEFRAMES", "DATEFRAME"):
+            if name in ("TICKER", "SIGNAL_TICKER", "EXECUTION_TIMEFRAME", "DATA_TIMEFRAMES", "DATEFRAME"):
                 continue
 
             nested_blocks = split_top_level_recursive(text)
@@ -515,6 +530,9 @@ def parse_dsl(dsl_text):
         if not command_context["tickers"] and global_tickers:
             command_context["tickers"] = list(global_tickers)
 
+        if not command_context["signal_tickers"] and global_signal_tickers:
+            command_context["signal_tickers"] = list(global_signal_tickers)
+
         if not command_context["execution_timeframe"] and global_execution_tf:
             command_context["execution_timeframe"] = list(global_execution_tf)
 
@@ -530,6 +548,7 @@ def parse_dsl(dsl_text):
 
         final_context = {
             "tickers": command_context["tickers"],
+            "signal_tickers": command_context["signal_tickers"],
             "execution_timeframe": (
                 command_context["execution_timeframe"][0]
                 if command_context["execution_timeframe"]

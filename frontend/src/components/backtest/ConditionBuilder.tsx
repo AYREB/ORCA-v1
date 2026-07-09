@@ -35,9 +35,11 @@ const formatSideLabel = (side: ConditionSide): string => {
     if (side.operation) base = `${base}${side.operation.operator}${side.operation.operand}`;
     return base;
   }
-  const args = Object.entries(side.args).filter(([k]) => k !== "offset");
+  const args = Object.entries(side.args).filter(([k]) => k !== "offset" && k !== "ticker");
   const argVals = args.map(([, v]) => v);
-  let base = argVals.length > 0 ? `${side.func}(${argVals.join(", ")})` : side.func;
+  // A ticker override retargets the indicator at another symbol: "UKX:PRICE(close)"
+  const prefix = side.args.ticker ? `${side.args.ticker}:` : "";
+  let base = argVals.length > 0 ? `${prefix}${side.func}(${argVals.join(", ")})` : `${prefix}${side.func}`;
   if (side.operation) base = `${base}${side.operation.operator}${side.operation.operand}`;
   return base;
 };
@@ -106,6 +108,7 @@ export function MultiConditionBuilder({
   registry,
   availableTimeframes,
   executionTimeframe,
+  tickerOptions,
 }: {
   blockName: string;
   conditionGroup: ConditionGroup;
@@ -113,6 +116,8 @@ export function MultiConditionBuilder({
   registry: Registry;
   availableTimeframes?: string[];
   executionTimeframe?: string;
+  /** Traded + watch-only tickers a condition side may reference via its `ticker` arg. */
+  tickerOptions?: string[];
 }) {
   // "adding" state: null = idle, "left" = picking left side, "right" = picking operator + right side
   const [adding, setAdding] = useState<"left" | "right" | null>(null);
@@ -356,6 +361,7 @@ export function MultiConditionBuilder({
                           isOpen={isOpen}
                           availableTimeframes={availableTimeframes}
                           executionTimeframe={executionTimeframe}
+                          tickerOptions={tickerOptions}
                           onChange={(updated) => updateCondition(id, updated)}
                           onRemove={() => removeCondition(id)}
                         />
@@ -460,6 +466,7 @@ function SortableCondition({
   isOpen,
   availableTimeframes,
   executionTimeframe,
+  tickerOptions,
   onChange,
   onRemove,
 }: {
@@ -470,6 +477,7 @@ function SortableCondition({
   isOpen: boolean;
   availableTimeframes?: string[];
   executionTimeframe?: string;
+  tickerOptions?: string[];
   onChange: (cond: SingleCondition) => void;
   onRemove: () => void;
 }) {
@@ -506,6 +514,7 @@ function SortableCondition({
             isOpen={isOpen}
             availableTimeframes={availableTimeframes}
             executionTimeframe={executionTimeframe}
+            tickerOptions={tickerOptions}
           />
         </div>
       </div>
@@ -522,7 +531,8 @@ function ConditionRow({
   registry,
   isOpen,
   availableTimeframes,
-  executionTimeframe
+  executionTimeframe,
+  tickerOptions,
 }: {
   condition: SingleCondition;
   onChange: (cond: SingleCondition) => void;
@@ -531,6 +541,7 @@ function ConditionRow({
   isOpen: boolean;
   availableTimeframes?: string[];
   executionTimeframe?: string;
+  tickerOptions?: string[];
 }) {
   const [editingSide, setEditingSide] = useState<"left" | "right" | null>(null);
   const [expandedSide, setExpandedSide] = useState<"left" | "right" | null>(null);
@@ -651,6 +662,7 @@ function ConditionRow({
             onClose={() => setExpandedSide(null)}
             registry={registry}
             availableTimeframes={availableTimeframes}
+            tickerOptions={tickerOptions}
           />
         )}
       </AnimatePresence>
@@ -822,6 +834,7 @@ function ExpandedArgsEditor({
   onClose,
   registry,
   availableTimeframes,
+  tickerOptions,
 }: {
   side: ConditionSide;
   onChange: (side: ConditionSide) => void;
@@ -829,14 +842,17 @@ function ExpandedArgsEditor({
   onClose: () => void;
   registry: Registry;
   availableTimeframes?: string[];
+  tickerOptions?: string[];
 }) {
   if (side.type !== "indicator") return null;
 
   const ind = registry.indicators.INDICATORS[side.func];
   const argKeys = ind?.args || [];
   const meta = INDICATOR_META[side.func];
+  // Ticker override only makes sense when there is more than one symbol to pick from.
+  const showTickerSelect = (tickerOptions?.length ?? 0) > 1;
 
-  if (argKeys.length === 0) return null;
+  if (argKeys.length === 0 && !showTickerSelect) return null;
 
   return (
     <motion.div
@@ -850,6 +866,27 @@ function ExpandedArgsEditor({
         <div className="flex items-center gap-2 bg-muted/40 rounded-md px-3 py-2 flex-wrap">
           {meta && (
             <span className="text-[10px] text-muted-foreground mr-1">{meta.description}</span>
+          )}
+          {showTickerSelect && (
+            <div className="flex items-center gap-1" title="Evaluate this indicator on another symbol (e.g. watch an index while trading a stock)">
+              <span className="text-[10px] text-muted-foreground font-medium">ticker:</span>
+              <select
+                value={String(side.args.ticker ?? "")}
+                onChange={(e) => {
+                  const { ticker: _removed, ...rest } = side.args;
+                  onChange({
+                    ...side,
+                    args: e.target.value ? { ...rest, ticker: e.target.value } : rest,
+                  });
+                }}
+                className="h-6 px-1.5 rounded border border-border/50 bg-background text-[11px] font-mono text-foreground outline-none focus:border-primary/50 transition-colors cursor-pointer"
+              >
+                <option value="">traded ticker</option>
+                {tickerOptions!.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
           )}
           {argKeys.map((param: string) => {
             const val = side.args[param];

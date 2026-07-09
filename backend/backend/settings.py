@@ -419,6 +419,12 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 # switch any plan regardless. Flip to True in prod only once Stripe gates it.
 PLAN_SELF_SERVICE = env_bool("PLAN_SELF_SERVICE", DEBUG)
 
+# Plan enforcement master switch. When False, every quota/cap/optimizer gate in
+# api.entitlements is bypassed (everyone is effectively unlimited). Meant for
+# QA/staging so testing isn't blocked by Free-tier limits — NEVER disable in
+# production, or every user gets unlimited Pro for free. Defaults to True.
+PLAN_ENFORCEMENT = env_bool("PLAN_ENFORCEMENT", True)
+
 # Email — defaults to console backend for local dev so no SMTP setup is needed.
 # In production set EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
 # and supply EMAIL_HOST / EMAIL_HOST_USER / EMAIL_HOST_PASSWORD / EMAIL_PORT.

@@ -335,8 +335,13 @@ def _prepare(parsed_dsl, internet=True, csv_folder="Data_CSVs"):
     execution_tf = extract_execution_timeframe(parsed_dsl)
     timeframes = collect_timeframes_from_dsl(parsed_dsl, execution_tf)
  
+    # Include signal (watch-only) tickers so cross-asset conditions can be
+    # evaluated; the backtester itself excludes them from trading.
+    all_tickers = list(ctx["tickers"]) + [
+        t for t in ctx.get("signal_tickers", []) if t not in ctx["tickers"]
+    ]
     data_dict = load_data_dict(
-        ctx["tickers"], timeframes,
+        all_tickers, timeframes,
         ctx["dateframe"]["start"], ctx["dateframe"]["end"],
         indicator_functions, internet, csv_folder
     )

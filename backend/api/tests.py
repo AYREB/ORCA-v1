@@ -421,3 +421,128 @@ class OptimizerParameterGuardTests(TestCase):
         )
 
         self.assertEqual(values, {})
+
+
+class CrossAssetBacktestTests(TestCase):
+    """Signal (watch-only) tickers: conditions may reference another symbol via
+    a `ticker` arg; its data loads but it is never traded."""
+
+    DATES = pd.date_range("2025-01-01", periods=12, freq="D")
+    CLOSES = {
+        # UKX drops >5% on 01-05, rebounds >7% on 01-08
+        "UKX": [100, 100, 100, 100, 94, 94, 94, 101, 101, 101, 101, 101],
+        "SPX": [50 + i for i in range(12)],
+    }
+
+    def _fake_download(self, ticker, start, end, interval):
+        closes = pd.Series(self.CLOSES[ticker], index=self.DATES, dtype=float)
+        return pd.DataFrame(
+            {
+                "Open": closes,
+                "High": closes * 1.001,
+                "Low": closes * 0.999,
+                "Close": closes,
+                "Volume": 1000,
+            },
+            index=self.DATES,
+        )
+
+    @staticmethod
+    def _price(ticker=None, offset=0):
+        arg = {"OHLC": "close", "offset": offset}
+        if ticker:
+            arg["ticker"] = ticker
+        return {"func": "PRICE", "arg": arg}
+
+    def _dsl(self):
+        return {
+            "LONG": {
+                "context": {
+                    "tickers": ["SPX"],
+                    "signal_tickers": ["UKX"],
+                    "execution_timeframe": "1d",
+                    "data_timeframes": ["1d"],
+                    "dateframe": {"start": "2025-01-01", "end": "2025-01-12"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": self._price("UKX"),
+                        "operator": "<",
+                        "right": {"op": "*", "left": self._price("UKX", offset=1), "right": {"value": 0.95}},
+                    },
+                    "ARGUMENTS": {
+                        "initialOpenPositionInvestType": "numberShares",
+                        "initialOpenPositionInvestAmount": 100,
+                    },
+                },
+                "CLOSE": {
+                    "CONDITIONS": {
+                        "left": self._price("UKX"),
+                        "operator": ">",
+                        "right": {"op": "*", "left": self._price("UKX", offset=1), "right": {"value": 1.07}},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+
+    def test_signal_ticker_drives_trades_but_is_never_traded(self):
+        from core.main import main as run_backtest
+
+        with patch("core.main.datapull.get_data_with_indicator", side_effect=self._fake_download):
+            result = run_backtest(self._dsl(), initial_balance=100000)
+
+        trades = result["trades"]
+        self.assertTrue(trades, "cross-asset condition never fired")
+        self.assertTrue(all(t["ticker"] == "SPX" for t in trades), "watch-only ticker was traded")
+
+        buys = [t for t in trades if t["type"] == "BUY"]
+        self.assertEqual(len(buys), 1)
+        self.assertEqual(buys[0]["shares"], 100)
+        self.assertTrue(buys[0]["timestamp"].startswith("2025-01-05"))
+
+        sells = [t for t in trades if t["type"] == "SELL"]
+        self.assertEqual(len(sells), 1)
+        self.assertTrue(sells[0]["timestamp"].startswith("2025-01-08"))
+
+        # Watch-only data is still returned for charting
+        self.assertIn("UKX", result["data"])
+
+    def test_unknown_condition_ticker_raises_friendly_error(self):
+        from core.main import BacktestError, main as run_backtest
+
+        dsl = self._dsl()
+        dsl["LONG"]["context"]["signal_tickers"] = []
+
+        with patch("core.main.datapull.get_data_with_indicator", side_effect=self._fake_download):
+            with self.assertRaises(BacktestError) as ctx:
+                run_backtest(dsl, initial_balance=100000)
+
+        self.assertEqual(ctx.exception.code, "unknown_condition_ticker")
+        self.assertIn("UKX", ctx.exception.message)
+
+    def test_ticker_arg_survives_default_merging(self):
+        from core.main import merge_indicator_defaults
+
+        merged = merge_indicator_defaults(self._dsl())
+        left_args = merged["LONG"]["OPEN"]["CONDITIONS"]["left"]["arg"]
+        self.assertEqual(left_args.get("ticker"), "UKX")
+
+    def test_text_dsl_parses_signal_tickers(self):
+        from core.parsing.parser import parse_dsl
+
+        parsed = parse_dsl(
+            """
+            :TICKER(SPX)
+            :SIGNAL_TICKER(UKX)
+            :EXECUTION_TIMEFRAME(1d)
+            :DATA_TIMEFRAMES(1d)
+            :DATEFRAME(2025-01-01, 2025-06-01)
+            :LONG(
+               OPEN{ CONDITIONS{ RSI() < 30 } }
+               |CLOSE{ CONDITIONS{ RSI() > 70 } }
+            )
+            """
+        )
+        self.assertEqual(parsed["LONG"]["context"]["tickers"], ["SPX"])
+        self.assertEqual(parsed["LONG"]["context"]["signal_tickers"], ["UKX"])

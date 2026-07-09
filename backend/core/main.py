@@ -6,7 +6,7 @@ from datetime import timedelta
 from .data_pulling import datapull
 from .parsing import parser, validateParsedDSL
 from .fetcher_calculators import indicatorEvaluator
-from .parsing.extractingTickers import extract_tickers, extract_execution_timeframe, extract_dateframe, collect_timeframes_from_dsl
+from .parsing.extractingTickers import extract_tickers, extract_signal_tickers, extract_execution_timeframe, extract_dateframe, collect_timeframes_from_dsl
 from .backtesting.backtesterCore import backtester
 from .console_ui.PrintTradeSummary import print_trade_summary
 
@@ -68,6 +68,12 @@ def merge_indicator_defaults(parsed_dsl, registry_path=_INDICATOR_REGISTRY_PATH,
                     arg_names = info.get("args", [])
 
                     final_args = {}
+                    # `ticker` is a cross-cutting arg every indicator accepts (it
+                    # retargets the operand at another loaded symbol) but is not
+                    # declared in any registry entry — carry it through explicitly
+                    # or this rebuild would silently strip it.
+                    if "ticker" in provided:
+                        final_args["ticker"] = provided["ticker"]
                     for name in arg_names:
                         if name in provided:
                             final_args[name] = provided[name]
@@ -198,6 +204,32 @@ def get_max_indicator_period(parsed_dsl) -> int:
     # Multiply by 2 to cover weekends and holidays
     return max_period * 2
 
+def collect_condition_tickers(parsed_dsl) -> set:
+    """
+    Walk the DSL conditions and collect every explicit `ticker` argument used
+    in an indicator call (e.g. PRICE(ticker=UKX)). Used to verify each
+    referenced symbol is actually loaded (traded or watch-only).
+    """
+    referenced = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            arg = node.get("arg")
+            if "func" in node and isinstance(arg, dict) and arg.get("ticker"):
+                referenced.add(str(arg["ticker"]))
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    direction = "LONG" if "LONG" in parsed_dsl else "SHORT"
+    for block in ("OPEN", "CLOSE"):
+        walk(parsed_dsl.get(direction, {}).get(block, {}).get("CONDITIONS", {}))
+
+    return referenced
+
+
 def normalize_datetime_index(df):
     if df is None or df.empty:
         return df
@@ -283,6 +315,22 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
 
     # ---------------- Pull data ----------------
     TICKERS = extract_tickers(parsed_dsl)
+    # Signal tickers are watch-only: data loads so conditions can reference
+    # them, but the backtester never opens positions on them.
+    SIGNAL_TICKERS = [t for t in extract_signal_tickers(parsed_dsl) if t not in TICKERS]
+    ALL_TICKERS = TICKERS + SIGNAL_TICKERS
+
+    # Every ticker referenced inside a condition must be loaded, otherwise the
+    # condition silently evaluates to False on every bar — fail loudly instead.
+    unknown_refs = collect_condition_tickers(parsed_dsl) - set(ALL_TICKERS)
+    if unknown_refs:
+        raise BacktestError(
+            f"Condition references ticker(s) not in this strategy: "
+            f"{', '.join(sorted(unknown_refs))}. Add them as traded or "
+            f"watch-only (signal) tickers.",
+            code="unknown_condition_ticker"
+        )
+
     EXECUTION_TF = extract_execution_timeframe(parsed_dsl)
 
     DATA_TFS = collect_timeframes_from_dsl(
@@ -308,7 +356,7 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
     data_dict = {}
     chart_dict = {}
 
-    for t in TICKERS:
+    for t in ALL_TICKERS:
         data_dict[t] = {}
         chart_dict[t] = {}
 
