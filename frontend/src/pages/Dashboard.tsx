@@ -233,7 +233,7 @@ const Dashboard = () => {
   );
 
   const hasData = !isLoading && (summary?.backtestRunCount ?? 0) > 0;
-  const avgReturn = summary?.totalReturnPct ?? 0;
+  const avgReturn = summary?.avgReturnPct ?? 0;
   const winRate = summary?.winRate ?? 0;
   const firstName = (user?.name || "").trim().split(/\s+/)[0];
 

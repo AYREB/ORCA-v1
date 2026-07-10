@@ -332,6 +332,16 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
         )
 
     EXECUTION_TF = extract_execution_timeframe(parsed_dsl)
+    # The text parser stores execution_timeframe as a LIST (e.g.
+    # ":EXECUTION_TIMEFRAME(1h,4h)"). Downstream code (timeframe collection,
+    # chart_dict keying, final valuation) expects a single string, so take the
+    # first entry — same rule the backtester applies — and write it back so
+    # every consumer of the DSL sees the same normalized value.
+    if isinstance(EXECUTION_TF, list):
+        EXECUTION_TF = EXECUTION_TF[0] if EXECUTION_TF else "1h"
+        for _side in ("LONG", "SHORT"):
+            if _side in parsed_dsl and isinstance(parsed_dsl[_side].get("context"), dict):
+                parsed_dsl[_side]["context"]["execution_timeframe"] = EXECUTION_TF
 
     DATA_TFS = collect_timeframes_from_dsl(
         parsed_dsl,

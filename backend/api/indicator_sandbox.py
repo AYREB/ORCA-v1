@@ -53,6 +53,27 @@ INDICATOR_TEST_WINDOW = 60
 INDICATOR_TEST_MIN_CANDLES = 5
 DEFAULT_SAMPLE_FILENAME = "AAPL_1h.csv"
 
+# Runaway user code can't be force-killed from pure Python, so a timed-out test
+# leaves its daemon thread spinning until the loop exits on its own. Cap how
+# many such abandoned threads may be alive at once per process — beyond this,
+# new test runs are refused instead of letting a hostile user stack up
+# CPU-burning threads (each rate-limited request could otherwise add one).
+MAX_ABANDONED_TEST_THREADS = 8
+_abandoned_test_threads: list[threading.Thread] = []
+_abandoned_lock = threading.Lock()
+
+
+def _live_abandoned_thread_count() -> int:
+    """Prune finished threads and return how many abandoned ones still run."""
+    with _abandoned_lock:
+        _abandoned_test_threads[:] = [t for t in _abandoned_test_threads if t.is_alive()]
+        return len(_abandoned_test_threads)
+
+
+def _register_abandoned_thread(worker: threading.Thread) -> None:
+    with _abandoned_lock:
+        _abandoned_test_threads.append(worker)
+
 _FORBIDDEN_NAMES = {
     "exec", "eval", "compile", "open", "input", "globals", "locals", "vars",
     "getattr", "setattr", "delattr", "hasattr", "__import__", "breakpoint",
@@ -335,6 +356,16 @@ def run_indicator_test(
 
     Returns ``{"passed": bool, "errors": [...], "preview": {"timestamps": [...], "values": [...]} | None}``.
     """
+    if _live_abandoned_thread_count() >= MAX_ABANDONED_TEST_THREADS:
+        return {
+            "passed": False,
+            "errors": [
+                "The indicator tester is busy recovering from previously timed-out runs. "
+                "Please try again in a minute."
+            ],
+            "preview": None,
+        }
+
     try:
         cleaned_params = validate_parameters(parameters)
     except IndicatorValidationError as exc:
@@ -379,6 +410,7 @@ def run_indicator_test(
     worker.join(timeout=timeout)
 
     if worker.is_alive():
+        _register_abandoned_thread(worker)
         return {
             "passed": False,
             "errors": [

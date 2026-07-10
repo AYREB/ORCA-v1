@@ -79,7 +79,9 @@ export function buildDailyEquityCurve(
 export function detectDirection(trades: TradeEntry[]): Map<string, "long" | "short"> {
   const directions = new Map<string, "long" | "short">();
   for (const trade of trades) {
-    if (!directions.has(trade.ticker)) {
+    // Recurring_Entry (DCA add) never opens a position, so it can't define
+    // direction — only the first BUY/SELL does.
+    if (trade.type !== "Recurring_Entry" && !directions.has(trade.ticker)) {
       directions.set(trade.ticker, trade.type === "BUY" ? "long" : "short");
     }
   }
@@ -87,14 +89,19 @@ export function detectDirection(trades: TradeEntry[]): Map<string, "long" | "sho
 }
 /**
  * Check if a trade is an "entry" (opening) trade based on direction.
+ * Recurring_Entry is a DCA add to an open position — always an entry,
+ * regardless of direction.
  */
 export function isEntryTrade(trade: TradeEntry, direction: "long" | "short"): boolean {
+  if (trade.type === "Recurring_Entry") return true;
   return direction === "long" ? trade.type === "BUY" : trade.type === "SELL";
 }
 /**
  * Check if a trade is an "exit" (closing) trade based on direction.
+ * Recurring_Entry adds to a position and is never an exit.
  */
 export function isExitTrade(trade: TradeEntry, direction: "long" | "short"): boolean {
+  if (trade.type === "Recurring_Entry") return false;
   return direction === "long" ? trade.type === "SELL" : trade.type === "BUY";
 }
 

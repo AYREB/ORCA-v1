@@ -628,3 +628,229 @@ class TickerSearchTests(TestCase):
         with patch("api.views.requests.get", side_effect=OSError("down")):
             names = resolve_ticker_names(["ZZZUNKNOWN"])
         self.assertEqual(names["ZZZUNKNOWN"], "ZZZUNKNOWN")
+
+
+class BacktestTextEndpointErrorTests(TestCase):
+    """The text endpoint must map engine failures to friendly 400s (it used to
+    surface them as generic 500s) and share the JSON endpoint's guards."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="text@example.com", email="text@example.com", password="P@ssword123!"
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    def _post(self, dsl_text):
+        return self.client.post(
+            "/api/backtestDSLText/",
+            data=json.dumps({"dsl_text": dsl_text}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    VALID_TEXT = """
+:TICKER(AAPL)
+:EXECUTION_TIMEFRAME(1h)
+:DATEFRAME(2024-01-01, 2024-06-01)
+:LONG(
+   OPEN{
+       CONDITIONS{
+           RSI() < 30
+       }
+   }
+)
+"""
+
+    def test_engine_failure_returns_friendly_400_and_refunds_quota(self):
+        from api import entitlements
+        from core.main import BacktestError
+
+        with patch(
+            "api.views.dslJSONBacktest",
+            side_effect=BacktestError("No market data found for 'AAPL'.", code="no_data"),
+        ):
+            response = self._post(self.VALID_TEXT)
+
+        self.assertEqual(response.status_code, 400)
+        body = response.json()
+        self.assertEqual(body["code"], "no_data")
+        self.assertIn("No market data", body["error"])
+        # The failed run must not be charged against the monthly quota.
+        self.assertEqual(entitlements.usage_count(self.user, "backtest"), 0)
+
+    def test_unparseable_text_returns_400_not_500(self):
+        response = self._post(":DATEFRAME(not-even-close)")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], "dsl_parse_error")
+
+    def test_text_endpoint_enforces_ticker_cap(self):
+        many = ",".join(f"T{i}" for i in range(10))
+        dsl = self.VALID_TEXT.replace(":TICKER(AAPL)", f":TICKER({many})")
+        response = self._post(dsl)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], "too_many_tickers")
+
+
+class StrategyToDslBacktestQuotaTests(TestCase):
+    """strategy_to_dsl's run_backtest flag must be metered like a normal backtest."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="nlp@example.com", email="nlp@example.com", password="P@ssword123!"
+        )
+        self.token = Token.objects.create(user=self.user)
+        self.strategy = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1h",
+                    "dateframe": {"start": "2024-01-01", "end": "2024-06-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 30},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+
+    def _post(self):
+        return self.client.post(
+            "/api/strategy-to-dsl/",
+            data=json.dumps({"message": "buy AAPL when RSI under 30", "run_backtest": True}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    def test_run_backtest_consumes_backtest_quota(self):
+        from api import entitlements
+
+        fake_result = {"cash": 10000, "invested": 0, "total_portfolio": 10000, "pct_change": 0, "trades": [], "data": {}}
+        with patch("api.views.parse_strategy", return_value=self.strategy), patch(
+            "api.views.dslJSONBacktest", return_value=fake_result
+        ):
+            response = self._post()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(entitlements.usage_count(self.user, "backtest"), 1)
+
+    def test_run_backtest_over_quota_returns_plan_limit_not_free_run(self):
+        from api import entitlements
+
+        limit = entitlements.monthly_limit(self.user, "backtest")
+        entitlements.consume_quota(self.user, "backtest", n=limit)
+
+        with patch("api.views.parse_strategy", return_value=self.strategy), patch(
+            "api.views.dslJSONBacktest"
+        ) as engine:
+            response = self._post()
+
+        self.assertEqual(response.status_code, 200)
+        engine.assert_not_called()  # no free ride past the quota
+        body = response.json()
+        self.assertEqual(body["backtest"]["code"], "plan_limit")
+
+
+class OptimizerQuotaRefundTests(TestCase):
+    """A failed optimization must refund the optimize quota."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="opt@example.com", email="opt@example.com", password="P@ssword123!"
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    def test_sync_grid_failure_refunds_optimize_quota(self):
+        from api import entitlements
+
+        dsl = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1h",
+                    "dateframe": {"start": "2024-01-01", "end": "2024-06-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 30},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+        choice = {"LONG.OPEN.CONDITIONS.left.arg.period": {"mode": "manual", "values": [10, 14]}}
+
+        with patch("api.views.optimizer", side_effect=ValueError("all runs failed")):
+            response = self.client.post(
+                "/api/dslParameterOptimiser/",
+                data=json.dumps({"dsl_json": dsl, "parameter_choice": choice}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Token {self.token.key}",
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(entitlements.usage_count(self.user, "optimize"), 0)
+
+
+class SsoAccountManagementTests(TestCase):
+    """Google-SSO users (no usable password) must still be able to delete their
+    account and set a first password."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="sso@example.com", email="sso@example.com", password=None
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    def _post(self, path, payload):
+        return self.client.post(
+            path,
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    def test_me_reports_has_password_false_for_sso(self):
+        response = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["has_password"])
+
+    def test_sso_delete_with_matching_email_succeeds(self):
+        response = self._post("/api/delete-account/", {"confirm_email": "SSO@example.com"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(email="sso@example.com").exists())
+
+    def test_sso_delete_with_wrong_email_fails(self):
+        response = self._post("/api/delete-account/", {"confirm_email": "wrong@example.com"})
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(User.objects.filter(email="sso@example.com").exists())
+
+    def test_password_holder_still_requires_password_to_delete(self):
+        user = User.objects.create_user(
+            username="pw@example.com", email="pw@example.com", password="P@ssword123!"
+        )
+        token = Token.objects.create(user=user)
+        response = self.client.post(
+            "/api/delete-account/",
+            data=json.dumps({"confirm_email": "pw@example.com"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(User.objects.filter(email="pw@example.com").exists())
+
+    def test_sso_can_set_first_password_without_current(self):
+        response = self._post("/api/change-password/", {"new_password": "N3wS3cret!pass"})
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.has_usable_password())
+        self.assertTrue(self.user.check_password("N3wS3cret!pass"))
