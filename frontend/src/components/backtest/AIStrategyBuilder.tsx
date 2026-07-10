@@ -42,6 +42,11 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const lastSentRef = useRef<string>("");
+  // Snapshot of the strategy exactly as the AI produced it (post fee-inject),
+  // plus its chat session — used to report which fields the user corrected
+  // before running (the model-quality ground-truth signal).
+  const originalParsedRef = useRef<Record<string, unknown> | null>(null);
+  const completedSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -129,7 +134,10 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
           { role: "assistant", content: data.question, examples: data.examples },
         ]);
       } else if (data.status === "complete") {
-        setParsedDsl(withDefaultFees(data.dsl_json));
+        const seeded = withDefaultFees(data.dsl_json);
+        originalParsedRef.current = JSON.parse(JSON.stringify(seeded));
+        completedSessionRef.current = data.session_id ?? null;
+        setParsedDsl(seeded);
         setWarnings(data.warnings ?? []);
         setSessionId(null);
         const explanation = data.explanation || "Strategy ready.";
@@ -170,11 +178,37 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
     setInput("");
   };
 
+  // Compare the strategy the AI produced with what the user actually ran.
+  const diffEditedFields = (orig: Record<string, any>, cur: Record<string, any>): string[] => {
+    const edits: string[] = [];
+    const dirOf = (d: Record<string, any>) => ("LONG" in d ? "LONG" : "SHORT");
+    if (dirOf(orig) !== dirOf(cur)) edits.push("direction");
+    const o = orig[dirOf(orig)] ?? {};
+    const c = cur[dirOf(cur)] ?? {};
+    const octx = o.context ?? {}, cctx = c.context ?? {};
+    if (JSON.stringify(octx.tickers) !== JSON.stringify(cctx.tickers)) edits.push("tickers");
+    if (octx.execution_timeframe !== cctx.execution_timeframe) edits.push("timeframe");
+    if (JSON.stringify(octx.dateframe) !== JSON.stringify(cctx.dateframe)) edits.push("dates");
+    const oa = o.OPEN?.ARGUMENTS ?? {}, ca = c.OPEN?.ARGUMENTS ?? {};
+    if (oa.takeProfitPercent !== ca.takeProfitPercent) edits.push("takeProfit");
+    if (oa.stopLossPercent !== ca.stopLossPercent) edits.push("stopLoss");
+    if (oa.fee_mode !== ca.fee_mode || oa.fee_value !== ca.fee_value || (oa.fee_fixed ?? 0) !== (ca.fee_fixed ?? 0)) {
+      edits.push("fees");
+    }
+    return edits;
+  };
+
   const handleRun = async () => {
     if (!parsedDsl) return;
     setIsRunning(true);
     try {
       const result = await api.backtestDSLJSON(parsedDsl);
+      if (completedSessionRef.current && originalParsedRef.current) {
+        api.reportAiParseOutcome(
+          completedSessionRef.current,
+          diffEditedFields(originalParsedRef.current, parsedDsl),
+        );
+      }
       onRunBacktest(result);
       toast.success("Backtest completed");
     } catch (err) {

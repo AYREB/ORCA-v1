@@ -61,8 +61,13 @@ export const useRegistry = () => {
   if (!ctx) throw new Error("useRegistry must be used within RegistryProvider");
   return ctx;
 };
-// Intersection of available timeframes across selected tickers.
-// Unknown tickers are ignored. Returns ordered list using the registry's key order.
+// Timeframes Yahoo Finance can fetch live for any ticker with useful history, so
+// they're always offered — even when a stored ticker's CSVs only cover 4h/1D.
+const YAHOO_TIMEFRAMES = ["1h", "1D"];
+const TIMEFRAME_ORDER = ["1m", "5m", "15m", "1h", "4h", "1D", "1wk", "1mo"];
+
+// Available timeframes across selected tickers: the intersection of their stored
+// timeframes, always widened with the Yahoo-fetchable ones (so 1h is offered).
 export const availableTimeframesFor = (
   selectedTickers: string[],
   tickers: Record<string, { name: string; available_timeframes: string[] }>,
@@ -72,10 +77,15 @@ export const availableTimeframesFor = (
   const known = selectedTickers
     .map((t) => tickers[t]?.available_timeframes)
     .filter((x): x is string[] => Array.isArray(x));
-  if (known.length === 0) return allKeys;
-  const set = known.reduce<Set<string>>(
-    (acc, list) => new Set(list.filter((tf) => acc.has(tf))),
-    new Set(known[0]),
-  );
-  return allKeys.filter((k) => set.has(k));
+  const set: Set<string> =
+    known.length === 0
+      ? new Set(allKeys)
+      : known.reduce<Set<string>>(
+          (acc, list) => new Set(list.filter((tf) => acc.has(tf))),
+          new Set(known[0]),
+        );
+  YAHOO_TIMEFRAMES.forEach((tf) => set.add(tf));
+  const ordered = TIMEFRAME_ORDER.filter((tf) => set.has(tf));
+  const extra = allKeys.filter((k) => set.has(k) && !TIMEFRAME_ORDER.includes(k));
+  return [...ordered, ...extra];
 };

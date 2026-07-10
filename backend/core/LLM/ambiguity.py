@@ -44,6 +44,21 @@ DIRECTION_PATTERNS = [
     r'\b(sell|short|go short|enter short|fade|sell short|dump)\b',
 ]
 
+# Common keyboard typos of direction words (curated: none are real English
+# words that could appear innocently). The model handles these fine — the
+# gate just needs to stop asking "long or short?" before it gets the chance.
+_DIRECTION_TYPOS = {
+    "byu", "buuy", "buyy", "bu", "buh", "bhy",           # buy
+    "slel", "sel", "seell", "selll", "sll",              # sell
+    "lnog", "logn", "lomg", "loong", "lonng",            # long
+    "shrot", "shrt", "shortt", "sohrt", "shor", "shoort",  # short
+    "purchse", "purchace", "purchas",                    # purchase
+}
+
+# "but" is a real word, so it only counts as a "buy" typo when it's directly
+# followed by an asset ("but apple when...") — a conjunction almost never is.
+_BUT_ASSET_RE = re.compile(r"\bbut\s+(\S+)", re.IGNORECASE)
+
 INDICATOR_PATTERNS = [
     r'\b(RSI|MACD|SMA|EMA|bollinger|stochastic|stoch|CCI|OBV|ATR|volume|moving average|MA)\b',
 ]
@@ -66,10 +81,35 @@ VAGUE_TPSL_PHRASES = [
 
 NUMBER_PATTERN = r'\b\d+\.?\d*\s*%?\b'
 
-def has_ticker(text):
+# Uppercase tokens that are trading vocabulary, not ticker symbols.
+_NOT_TICKERS = {
+    "RSI", "MACD", "SMA", "EMA", "BBANDS", "ATR", "STOCH", "CCI", "OBV",
+    "PRICE", "VOLUME", "TP", "SL", "DCA", "AND", "OR", "NOT", "MA", "BB",
+    "USD", "ETF", "AI", "OK", "III", "II", "IV",
+}
+
+_SYMBOL_TOKEN_RE = re.compile(r"\b\^?[A-Z]{2,6}(?:[.\-][A-Z0-9]{1,4})?(?:=X)?\b")
+_FX_PAIR_RE = re.compile(r"\b[a-z]{3}/[a-z]{3}\b")
+
+
+def _has_symbol_like_token(original_text):
+    """Detect symbol-shaped tokens (PLTR, BRK-B, EURUSD=X) in the ORIGINAL
+    (non-lowercased) text — uppercase is the signal, so this must not run on
+    lowered input."""
+    for tok in _SYMBOL_TOKEN_RE.findall(original_text):
+        if tok not in _NOT_TICKERS:
+            return True
+    return False
+
+
+def has_ticker(text, original_text=None):
     for p in TICKER_PATTERNS:
         if re.search(p, text, re.IGNORECASE):
             return True
+    if _FX_PAIR_RE.search(text.lower()):
+        return True
+    if original_text and _has_symbol_like_token(original_text):
+        return True
     return False
 
 def has_timeframe(text):
@@ -78,9 +118,18 @@ def has_timeframe(text):
             return True
     return False
 
-def has_direction(text):
+def has_direction(text, original_text=None):
     for p in DIRECTION_PATTERNS:
         if re.search(p, text, re.IGNORECASE):
+            return True
+    # Typo'd direction words
+    tokens = re.findall(r"[a-z]+", text.lower())
+    if any(t in _DIRECTION_TYPOS for t in tokens):
+        return True
+    # "but <asset>" = typo of "buy <asset>"
+    for m in _BUT_ASSET_RE.finditer(original_text or text):
+        following = (original_text or text)[m.start(1):m.start(1) + 30]
+        if has_ticker(following.lower(), original_text=following):
             return True
     return False
 
@@ -141,16 +190,18 @@ def detect_missing_fields(text, conversation_history=None):
         t["content"] for t in (conversation_history or [])
         if t["role"] == "user"
     )
-    full_context = f"{prior_text} {text}".lower()
+    original_context = f"{prior_text} {text}"
+    full_context = original_context.lower()
 
     missing = []
 
-    # Only ask if NO ticker anywhere in full conversation
-    if not has_ticker(full_context):
+    # Only ask if NO ticker anywhere in full conversation (original-case text
+    # is needed to spot symbol-shaped tokens like PLTR).
+    if not has_ticker(full_context, original_text=original_context):
         missing.append("ticker")
 
     # Only ask if NO direction anywhere in full conversation
-    if not has_direction(full_context):
+    if not has_direction(full_context, original_text=original_context):
         missing.append("direction")
 
     # Only ask if user said something explicitly vague like

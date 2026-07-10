@@ -410,6 +410,21 @@ ORCA_ASSISTANT_MARKET_DATA_DIR = os.getenv(
 ORCA_ASSISTANT_MARKET_DATA_MAX_TICKERS = env_int("ORCA_ASSISTANT_MARKET_DATA_MAX_TICKERS", 3, minimum=1)
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
+# Plan self-service: whether a signed-in user may change their OWN plan freely
+# (no payment). There is no billing integration yet, so leaving this ON in
+# production means anyone can POST /api/plan/switch/ {"plan":"pro"} and unlock
+# unlimited Pro for free. Default to DEBUG so development keeps the frictionless
+# self-select flow while production locks it (non-staff self-switch -> 403,
+# which the frontend surfaces as "Payments are coming soon"). Staff can always
+# switch any plan regardless. Flip to True in prod only once Stripe gates it.
+PLAN_SELF_SERVICE = env_bool("PLAN_SELF_SERVICE", DEBUG)
+
+# Plan enforcement master switch. When False, every quota/cap/optimizer gate in
+# api.entitlements is bypassed (everyone is effectively unlimited). Meant for
+# QA/staging so testing isn't blocked by Free-tier limits — NEVER disable in
+# production, or every user gets unlimited Pro for free. Defaults to True.
+PLAN_ENFORCEMENT = env_bool("PLAN_ENFORCEMENT", True)
+
 # Email — defaults to console backend for local dev so no SMTP setup is needed.
 # In production set EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
 # and supply EMAIL_HOST / EMAIL_HOST_USER / EMAIL_HOST_PASSWORD / EMAIL_PORT.

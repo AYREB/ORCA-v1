@@ -4,6 +4,64 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from . import plans as _plans
+
+
+class UserProfile(models.Model):
+    """Per-user subscription state.
+
+    Phase 1 only reads/writes ``plan`` (switched manually or via the staff
+    endpoint). The Stripe fields are added now so Phase 2 (Checkout + webhooks)
+    is a drop-in with no migration churn.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="profile",
+    )
+    plan = models.CharField(
+        max_length=20,
+        choices=_plans.PLAN_CHOICES,
+        default=_plans.DEFAULT_PLAN,
+    )
+    # --- Stripe (Phase 2) -------------------------------------------------
+    stripe_customer_id = models.CharField(max_length=255, blank=True, default="")
+    stripe_subscription_id = models.CharField(max_length=255, blank=True, default="")
+    plan_status = models.CharField(max_length=32, blank=True, default="")  # active / past_due / canceled
+    current_period_end = models.DateTimeField(null=True, blank=True)
+    # ---------------------------------------------------------------------
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"UserProfile({self.user_id}, plan={self.plan})"
+
+
+class UsageCounter(models.Model):
+    """Monthly-resetting usage tally for a metered metric.
+
+    One row per (user, metric, period) where ``period`` is a "YYYY-MM" calendar
+    month. A fresh month = a fresh row = the quota resets. Phase 2 can key the
+    period on the Stripe billing anniversary instead if desired.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="usage_counters",
+    )
+    metric = models.CharField(max_length=32)   # "ai" | "backtest" | "optimize"
+    period = models.CharField(max_length=7)    # "YYYY-MM"
+    count = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user", "metric", "period")
+        indexes = [models.Index(fields=["user", "metric", "period"])]
+
+    def __str__(self):
+        return f"UsageCounter({self.user_id}, {self.metric}, {self.period}={self.count})"
+
+
 class Strategy(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="strategies")
     name = models.CharField(max_length=255)
@@ -142,7 +200,15 @@ class StrategyQueryLog(models.Model):
     
     # Track which field was missing if clarification needed
     missing_field = models.CharField(max_length=50, null=True, blank=True)
-    
+
+    # ---- Post-parse outcome (the "did the user agree with the parse?" signal) ----
+    # None = user never ran it (abandoned); True = ran the backtest.
+    ran_backtest = models.BooleanField(null=True, blank=True)
+    # Which fields the user corrected on the review card before running
+    # (e.g. ["timeframe", "stopLoss"]). Empty list + ran_backtest=True is the
+    # strongest "the model got it right" signal available.
+    edited_fields = models.JSONField(default=list, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

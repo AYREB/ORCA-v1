@@ -108,6 +108,119 @@ class SecurityBehaviorTests(TestCase):
         self.assertEqual(second.status_code, 429)
 
 
+class EntitlementQuotaTests(TestCase):
+    """Atomic monthly-quota enforcement (the reserve/refund gate)."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="quota@example.com",
+            email="quota@example.com",
+            password="P@ssword123!",
+        )
+
+    def test_consume_quota_enforces_limit_atomically(self):
+        from api import entitlements
+        from api.entitlements import PlanLimitError
+        from api.models import UsageCounter
+
+        # Free plan allows 3 AI generations/month. Reserve exactly the limit.
+        for _ in range(3):
+            entitlements.consume_quota(self.user, "ai")
+
+        with self.assertRaises(PlanLimitError):
+            entitlements.consume_quota(self.user, "ai")
+
+        row = UsageCounter.objects.get(
+            user=self.user, metric="ai", period=entitlements.current_period()
+        )
+        # A rejected reservation must NOT have incremented the counter past the cap.
+        self.assertEqual(row.count, 3)
+
+    def test_refund_restores_a_reserved_use(self):
+        from api import entitlements
+
+        entitlements.consume_quota(self.user, "ai")
+        entitlements.consume_quota(self.user, "ai")
+        entitlements.refund_quota(self.user, "ai")
+
+        self.assertEqual(entitlements.usage_count(self.user, "ai"), 1)
+
+    def test_refund_never_drives_counter_negative(self):
+        from api import entitlements
+
+        entitlements.refund_quota(self.user, "ai")
+        self.assertEqual(entitlements.usage_count(self.user, "ai"), 0)
+
+    def test_unlimited_plan_never_blocks(self):
+        from api import entitlements
+
+        profile = entitlements.get_profile(self.user)
+        profile.plan = "pro"
+        profile.save(update_fields=["plan", "updated_at"])
+
+        for _ in range(50):
+            entitlements.consume_quota(self.user, "ai")  # must not raise
+
+
+class PlanSwitchAuthorizationTests(TestCase):
+    """Self-service plan changes must be gated by PLAN_SELF_SERVICE in prod."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="switch@example.com",
+            email="switch@example.com",
+            password="P@ssword123!",
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    def _switch(self, plan, email=None):
+        payload = {"plan": plan}
+        if email is not None:
+            payload["email"] = email
+        return self.client.post(
+            "/api/plan/switch/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    @override_settings(PLAN_SELF_SERVICE=False)
+    def test_self_upgrade_blocked_without_self_service(self):
+        response = self._switch("pro")
+        self.assertEqual(response.status_code, 403)
+        self.user.refresh_from_db()
+        from api import entitlements
+        self.assertEqual(entitlements.plan_of(self.user), "free")
+
+    @override_settings(PLAN_SELF_SERVICE=True)
+    def test_self_upgrade_allowed_when_self_service_on(self):
+        response = self._switch("pro")
+        self.assertEqual(response.status_code, 200)
+        from api import entitlements
+        self.assertEqual(entitlements.plan_of(self.user), "pro")
+
+    @override_settings(PLAN_SELF_SERVICE=False)
+    def test_staff_can_switch_despite_self_service_off(self):
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        response = self._switch("pro")
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(PLAN_SELF_SERVICE=True)
+    def test_non_staff_cannot_target_another_user(self):
+        victim = User.objects.create_user(
+            username="victim@example.com",
+            email="victim@example.com",
+            password="P@ssword123!",
+        )
+        response = self._switch("pro", email="victim@example.com")
+        self.assertEqual(response.status_code, 403)
+        from api import entitlements
+        self.assertEqual(entitlements.plan_of(victim), "free")
+
+
 class StrategyAssistantDiagnosticsTests(TestCase):
     def _sample_context(self):
         return {
@@ -308,3 +421,210 @@ class OptimizerParameterGuardTests(TestCase):
         )
 
         self.assertEqual(values, {})
+
+
+class CrossAssetBacktestTests(TestCase):
+    """Signal (watch-only) tickers: conditions may reference another symbol via
+    a `ticker` arg; its data loads but it is never traded."""
+
+    DATES = pd.date_range("2025-01-01", periods=12, freq="D")
+    CLOSES = {
+        # UKX drops >5% on 01-05, rebounds >7% on 01-08
+        "UKX": [100, 100, 100, 100, 94, 94, 94, 101, 101, 101, 101, 101],
+        "SPX": [50 + i for i in range(12)],
+    }
+
+    def _fake_download(self, ticker, start, end, interval):
+        closes = pd.Series(self.CLOSES[ticker], index=self.DATES, dtype=float)
+        return pd.DataFrame(
+            {
+                "Open": closes,
+                "High": closes * 1.001,
+                "Low": closes * 0.999,
+                "Close": closes,
+                "Volume": 1000,
+            },
+            index=self.DATES,
+        )
+
+    @staticmethod
+    def _price(ticker=None, offset=0):
+        arg = {"OHLC": "close", "offset": offset}
+        if ticker:
+            arg["ticker"] = ticker
+        return {"func": "PRICE", "arg": arg}
+
+    def _dsl(self):
+        return {
+            "LONG": {
+                "context": {
+                    "tickers": ["SPX"],
+                    "signal_tickers": ["UKX"],
+                    "execution_timeframe": "1d",
+                    "data_timeframes": ["1d"],
+                    "dateframe": {"start": "2025-01-01", "end": "2025-01-12"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": self._price("UKX"),
+                        "operator": "<",
+                        "right": {"op": "*", "left": self._price("UKX", offset=1), "right": {"value": 0.95}},
+                    },
+                    "ARGUMENTS": {
+                        "initialOpenPositionInvestType": "numberShares",
+                        "initialOpenPositionInvestAmount": 100,
+                    },
+                },
+                "CLOSE": {
+                    "CONDITIONS": {
+                        "left": self._price("UKX"),
+                        "operator": ">",
+                        "right": {"op": "*", "left": self._price("UKX", offset=1), "right": {"value": 1.07}},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+
+    def test_signal_ticker_drives_trades_but_is_never_traded(self):
+        from core.main import main as run_backtest
+
+        with patch("core.main.datapull.get_data_with_indicator", side_effect=self._fake_download):
+            result = run_backtest(self._dsl(), initial_balance=100000)
+
+        trades = result["trades"]
+        self.assertTrue(trades, "cross-asset condition never fired")
+        self.assertTrue(all(t["ticker"] == "SPX" for t in trades), "watch-only ticker was traded")
+
+        buys = [t for t in trades if t["type"] == "BUY"]
+        self.assertEqual(len(buys), 1)
+        self.assertEqual(buys[0]["shares"], 100)
+        self.assertTrue(buys[0]["timestamp"].startswith("2025-01-05"))
+
+        sells = [t for t in trades if t["type"] == "SELL"]
+        self.assertEqual(len(sells), 1)
+        self.assertTrue(sells[0]["timestamp"].startswith("2025-01-08"))
+
+        # Watch-only data is still returned for charting
+        self.assertIn("UKX", result["data"])
+
+    def test_unknown_condition_ticker_raises_friendly_error(self):
+        from core.main import BacktestError, main as run_backtest
+
+        dsl = self._dsl()
+        dsl["LONG"]["context"]["signal_tickers"] = []
+
+        with patch("core.main.datapull.get_data_with_indicator", side_effect=self._fake_download):
+            with self.assertRaises(BacktestError) as ctx:
+                run_backtest(dsl, initial_balance=100000)
+
+        self.assertEqual(ctx.exception.code, "unknown_condition_ticker")
+        self.assertIn("UKX", ctx.exception.message)
+
+    def test_ticker_arg_survives_default_merging(self):
+        from core.main import merge_indicator_defaults
+
+        merged = merge_indicator_defaults(self._dsl())
+        left_args = merged["LONG"]["OPEN"]["CONDITIONS"]["left"]["arg"]
+        self.assertEqual(left_args.get("ticker"), "UKX")
+
+    def test_text_dsl_parses_signal_tickers(self):
+        from core.parsing.parser import parse_dsl
+
+        parsed = parse_dsl(
+            """
+            :TICKER(SPX)
+            :SIGNAL_TICKER(UKX)
+            :EXECUTION_TIMEFRAME(1d)
+            :DATA_TIMEFRAMES(1d)
+            :DATEFRAME(2025-01-01, 2025-06-01)
+            :LONG(
+               OPEN{ CONDITIONS{ RSI() < 30 } }
+               |CLOSE{ CONDITIONS{ RSI() > 70 } }
+            )
+            """
+        )
+        self.assertEqual(parsed["LONG"]["context"]["tickers"], ["SPX"])
+        self.assertEqual(parsed["LONG"]["context"]["signal_tickers"], ["UKX"])
+
+
+class TickerSearchTests(TestCase):
+    """Yahoo-backed symbol autocomplete + full-name resolution."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="search@example.com",
+            email="search@example.com",
+            password="P@ssword123!",
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    @staticmethod
+    def _fake_yahoo_response(quotes):
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"quotes": quotes}
+
+        return FakeResponse()
+
+    def _search(self, q):
+        return self.client.get(
+            f"/api/tickers/search/?q={q}",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    def test_search_requires_auth(self):
+        response = self.client.get("/api/tickers/search/?q=apple")
+        self.assertEqual(response.status_code, 401)
+
+    def test_search_merges_registry_and_yahoo(self):
+        quotes = [
+            {"symbol": "APLE", "shortname": "Apple Hospitality REIT", "exchDisp": "NYSE", "quoteTypeDisp": "Equity"},
+            {"symbol": "AAPL", "shortname": "Apple Inc.", "exchDisp": "NASDAQ", "quoteTypeDisp": "Equity"},
+        ]
+        with patch("api.views.requests.get", return_value=self._fake_yahoo_response(quotes)):
+            response = self._search("apple")
+
+        self.assertEqual(response.status_code, 200)
+        results = response.json()["results"]
+        symbols = [r["symbol"] for r in results]
+
+        # Registry match (AAPL, local data) first and deduped against Yahoo's AAPL
+        self.assertIn("AAPL", symbols)
+        self.assertEqual(symbols.count("AAPL"), 1)
+        aapl = next(r for r in results if r["symbol"] == "AAPL")
+        self.assertTrue(aapl["local"])
+        self.assertEqual(aapl["name"], "Apple Inc.")
+        # Yahoo-only match included with its full name
+        aple = next(r for r in results if r["symbol"] == "APLE")
+        self.assertFalse(aple["local"])
+        self.assertEqual(aple["name"], "Apple Hospitality REIT")
+
+    def test_search_degrades_when_yahoo_down(self):
+        with patch("api.views.requests.get", side_effect=OSError("network down")):
+            response = self._search("apple")
+
+        self.assertEqual(response.status_code, 200)
+        results = response.json()["results"]
+        # Registry matches still returned
+        self.assertTrue(any(r["symbol"] == "AAPL" for r in results))
+
+    def test_resolve_ticker_names_registry_yahoo_and_fallback(self):
+        from api.views import resolve_ticker_names
+
+        quotes = [{"symbol": "APLE", "shortname": "Apple Hospitality REIT", "quoteTypeDisp": "Equity"}]
+        with patch("api.views.requests.get", return_value=self._fake_yahoo_response(quotes)):
+            names = resolve_ticker_names(["AAPL", "APLE"])
+
+        self.assertEqual(names["AAPL"], "Apple Inc.")               # registry, no network needed
+        self.assertEqual(names["APLE"], "Apple Hospitality REIT")   # live Yahoo lookup
+
+        # Unknown symbol + Yahoo down -> falls back to the symbol itself
+        cache.clear()
+        with patch("api.views.requests.get", side_effect=OSError("down")):
+            names = resolve_ticker_names(["ZZZUNKNOWN"])
+        self.assertEqual(names["ZZZUNKNOWN"], "ZZZUNKNOWN")

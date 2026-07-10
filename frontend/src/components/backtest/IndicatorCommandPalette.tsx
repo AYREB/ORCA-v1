@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Search, Hash, Check } from "lucide-react";
+import { Search, Check } from "lucide-react";
 import { getParamDomain, clampToDomain, clampIndicatorArgs } from "@/lib/paramDomains";
 import {
   Registry,
@@ -69,7 +69,9 @@ export default function IndicatorCommandPalette({
     | { type: "indicator"; func: string };
 
   const items: Item[] = [];
-  if (isNumeric) items.push({ type: "value", value: numericValue });
+  // "Value" is always the first option so users can pick "enter a number"
+  // directly (editable inline after selecting) instead of only when they type one.
+  items.push({ type: "value", value: isNumeric ? numericValue : 0 });
 
   const grouped: Record<string, string[]> = {};
   for (const ind of filtered) {
@@ -102,18 +104,14 @@ export default function IndicatorCommandPalette({
       onSelect({ type: "value", value: item.value, func: "", args: {}, operation: undefined });
     } else {
       const defaults = { ...(registry.indicators.INDICATORS[item.func]?.defaults || {}) };
-      const argKeys = registry.indicators.INDICATORS[item.func]?.args || [];
       // Seed the indicator's timeframe from the selected execution timeframe
       // so it matches the chart being traded by default.
       if ("timeframe" in defaults && executionTimeframe) {
         defaults.timeframe = executionTimeframe;
       }
-      if (argKeys.length === 0) {
-        commitIndicator(item.func, defaults);
-      } else {
-        setConfiguring(item.func);
-        setConfigArgs(defaults);
-      }
+      // No confirm step: add immediately with defaults; parameters are edited
+      // inline on the condition afterwards.
+      commitIndicator(item.func, defaults);
     }
   };
 
@@ -265,7 +263,7 @@ export default function IndicatorCommandPalette({
           <div className="px-3 py-3 text-center text-xs text-muted-foreground">No matches</div>
         )}
 
-        {isNumeric && (() => {
+        {(() => {
           itemIndex++;
           const idx = itemIndex;
           return (
@@ -279,8 +277,12 @@ export default function IndicatorCommandPalette({
                   clampedIndex === idx ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
                 }`}
               >
-                <Hash className="h-3 w-3 text-muted-foreground" />
-                <span className="font-mono font-medium">{numericValue}</span>
+                <span className={`font-mono font-semibold text-[11px] w-14 shrink-0 ${
+                  clampedIndex === idx ? "text-accent-foreground" : "text-primary"
+                }`}>{isNumeric ? numericValue : "Value"}</span>
+                <span className={`text-[11px] truncate ${
+                  clampedIndex === idx ? "text-accent-foreground/80" : "text-muted-foreground/70"
+                }`}>{isNumeric ? "Use this number" : "Enter a number — edit the value inline after"}</span>
               </button>
             </div>
           );

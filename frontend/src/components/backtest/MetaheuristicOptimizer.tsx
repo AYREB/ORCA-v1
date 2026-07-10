@@ -23,6 +23,8 @@ export interface OptimiserSettingField {
   key: string;
   label: string;
   step?: number;
+  /** Explains what the parameter controls and how changing it affects the search. */
+  description?: string;
 }
 
 interface MetaheuristicOptimizerProps {
@@ -33,6 +35,8 @@ interface MetaheuristicOptimizerProps {
   settingsSchema: OptimiserSettingField[];
   defaults: Record<string, number>;
   estimateRuns: (settings: Record<string, number>) => number;
+  /** Plain-language explanation of how this optimizer works, shown at the top. */
+  howItWorks?: string;
   dslJson: Record<string, unknown> | null;
   strategyId?: number | null;
   strategyName?: string | null;
@@ -51,6 +55,7 @@ function formatDuration(seconds: number): string {
 }
 
 import { isOptimizableParameterPath } from "@/lib/paramDomains";
+import OptimizerParameterList from "./OptimizerParameterList";
 
 function extractOptimizableParameters(
   node: unknown,
@@ -99,6 +104,7 @@ const MetaheuristicOptimizer = ({
   settingsSchema,
   defaults,
   estimateRuns,
+  howItWorks,
   dslJson,
   strategyId,
   strategyName,
@@ -271,8 +277,6 @@ const MetaheuristicOptimizer = ({
   );
 
   const estimatedRuns = useMemo(() => Math.max(0, Math.round(estimateRuns(optSettings))), [estimateRuns, optSettings]);
-  const estimatedSeconds = useMemo(() => Math.ceil(estimatedRuns * 1.5), [estimatedRuns]);
-  const estimatedTime = useMemo(() => formatDuration(estimatedSeconds), [estimatedSeconds]);
 
   const runningEtaSeconds = useMemo(() => {
     if (!loading) return null;
@@ -395,6 +399,15 @@ const MetaheuristicOptimizer = ({
           </div>
         </div>
 
+        {howItWorks && (
+          <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-primary mb-1">
+              How this optimizer works
+            </p>
+            <p className="text-sm text-muted-foreground leading-relaxed">{howItWorks}</p>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           {settingsSchema.map((field) => (
             <div key={field.key}>
@@ -406,6 +419,9 @@ const MetaheuristicOptimizer = ({
                 onChange={(e) => setOptSettings((prev) => ({ ...prev, [field.key]: Number(e.target.value) }))}
                 className="mt-1 bg-secondary border-border font-mono"
               />
+              {field.description && (
+                <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{field.description}</p>
+              )}
             </div>
           ))}
           <div>
@@ -425,7 +441,7 @@ const MetaheuristicOptimizer = ({
               <span className="font-mono text-primary">{activeParams}</span> parameters selected
             </p>
             <p className="text-xs text-muted-foreground">Estimated runs: {estimatedRuns}</p>
-            <p className="text-xs text-muted-foreground">Estimated time: {estimatedTime}</p>
+            <p className="text-xs text-muted-foreground">Estimated time: measured live from the first few runs</p>
           </div>
           <Button variant="outline" size="sm" onClick={setAllEnabled}>
             Enable all
@@ -447,59 +463,12 @@ const MetaheuristicOptimizer = ({
         </div>
 
         <ScrollArea className="h-[340px] pr-4">
-          <div className="space-y-4">
-            {Object.entries(paramChoices).map(([param, choice]) => (
-              <div key={param} className="p-4 rounded-lg bg-secondary/30 border border-border">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      checked={(choice as ParameterChoice).enabled !== false}
-                      onCheckedChange={(checked) => toggleParam(param, Boolean(checked))}
-                    />
-                    <Label className="font-medium font-mono text-sm">
-                      {getDisplayName(param, choice.indicator || null)}
-                    </Label>
-                  </div>
-                  <div className="text-xs text-muted-foreground">Auto search</div>
-                </div>
-
-                {(choice as ParameterChoice).enabled !== false && (
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Start (optional)</Label>
-                      <Input
-                        type="number"
-                        value={choice.start ?? ""}
-                        onChange={(e) => handleRangeChange(param, "start", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                        placeholder="auto"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground">End (optional)</Label>
-                      <Input
-                        type="number"
-                        value={choice.end ?? ""}
-                        onChange={(e) => handleRangeChange(param, "end", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                        placeholder="auto"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Steps (≥2)</Label>
-                      <Input
-                        type="number"
-                        value={choice.steps ?? ""}
-                        onChange={(e) => handleRangeChange(param, "steps", Number(e.target.value))}
-                        className="h-8 bg-secondary border-border font-mono"
-                        placeholder="3"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+          <OptimizerParameterList
+            paramChoices={paramChoices}
+            getDisplayName={getDisplayName}
+            onToggle={toggleParam}
+            onRangeChange={handleRangeChange}
+          />
         </ScrollArea>
 
         <div className="mt-4 p-4 rounded-lg bg-secondary/30 border border-border space-y-3">
@@ -518,8 +487,8 @@ const MetaheuristicOptimizer = ({
               {loading
                 ? runningEtaSeconds !== null
                   ? `${formatDuration(runningEtaSeconds)} remaining`
-                  : `Sampling... ${Math.min(sampledCycleCount, 3)}/3 runs`
-                : estimatedTime}
+                  : `Calibrating… ${Math.min(sampledCycleCount, 3)}/3 runs`
+                : "Available once running"}
             </span>
           </div>
         </div>

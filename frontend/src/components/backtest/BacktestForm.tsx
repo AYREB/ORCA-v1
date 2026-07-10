@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useSettings } from "@/hooks/useSettings";
 import { motion, AnimatePresence } from "framer-motion";
@@ -93,7 +93,7 @@ const numericArg = (value: unknown, fallback: number) => {
 
 const numberInputValue = (value: number) => (Number.isFinite(value) ? value : 0);
 
-const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) => {
+const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialDslJson }: BacktestFormProps) => {
   const { settings } = useSettings();
   const btDefaults = settings.backtestDefaults;
   const { tickers: registryTickers, timeframes: registryTimeframes } = useRegistry();
@@ -119,6 +119,9 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
   });
 
   const [tickers, setTickers] = useState<string[]>(["AAPL"]);
+  // Watch-only symbols: their data is loaded so conditions can reference them
+  // (e.g. buy AAPL when SPX drops), but they are never traded.
+  const [signalTickers, setSignalTickers] = useState<string[]>([]);
   const [executionTF, setExecutionTF] = useState(btDefaults.timeframe);
   const [dateStart, setDateStart] = useState("2025-01-01");
   const [dateEnd, setDateEnd] = useState("2026-01-01");
@@ -128,6 +131,11 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
   const [feeMode, setFeeMode] = useState<"commission" | "spread">(btDefaults.feeMode);
   const [feeValue, setFeeValue] = useState(btDefaults.feeValue);
   const [feeFixed, setFeeFixed] = useState(btDefaults.feeFixed ?? 0);
+
+  // Tracks the JSON string of the DSL we last applied-from or emitted-to the
+  // parent, so incoming `initialDslJson` updates that merely echo our own
+  // `onDslChange` output don't re-apply and clobber in-progress edits.
+  const syncedDslRef = useRef<string | null>(null);
 
   useEffect(() => {
     const fetchRegistry = async () => {
@@ -177,14 +185,14 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
 
   useEffect(() => {
     const valid = availableTimeframesFor(
-      tickers.filter(Boolean),
+      [...tickers, ...signalTickers].filter(Boolean),
       registryTickers,
       registryTimeframes,
     );
     if (valid.length > 0 && !valid.includes(executionTF)) {
       setExecutionTF(valid[0]);
     }
-  }, [tickers, registryTickers, registryTimeframes, executionTF]);
+  }, [tickers, signalTickers, registryTickers, registryTimeframes, executionTF]);
 
   useEffect(() => {
     const selectedTickers = tickers.map((ticker) => ticker.trim()).filter(Boolean);
@@ -303,20 +311,17 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
     return conditions;
   };
 
-  const loadStrategyFromDsl = (strategy: SavedStrategy) => {
-    try {
-      const dsl = strategy.dslJson && typeof strategy.dslJson === "object" ? strategy.dslJson : JSON.parse(strategy.dsl);
+  // Populate the whole wizard from a raw DSL JSON object. Returns false if the
+  // shape is unusable. Shared by the "Load Strategy" dialog and the
+  // `initialDslJson` prop (used when the form is embedded in a results view).
+  const applyDslJson = (dsl: Record<string, any>, name?: string): boolean => {
+    const detectedSide = dsl.LONG ? "LONG" : dsl.SHORT ? "SHORT" : "LONG";
+    setSide(detectedSide);
 
-      const detectedSide = dsl.LONG ? "LONG" : dsl.SHORT ? "SHORT" : "LONG";
-      setSide(detectedSide);
+    const sideData = dsl[detectedSide];
+    if (!sideData) return false;
 
-      const sideData = dsl[detectedSide];
-      if (!sideData) {
-        toast.error("Invalid strategy format");
-        return;
-      }
-
-      const newConditionGroups: Record<string, ConditionGroup> = {
+    const newConditionGroups: Record<string, ConditionGroup> = {
         OPEN: { conditions: parseConditions(sideData.OPEN?.CONDITIONS || {}) },
         CLOSE: { conditions: parseConditions(sideData.CLOSE?.CONDITIONS || {}) },
       };
@@ -353,6 +358,9 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
         if (Array.isArray(sideData.context.tickers) && sideData.context.tickers.length > 0) {
           setTickers(sideData.context.tickers);
         }
+        setSignalTickers(
+          Array.isArray(sideData.context.signal_tickers) ? sideData.context.signal_tickers : []
+        );
         if (sideData.context.execution_timeframe) {
           setExecutionTF(sideData.context.execution_timeframe);
         }
@@ -366,8 +374,20 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
 
       setConditionGroups(newConditionGroups);
       setBlocks(nextBlocks);
-      setStrategyName(strategy.name);
+      if (name !== undefined) setStrategyName(name);
       setStep(1);
+      return true;
+  };
+
+  const loadStrategyFromDsl = (strategy: SavedStrategy) => {
+    try {
+      const dsl = strategy.dslJson && typeof strategy.dslJson === "object" ? strategy.dslJson : JSON.parse(strategy.dsl);
+
+      if (!applyDslJson(dsl, strategy.name)) {
+        toast.error("Invalid strategy format");
+        return;
+      }
+
       setShowLoadDialog(false);
       toast.success(`Strategy "${strategy.name}" loaded`);
     } catch (err) {
@@ -396,6 +416,17 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
     updated[index] = value.toUpperCase();
     setTickers(updated);
   };
+
+  const addSignalTicker = () => setSignalTickers([...signalTickers, ""]);
+  const removeSignalTicker = (index: number) => setSignalTickers(signalTickers.filter((_, i) => i !== index));
+  const updateSignalTicker = (index: number, value: string) => {
+    const updated = [...signalTickers];
+    updated[index] = value.toUpperCase();
+    setSignalTickers(updated);
+  };
+
+  // Every symbol a condition may reference (traded + watch-only), deduped.
+  const conditionTickerOptions = [...new Set([...tickers, ...signalTickers].map((t) => t.trim()).filter(Boolean))];
 
   const updateArgument = (block: "OPEN" | "CLOSE", arg: string, value: any) => {
     setBlocks((prev) => ({
@@ -482,10 +513,15 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
       return { OR: orGroups.map(buildGroup) };
     };
 
+    const cleanSignalTickers = signalTickers
+      .map((t) => t.trim())
+      .filter((t) => t && !tickers.includes(t));
+
     const dsl: any = {
       [side]: {
         context: {
           tickers: tickers.filter(Boolean),
+          ...(cleanSignalTickers.length > 0 ? { signal_tickers: cleanSignalTickers } : {}),
           execution_timeframe: executionTF,
           dateframe: { start: dateStart, end: dateEnd },
         },
@@ -520,6 +556,31 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
 
     return dsl;
   };
+
+  // Load a strategy supplied via the `initialDslJson` prop (e.g. when this form
+  // is embedded in a backtest results view). Only re-applies when the incoming
+  // JSON actually differs from what we last synced, so it won't fight the user.
+  useEffect(() => {
+    if (!registry || !initialDslJson || Object.keys(initialDslJson).length === 0) return;
+    const key = JSON.stringify(initialDslJson);
+    if (key === syncedDslRef.current) return;
+    if (applyDslJson(initialDslJson)) {
+      syncedDslRef.current = key;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDslJson, registry]);
+
+  // Keep the parent in sync with edits made in the builder. Guarded by the same
+  // ref so echoing our output back through `initialDslJson` doesn't loop.
+  useEffect(() => {
+    if (!onDslChange || !registry) return;
+    const dsl = buildJsonDsl();
+    const key = JSON.stringify(dsl);
+    if (key === syncedDslRef.current) return;
+    syncedDslRef.current = key;
+    onDslChange(dsl, JSON.stringify(dsl, null, 2));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conditionGroups, blocks, tickers, signalTickers, executionTF, dateStart, dateEnd, side, takeProfitPercent, stopLossPercent, feeMode, feeValue, feeFixed, registry]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -840,8 +901,9 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                     conditionGroup={conditionGroups.OPEN}
                     setConditionGroup={(group) => setConditionGroups((prev) => ({ ...prev, OPEN: group }))}
                     registry={registry}
-                    availableTimeframes={availableTimeframesFor(tickers.filter(Boolean), registryTickers, registryTimeframes)}
+                    availableTimeframes={availableTimeframesFor(conditionTickerOptions, registryTickers, registryTimeframes)}
                     executionTimeframe={executionTF}
+                    tickerOptions={conditionTickerOptions}
                   />
                   <div className="space-y-3 pt-3 border-t border-border/30">
                     <Label className="text-xs uppercase tracking-wider text-muted-foreground">Risk Management</Label>
@@ -857,10 +919,24 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                           step="0.1"
                           value={takeProfitPercent}
                           onChange={(e) => setTakeProfitPercent(numberInputValue(e.currentTarget.valueAsNumber))}
-                          className="bg-secondary/50 border-border/50 h-9"
+                          disabled={takeProfitPercent <= 0}
+                          className="bg-secondary/50 border-border/50 h-9 disabled:opacity-40"
                         />
+                        <label className="flex cursor-pointer select-none items-center gap-1.5 text-[11px]">
+                          <input
+                            type="checkbox"
+                            checked={takeProfitPercent <= 0}
+                            onChange={(e) => setTakeProfitPercent(e.target.checked ? 0 : (btDefaults.takeProfitPercent || 10))}
+                            className="h-3 w-3 accent-yellow-500"
+                          />
+                          <span className={takeProfitPercent <= 0 ? "text-yellow-500" : "text-muted-foreground"}>
+                            No take profit{takeProfitPercent <= 0 && " — not advised"}
+                          </span>
+                        </label>
                         {takeProfitPercent <= 0 && (
-                          <p className="text-[11px] text-muted-foreground/60">0 = disabled </p>
+                          <p className="text-[11px] text-yellow-500/80 leading-snug">
+                            Trades won't automatically lock in gains — the position only closes on your close conditions or stop loss.
+                          </p>
                         )}
                       </div>
                       <div className="space-y-2">
@@ -879,11 +955,27 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                                 step="0.1"
                                 value={stopLossPercent}
                                 onChange={(e) => setStopLossPercent(numberInputValue(e.currentTarget.valueAsNumber))}
-                                className={`h-9 ${slMissing ? "border-destructive bg-destructive/5" : "bg-secondary/50 border-border/50"}`}
+                                disabled={stopLossPercent <= 0 && !isRiskBased}
+                                className={`h-9 disabled:opacity-40 ${slMissing ? "border-destructive bg-destructive/5" : "bg-secondary/50 border-border/50"}`}
                               />
+                              {!isRiskBased && (
+                                <label className="flex cursor-pointer select-none items-center gap-1.5 text-[11px]">
+                                  <input
+                                    type="checkbox"
+                                    checked={stopLossPercent <= 0}
+                                    onChange={(e) => setStopLossPercent(e.target.checked ? 0 : (btDefaults.stopLossPercent || 5))}
+                                    className="h-3 w-3 accent-yellow-500"
+                                  />
+                                  <span className={stopLossPercent <= 0 ? "text-yellow-500" : "text-muted-foreground"}>
+                                    No stop loss{stopLossPercent <= 0 && " — not advised"}
+                                  </span>
+                                </label>
+                              )}
                               {slMissing
                                 ? <p className="text-[11px] text-destructive">Required for risk-based sizing</p>
-                                : stopLossPercent <= 0 && <p className="text-[11px] text-muted-foreground/60">0 = disabled</p>
+                                : stopLossPercent <= 0 && <p className="text-[11px] text-yellow-500/80 leading-snug">
+                                    Losing trades won't be cut automatically — the position can run down until a close condition or take profit triggers.
+                                  </p>
                               }
                             </>
                           );
@@ -998,8 +1090,9 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                     conditionGroup={conditionGroups.CLOSE}
                     setConditionGroup={(group) => setConditionGroups((prev) => ({ ...prev, CLOSE: group }))}
                     registry={registry}
-                    availableTimeframes={availableTimeframesFor(tickers.filter(Boolean), registryTickers, registryTimeframes)}
+                    availableTimeframes={availableTimeframesFor(conditionTickerOptions, registryTickers, registryTimeframes)}
                     executionTimeframe={executionTF}
+                    tickerOptions={conditionTickerOptions}
                   />
                   {Object.keys(allowedArgs.CLOSE || {}).length > 0 && (
                     <div className="space-y-3 pt-3 border-t border-border/30">
@@ -1076,6 +1169,61 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                       <p className="self-center text-xs text-muted-foreground">Max 5 tickers</p>
                     )}
                   </div>
+                </div>
+
+                <div className="space-y-2 pt-3 border-t border-border/30">
+                  <Label className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                    Watch-only Tickers
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3 w-3 cursor-help hover:text-foreground transition-colors" />
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-[300px]">
+                          <p className="text-xs">
+                            Symbols your conditions can reference without trading them — e.g. buy AAPL
+                            when SPY drops 5%. Set the symbol on a condition's indicator via its
+                            "ticker" option in steps 3–4. Watch-only tickers are never bought or sold.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {signalTickers.map((ticker, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
+                        <TickerCombobox
+                          value={ticker}
+                          onChange={(v) => updateSignalTicker(i, v)}
+                          exclude={[...tickers, ...signalTickers.filter((_, j) => j !== i)]}
+                          className="w-44"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeSignalTicker(i)}
+                          className="h-9 w-9 hover:bg-destructive/20 hover:text-destructive"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    {signalTickers.length < 3 ? (
+                      <Button type="button" variant="outline" size="sm" onClick={addSignalTicker} className="h-9 gap-1">
+                        <Plus className="h-4 w-4" />
+                        Add watch-only
+                      </Button>
+                    ) : (
+                      <p className="self-center text-xs text-muted-foreground">Max 3 watch-only tickers</p>
+                    )}
+                  </div>
+                  {signalTickers.filter(Boolean).length > 0 && (
+                    <p className="text-[11px] text-muted-foreground/70 leading-snug">
+                      These symbols are only observed. Point a condition at one via the indicator's
+                      "ticker" option in the Open/Close steps.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1185,6 +1333,12 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                     className="bg-secondary/50 border-border/50 h-9 w-full max-w-[220px]"
                     placeholder="10000"
                   />
+                  <p className="text-xs text-muted-foreground leading-relaxed max-w-prose">
+                    This is the starting capital this strategy can commit to the position — the cash it draws on to open
+                    and add to trades. The position's total value <span className="text-foreground">can exceed</span> this
+                    amount, but only from profits the strategy has already made and reinvested; it won't put in more
+                    outside cash than the initial balance.
+                  </p>
                 </div>
               </div>
 
@@ -1193,6 +1347,8 @@ const BacktestForm = ({ onRunBacktest, showActions = true }: BacktestFormProps) 
                 <p className="text-xs text-muted-foreground mt-1">
                   {side} • {conditionGroups.OPEN?.conditions.length || 0} open conditions •{" "}
                   {conditionGroups.CLOSE?.conditions.length || 0} close conditions • {tickers.filter(Boolean).join(", ")}
+                  {signalTickers.filter(Boolean).length > 0 &&
+                    ` • watching ${signalTickers.filter(Boolean).join(", ")}`}
                 </p>
               </div>
             </motion.div>

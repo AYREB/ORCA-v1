@@ -14,6 +14,7 @@ import CandlestickChart from "@/components/backtest/CandlestickChart";
 import { Input } from "@/components/ui/input";
 import { api, ChartDataResponse, OHLCData } from "@/lib/api";
 import { useRegistry, availableTimeframesFor } from "@/context/RegistryContext";
+import { useTickerSearch } from "@/hooks/useTickerSearch";
 import type { ChartType } from "@/hooks/useSettings";
 
 const CHART_TYPES: { value: ChartType; label: string; icon: typeof CandlestickIcon }[] = [
@@ -44,10 +45,19 @@ const Charts = () => {
     }
   }, [tickerSymbols, selectedTicker]);
 
-  // Timeframes available for the currently selected ticker.
+  // Timeframes shown for any ticker = what Yahoo Finance can fetch live (mirrors
+  // the backend), plus any extra timeframes a stored ticker has in its CSVs
+  // (e.g. 4h). So hourly (1h) is available on every ticker, known or typed.
   const availableTimeframes = useMemo(() => {
-    if (!selectedTicker) return Object.keys(timeframes);
-    return availableTimeframesFor([selectedTicker], tickers, timeframes);
+    const YF_TIMEFRAMES = ["1m", "5m", "15m", "1h", "1D"];
+    const TF_ORDER = ["1m", "5m", "15m", "1h", "4h", "1D", "1wk", "1mo"];
+    const registryTfs =
+      selectedTicker && tickers[selectedTicker]
+        ? availableTimeframesFor([selectedTicker], tickers, timeframes)
+        : [];
+    const set = new Set<string>([...registryTfs, ...YF_TIMEFRAMES]);
+    const ordered = TF_ORDER.filter((tf) => set.has(tf));
+    return ordered.length ? ordered : YF_TIMEFRAMES;
   }, [selectedTicker, tickers, timeframes]);
 
   // Keep the selected timeframe valid when switching tickers.
@@ -107,6 +117,13 @@ const Charts = () => {
     );
   }, [tickerSymbols, tickers, search]);
 
+  // Live Yahoo Finance symbol search for anything not in the local registry.
+  const { results: searchResults, isSearching } = useTickerSearch(search);
+  const remoteMatches = useMemo(() => {
+    const local = new Set(tickerSymbols.map((s) => s.toUpperCase()));
+    return searchResults.filter((r) => !r.local && !local.has(r.symbol.toUpperCase()));
+  }, [searchResults, tickerSymbols]);
+
   const isPositive = (priceStats?.change ?? 0) >= 0;
 
   return (
@@ -131,14 +148,76 @@ const Charts = () => {
               <Input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search tickers..."
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    const typed = search.trim().toUpperCase();
+                    if (typed) {
+                      setSelectedTicker(typed);
+                      setSearch("");
+                    }
+                  }
+                }}
+                placeholder="Type a ticker (e.g. TSLA, BTC-USD)…"
                 className="h-9 border-border bg-secondary/60 pl-9"
               />
             </div>
           </div>
           <div className="flex-1 overflow-y-auto p-2">
-            {filteredTickers.length === 0 ? (
-              <p className="p-4 text-center text-sm text-muted-foreground">No tickers match.</p>
+            {/* Live Yahoo Finance matches for the query (symbols not in the registry) */}
+            {remoteMatches.map((match) => (
+              <button
+                key={match.symbol}
+                onClick={() => {
+                  setSelectedTicker(match.symbol);
+                  setSearch("");
+                }}
+                className="mb-1 flex w-full items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5 text-left transition-all hover:bg-primary/15"
+              >
+                <div className="min-w-0">
+                  <p className="font-mono text-sm font-semibold">{match.symbol}</p>
+                  <p className="truncate text-xs text-muted-foreground">{match.name}</p>
+                </div>
+                {(match.type || match.exchange) && (
+                  <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                    {[match.type, match.exchange].filter(Boolean).join(" · ")}
+                  </span>
+                )}
+              </button>
+            ))}
+            {isSearching && search.trim() && (
+              <div className="mb-2 flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Searching Yahoo Finance…
+              </div>
+            )}
+            {(() => {
+              const typed = search.trim().toUpperCase();
+              const showLoadTyped =
+                typed.length > 0 &&
+                !tickerSymbols.includes(typed) &&
+                !isSearching &&
+                !remoteMatches.some((m) => m.symbol.toUpperCase() === typed);
+              if (!showLoadTyped) return null;
+              return (
+                <button
+                  onClick={() => {
+                    setSelectedTicker(typed);
+                    setSearch("");
+                  }}
+                  className="mb-2 flex w-full items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2.5 text-left transition-all hover:bg-primary/15"
+                >
+                  <Search className="h-4 w-4 shrink-0 text-primary" />
+                  <div className="min-w-0">
+                    <p className="font-mono text-sm font-semibold">Load {typed}</p>
+                    <p className="truncate text-xs text-muted-foreground">Fetch from Yahoo Finance</p>
+                  </div>
+                </button>
+              );
+            })()}
+            {filteredTickers.length === 0 && remoteMatches.length === 0 && !isSearching ? (
+              <p className="p-4 text-center text-sm text-muted-foreground">
+                {search.trim() ? "Press Enter to load this ticker from Yahoo Finance." : "No tickers match."}
+              </p>
             ) : (
               filteredTickers.map((symbol) => {
                 const isSelected = symbol === selectedTicker;

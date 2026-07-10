@@ -1,6 +1,20 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, X, ChevronsUpDown, ArrowLeftRight, Calculator } from "lucide-react";
+import { Plus, X, ChevronsUpDown, ArrowLeftRight, Calculator, GripVertical } from "lucide-react";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCorners,
+  useDroppable,
+  type DragStartEvent,
+  type DragOverEvent,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
 import { getParamDomain, clampToDomain } from "@/lib/paramDomains";
 import IndicatorCommandPalette from "./IndicatorCommandPalette";
@@ -21,9 +35,11 @@ const formatSideLabel = (side: ConditionSide): string => {
     if (side.operation) base = `${base}${side.operation.operator}${side.operation.operand}`;
     return base;
   }
-  const args = Object.entries(side.args).filter(([k]) => k !== "offset");
+  const args = Object.entries(side.args).filter(([k]) => k !== "offset" && k !== "ticker");
   const argVals = args.map(([, v]) => v);
-  let base = argVals.length > 0 ? `${side.func}(${argVals.join(", ")})` : side.func;
+  // A ticker override retargets the indicator at another symbol: "UKX:PRICE(close)"
+  const prefix = side.args.ticker ? `${side.args.ticker}:` : "";
+  let base = argVals.length > 0 ? `${prefix}${side.func}(${argVals.join(", ")})` : `${prefix}${side.func}`;
   if (side.operation) base = `${base}${side.operation.operator}${side.operation.operand}`;
   return base;
 };
@@ -56,6 +72,31 @@ const computeVisualGroups = (conditions: SingleCondition[]): SingleCondition[][]
   return groups;
 };
 
+// Rebuild the flat condition list from grouped structure: conditions inside a
+// group are AND-connected; the last condition of each non-final group is OR
+// (the boundary to the next group). Drops empty groups.
+const flattenGroups = (groups: SingleCondition[][]): SingleCondition[] => {
+  const nonEmpty = groups.filter((g) => g.length > 0);
+  const out: SingleCondition[] = [];
+  nonEmpty.forEach((group, gi) => {
+    group.forEach((cond, ci) => {
+      const lastInGroup = ci === group.length - 1;
+      const lastGroup = gi === nonEmpty.length - 1;
+      out.push({ ...cond, nextLogicalOperator: lastInGroup && !lastGroup ? "OR" : "AND" });
+    });
+  });
+  return out;
+};
+
+// Derive the dnd container map ("g0","g1"… -> condition ids) from a flat list.
+const containersFromConditions = (conds: SingleCondition[]): Record<string, string[]> => {
+  const obj: Record<string, string[]> = {};
+  computeVisualGroups(conds).forEach((grp, i) => {
+    obj[`g${i}`] = grp.map((c) => c.id);
+  });
+  return obj;
+};
+
 // ── Main Component ───────────────────────────────────────────
 
 const OPERATORS = ["<", ">", "<=", ">=", "==", "!="];
@@ -67,6 +108,7 @@ export function MultiConditionBuilder({
   registry,
   availableTimeframes,
   executionTimeframe,
+  tickerOptions,
 }: {
   blockName: string;
   conditionGroup: ConditionGroup;
@@ -74,31 +116,67 @@ export function MultiConditionBuilder({
   registry: Registry;
   availableTimeframes?: string[];
   executionTimeframe?: string;
+  /** Traded + watch-only tickers a condition side may reference via its `ticker` arg. */
+  tickerOptions?: string[];
 }) {
   // "adding" state: null = idle, "left" = picking left side, "right" = picking operator + right side
   const [adding, setAdding] = useState<"left" | "right" | null>(null);
   const [pendingLeft, setPendingLeft] = useState<ConditionSide | null>(null);
   const [pendingOp, setPendingOp] = useState<string | null>(null);
-
+  // Which group the add-flow targets. A value >= groups.length means "new OR group".
+  const [addTarget, setAddTarget] = useState<number | null>(null);
   const isOpen = blockName === "OPEN";
   const hasConditions = conditionGroup.conditions.length > 0;
+  const groups = computeVisualGroups(conditionGroup.conditions);
 
-  const addConditionFromParts = (left: ConditionSide, op: string, right: ConditionSide) => {
-    const cond: SingleCondition = {
-      id: generateId(),
-      left,
-      operator: op,
-      right,
-      nextLogicalOperator: "AND",
-    };
-    setConditionGroup({ conditions: [...conditionGroup.conditions, cond] });
-    resetAdd();
+  // ── Drag-and-drop (dnd-kit) ──
+  const byId = useMemo(
+    () => new Map(conditionGroup.conditions.map((c) => [c.id, c])),
+    [conditionGroup.conditions],
+  );
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [containers, setContainers] = useState<Record<string, string[]>>(() =>
+    containersFromConditions(conditionGroup.conditions),
+  );
+  const containersRef = useRef(containers);
+  containersRef.current = containers;
+  useEffect(() => {
+    if (activeId === null) setContainers(containersFromConditions(conditionGroup.conditions));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conditionGroup.conditions, activeId]);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const findContainer = (id: string) =>
+    id in containersRef.current
+      ? id
+      : Object.keys(containersRef.current).find((k) => containersRef.current[k].includes(id)) ?? null;
+
+  const commitGroups = (g: SingleCondition[][]) => {
+    setConditionGroup({ conditions: flattenGroups(g) });
   };
 
   const resetAdd = () => {
     setAdding(null);
     setPendingLeft(null);
     setPendingOp(null);
+    setAddTarget(null);
+  };
+
+  const startAdd = (target: number) => {
+    setAddTarget(target);
+    setPendingLeft(null);
+    setPendingOp(null);
+    setAdding("left");
+  };
+
+  const addConditionFromParts = (left: ConditionSide, op: string, right: ConditionSide) => {
+    const cond: SingleCondition = { id: generateId(), left, operator: op, right, nextLogicalOperator: "AND" };
+    const target = addTarget ?? groups.length;
+    const next = groups.map((grp) => [...grp]);
+    if (target >= next.length) next.push([cond]);
+    else next[target].push(cond);
+    commitGroups(next);
+    resetAdd();
   };
 
   const updateCondition = (id: string, updated: SingleCondition) => {
@@ -108,194 +186,338 @@ export function MultiConditionBuilder({
   };
 
   const removeCondition = (id: string) => {
-    setConditionGroup({
-      conditions: conditionGroup.conditions.filter((c) => c.id !== id),
+    commitGroups(groups.map((grp) => grp.filter((c) => c.id !== id)));
+  };
+
+  const commitFromContainers = (conts: Record<string, string[]>) => {
+    const newGroups = Object.keys(conts)
+      .map((k) => conts[k].map((id) => byId.get(id)).filter(Boolean) as SingleCondition[])
+      .filter((g) => g.length > 0);
+    commitGroups(newGroups);
+  };
+
+  const handleDragStart = (e: DragStartEvent) => setActiveId(String(e.active.id));
+
+  const handleDragOver = (e: DragOverEvent) => {
+    const { active, over } = e;
+    if (!over) return;
+    const activeIdStr = String(active.id);
+    const overIdStr = String(over.id);
+    const activeC = findContainer(activeIdStr);
+    const overC = overIdStr in containersRef.current ? overIdStr : findContainer(overIdStr);
+    if (!activeC || !overC || activeC === overC) return;
+    setContainers((prev) => {
+      const activeItems = prev[activeC];
+      const overItems = prev[overC];
+      const overIndex = overItems.indexOf(overIdStr);
+      const newIndex = overIdStr in prev ? overItems.length : overIndex >= 0 ? overIndex : overItems.length;
+      return {
+        ...prev,
+        [activeC]: activeItems.filter((id) => id !== activeIdStr),
+        [overC]: [...overItems.slice(0, newIndex), activeIdStr, ...overItems.slice(newIndex)],
+      };
     });
   };
 
-  const toggleConditionOperator = (id: string) => {
-    setConditionGroup({
-      conditions: conditionGroup.conditions.map((c) =>
-        c.id === id
-          ? { ...c, nextLogicalOperator: c.nextLogicalOperator === "AND" ? "OR" : "AND" }
-          : c
-      ),
-    });
+  const handleDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    let finalContainers = { ...containersRef.current };
+    if (over) {
+      const activeIdStr = String(active.id);
+      const overIdStr = String(over.id);
+      const activeC = findContainer(activeIdStr);
+      const overC = overIdStr in finalContainers ? overIdStr : findContainer(overIdStr);
+      if (activeC && overC && activeC === overC) {
+        const items = finalContainers[activeC];
+        const oldIndex = items.indexOf(activeIdStr);
+        const newIndex = overIdStr in finalContainers ? items.length - 1 : items.indexOf(overIdStr);
+        if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+          finalContainers = { ...finalContainers, [activeC]: arrayMove(items, oldIndex, newIndex) };
+        }
+      }
+    }
+    setActiveId(null);
+    setContainers(finalContainers);
+    commitFromContainers(finalContainers);
+  };
+
+  const handleDragCancel = () => {
+    setActiveId(null);
+    setContainers(containersFromConditions(conditionGroup.conditions));
   };
 
   const logicPreview = generateLogicPreview(conditionGroup.conditions);
 
-  return (
-    <div className="space-y-1">
-      <div className="space-y-0">
-        <AnimatePresence mode="popLayout">
-          {conditionGroup.conditions.map((cond, idx) => (
-            <motion.div
-              key={cond.id}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.12 }}
+  // The inline "pick left → pick operator → pick right" builder (no confirm).
+  const renderInlineBuilder = () => (
+    <motion.div
+      key="inline-builder"
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -4 }}
+      transition={{ duration: 0.12 }}
+      className="rounded-lg border border-border bg-background/60 p-2 space-y-1.5"
+    >
+      {adding === "left" && (
+        <IndicatorCommandPalette
+          registry={registry}
+          onSelect={(side) => {
+            setPendingLeft(side);
+            setAdding("right");
+            setPendingOp("<");
+          }}
+          onCancel={resetAdd}
+          availableTimeframes={availableTimeframes}
+          executionTimeframe={executionTimeframe}
+        />
+      )}
+      {adding === "right" && pendingLeft && (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px] font-mono font-medium">
+              {formatSideLabel(pendingLeft)}
+            </span>
+            {pendingOp && (
+              <span className="px-1.5 py-0.5 rounded bg-secondary text-foreground text-[11px] font-mono">{pendingOp}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-0.5">
+            {OPERATORS.map((op) => (
+              <button
+                key={op}
+                type="button"
+                onClick={() => setPendingOp(op)}
+                className={`px-2 py-1 rounded border font-mono text-[11px] transition-colors ${
+                  pendingOp === op
+                    ? "border-primary bg-primary/15 text-primary"
+                    : "border-border bg-secondary/50 hover:bg-accent hover:text-accent-foreground"
+                }`}
+              >
+                {op}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={resetAdd}
+              className="ml-auto text-[10px] text-muted-foreground hover:text-foreground transition-colors"
             >
-              <ConditionRow
-                condition={cond}
-                onChange={(updated) => updateCondition(cond.id, updated)}
-                onRemove={() => removeCondition(cond.id)}
-                registry={registry}
-                isOpen={isOpen}
-                availableTimeframes={availableTimeframes}
-                executionTimeframe={executionTimeframe}
-              />
-              {idx < conditionGroup.conditions.length - 1 && (
-                <div className="flex items-center py-1.5 px-1">
-                  <div className="flex-1 h-px bg-border" />
-                  <button
-                    type="button"
-                    onClick={() => toggleConditionOperator(cond.id)}
-                    className={`mx-2 px-2.5 py-0.5 rounded text-[10px] font-bold tracking-wide transition-all cursor-pointer hover:scale-105 ${
-                      cond.nextLogicalOperator === "AND"
-                        ? "bg-primary/10 text-primary border border-primary/20"
-                        : "bg-warning/15 text-warning border border-warning/30"
-                    }`}
-                  >
-                    {cond.nextLogicalOperator}
-                  </button>
-                  <div className="flex-1 h-px bg-border" />
+              Cancel
+            </button>
+          </div>
+          {pendingOp && (
+            <IndicatorCommandPalette
+              registry={registry}
+              onSelect={(right) => addConditionFromParts(pendingLeft, pendingOp, right)}
+              onCancel={resetAdd}
+              placeholder="Pick right side..."
+              availableTimeframes={availableTimeframes}
+              executionTimeframe={executionTimeframe}
+            />
+          )}
+        </div>
+      )}
+    </motion.div>
+  );
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCorners}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
+    >
+      <div className="space-y-2">
+        {Object.keys(containers).map((cid, gi) => {
+          const ids = containers[cid];
+          return (
+            <div key={cid}>
+              {gi > 0 && (
+                <div className="flex items-center py-1">
+                  <div className="flex-1 h-px bg-warning/30" />
+                  <span className="mx-2 px-2.5 py-0.5 rounded text-[10px] font-bold tracking-wide bg-warning/15 text-warning border border-warning/30">
+                    OR
+                  </span>
+                  <div className="flex-1 h-px bg-warning/30" />
                 </div>
               )}
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
-
-      {/* Add condition */}
-      <AnimatePresence mode="wait">
-        {adding === null ? (
-          hasConditions ? (
-            <button
-              key="add-link"
-              type="button"
-              onClick={() => setAdding("left")}
-              className={`inline-flex items-center gap-1 text-[11px] transition-colors mt-0.5 ${
-                isOpen
-                  ? "text-muted-foreground hover:text-success"
-                  : "text-muted-foreground hover:text-destructive"
-              }`}
-            >
-              <Plus className="h-2.5 w-2.5" /> Add condition
-            </button>
-          ) : (
-            <Button
-              key="add-btn"
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setAdding("left")}
-              className={`w-full h-8 border-dashed text-xs ${
-                isOpen
-                  ? "border-success/30 text-success hover:bg-success/10 hover:border-success/50"
-                  : "border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
-              }`}
-            >
-              <Plus className="h-3 w-3 mr-1" /> Add your first condition
-            </Button>
-          )
-        ) : (
-          <motion.div
-            key="inline-builder"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.12 }}
-            className="rounded-lg border border-border bg-background/60 p-2 space-y-1.5"
-          >
-            {/* Step 1: pick left side */}
-            {adding === "left" && (
-              <IndicatorCommandPalette
-                registry={registry}
-                onSelect={(side) => {
-                  setPendingLeft(side);
-                  setAdding("right");
-                  setPendingOp("<");
-                }}
-                onCancel={resetAdd}
-                availableTimeframes={availableTimeframes}
-                executionTimeframe={executionTimeframe}
-              />
-            )}
-
-            {/* Step 2: pick operator + right side together */}
-            {adding === "right" && pendingLeft && (
-              <div className="space-y-1.5">
-                {/* Preview of what's been picked */}
-                <div className="flex items-center gap-1.5">
-                  <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px] font-mono font-medium">
-                    {formatSideLabel(pendingLeft)}
-                  </span>
-                  {pendingOp && (
-                    <span className="px-1.5 py-0.5 rounded bg-secondary text-foreground text-[11px] font-mono">
-                      {pendingOp}
-                    </span>
-                  )}
+              <GroupDropZone id={cid} isOpen={isOpen}>
+                <div className="mb-1.5 px-0.5 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                  Group {gi + 1} · ALL of these <span className="text-primary/70">(AND)</span>
                 </div>
-
-                {/* Operator buttons */}
-                <div className="flex items-center gap-0.5">
-                  {OPERATORS.map((op) => (
-                    <button
-                      key={op}
-                      type="button"
-                      onClick={() => setPendingOp(op)}
-                      className={`px-2 py-1 rounded border font-mono text-[11px] transition-colors ${
-                        pendingOp === op
-                          ? "border-primary bg-primary/15 text-primary"
-                          : "border-border bg-secondary/50 hover:bg-accent hover:text-accent-foreground"
-                      }`}
-                    >
-                      {op}
-                    </button>
-                  ))}
+                <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+                  <div className="space-y-1">
+                    {ids.map((id, ci) => {
+                      const cond = byId.get(id);
+                      if (!cond) return null;
+                      return (
+                        <SortableCondition
+                          key={id}
+                          id={id}
+                          ci={ci}
+                          condition={cond}
+                          registry={registry}
+                          isOpen={isOpen}
+                          availableTimeframes={availableTimeframes}
+                          executionTimeframe={executionTimeframe}
+                          tickerOptions={tickerOptions}
+                          onChange={(updated) => updateCondition(id, updated)}
+                          onRemove={() => removeCondition(id)}
+                        />
+                      );
+                    })}
+                  </div>
+                </SortableContext>
+                {adding !== null && addTarget === gi ? (
+                  <div className="mt-1.5">{renderInlineBuilder()}</div>
+                ) : (
                   <button
                     type="button"
-                    onClick={resetAdd}
-                    className="ml-auto text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => startAdd(gi)}
+                    className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    Cancel
+                    <Plus className="h-2.5 w-2.5" /> Add condition
                   </button>
-                </div>
-
-                {/* Right-side palette (only after operator is picked) */}
-                {pendingOp && (
-                  <IndicatorCommandPalette
-                    registry={registry}
-                    onSelect={(right) => {
-                      addConditionFromParts(pendingLeft, pendingOp, right);
-                    }}
-                    onCancel={resetAdd}
-                    placeholder="Pick right side..."
-                    availableTimeframes={availableTimeframes}
-                    executionTimeframe={executionTimeframe}
-                  />
                 )}
-              </div>
-            )}
+              </GroupDropZone>
+            </div>
+          );
+        })}
+
+        {/* New OR group / first condition */}
+        {adding !== null && (addTarget === null || addTarget >= groups.length) ? (
+          renderInlineBuilder()
+        ) : hasConditions ? (
+          <button
+            type="button"
+            onClick={() => startAdd(groups.length)}
+            className="inline-flex items-center gap-1 text-[11px] text-warning/80 hover:text-warning transition-colors"
+          >
+            <Plus className="h-2.5 w-2.5" /> Add OR group
+          </button>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => startAdd(0)}
+            className={`w-full h-8 border-dashed text-xs ${
+              isOpen
+                ? "border-success/30 text-success hover:bg-success/10 hover:border-success/50"
+                : "border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
+            }`}
+          >
+            <Plus className="h-3 w-3 mr-1" /> Add your first condition
+          </Button>
+        )}
+
+        {/* Logic Preview */}
+        {conditionGroup.conditions.length >= 2 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="px-2 py-1 rounded bg-muted/40 border border-border"
+          >
+            <div className="flex items-start gap-1.5">
+              <span className="text-[10px] text-muted-foreground font-medium shrink-0">Logic:</span>
+              <code className="text-[10px] font-mono text-foreground break-all">{logicPreview}</code>
+            </div>
           </motion.div>
         )}
-      </AnimatePresence>
+      </div>
 
-      {/* Logic Preview */}
-      {conditionGroup.conditions.length >= 2 && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="px-2 py-1 rounded bg-muted/40 border border-border"
-        >
-          <div className="flex items-start gap-1.5">
-            <span className="text-[10px] text-muted-foreground font-medium shrink-0">Logic:</span>
-            <code className="text-[10px] font-mono text-foreground break-all">{logicPreview}</code>
+      {/* Floating card that follows the cursor while dragging */}
+      <DragOverlay dropAnimation={null}>
+        {activeId && byId.get(activeId) ? (
+          <div className="flex items-center gap-2 rounded-lg border border-primary/60 bg-secondary/90 px-3 py-2 text-xs font-mono shadow-xl">
+            <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-primary">{formatSideLabel(byId.get(activeId)!.left)}</span>
+            <span className="text-foreground">{byId.get(activeId)!.operator}</span>
+            <span className="text-primary">{formatSideLabel(byId.get(activeId)!.right)}</span>
           </div>
-        </motion.div>
+        ) : null}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
+// ── Drag-and-drop sub-components ─────────────────────────────
+
+function GroupDropZone({ id, isOpen, children }: { id: string; isOpen: boolean; children: ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`rounded-lg border bg-secondary/10 p-2 transition-colors border-l-2 ${
+        isOver ? "border-primary ring-1 ring-primary/40" : "border-border/50"
+      } ${isOpen ? "border-l-success/50" : "border-l-destructive/50"}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SortableCondition({
+  id,
+  ci,
+  condition,
+  registry,
+  isOpen,
+  availableTimeframes,
+  executionTimeframe,
+  tickerOptions,
+  onChange,
+  onRemove,
+}: {
+  id: string;
+  ci: number;
+  condition: SingleCondition;
+  registry: Registry;
+  isOpen: boolean;
+  availableTimeframes?: string[];
+  executionTimeframe?: string;
+  tickerOptions?: string[];
+  onChange: (cond: SingleCondition) => void;
+  onRemove: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  };
+  return (
+    <div ref={setNodeRef} style={style}>
+      {ci > 0 && (
+        <div className="flex items-center gap-1.5 py-0.5 pl-6">
+          <span className="text-[9px] font-bold text-primary/60">AND</span>
+          <div className="flex-1 h-px bg-border/40" />
+        </div>
       )}
+      <div className="flex items-start gap-1">
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          title="Drag to reorder or move between groups"
+          className="mt-2.5 shrink-0 cursor-grab touch-none text-muted-foreground/50 hover:text-muted-foreground active:cursor-grabbing"
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <ConditionRow
+            condition={condition}
+            onChange={onChange}
+            onRemove={onRemove}
+            registry={registry}
+            isOpen={isOpen}
+            availableTimeframes={availableTimeframes}
+            executionTimeframe={executionTimeframe}
+            tickerOptions={tickerOptions}
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -309,7 +531,8 @@ function ConditionRow({
   registry,
   isOpen,
   availableTimeframes,
-  executionTimeframe
+  executionTimeframe,
+  tickerOptions,
 }: {
   condition: SingleCondition;
   onChange: (cond: SingleCondition) => void;
@@ -318,6 +541,7 @@ function ConditionRow({
   isOpen: boolean;
   availableTimeframes?: string[];
   executionTimeframe?: string;
+  tickerOptions?: string[];
 }) {
   const [editingSide, setEditingSide] = useState<"left" | "right" | null>(null);
   const [expandedSide, setExpandedSide] = useState<"left" | "right" | null>(null);
@@ -438,6 +662,7 @@ function ConditionRow({
             onClose={() => setExpandedSide(null)}
             registry={registry}
             availableTimeframes={availableTimeframes}
+            tickerOptions={tickerOptions}
           />
         )}
       </AnimatePresence>
@@ -609,6 +834,7 @@ function ExpandedArgsEditor({
   onClose,
   registry,
   availableTimeframes,
+  tickerOptions,
 }: {
   side: ConditionSide;
   onChange: (side: ConditionSide) => void;
@@ -616,14 +842,17 @@ function ExpandedArgsEditor({
   onClose: () => void;
   registry: Registry;
   availableTimeframes?: string[];
+  tickerOptions?: string[];
 }) {
   if (side.type !== "indicator") return null;
 
   const ind = registry.indicators.INDICATORS[side.func];
   const argKeys = ind?.args || [];
   const meta = INDICATOR_META[side.func];
+  // Ticker override only makes sense when there is more than one symbol to pick from.
+  const showTickerSelect = (tickerOptions?.length ?? 0) > 1;
 
-  if (argKeys.length === 0) return null;
+  if (argKeys.length === 0 && !showTickerSelect) return null;
 
   return (
     <motion.div
@@ -637,6 +866,27 @@ function ExpandedArgsEditor({
         <div className="flex items-center gap-2 bg-muted/40 rounded-md px-3 py-2 flex-wrap">
           {meta && (
             <span className="text-[10px] text-muted-foreground mr-1">{meta.description}</span>
+          )}
+          {showTickerSelect && (
+            <div className="flex items-center gap-1" title="Evaluate this indicator on another symbol (e.g. watch an index while trading a stock)">
+              <span className="text-[10px] text-muted-foreground font-medium">ticker:</span>
+              <select
+                value={String(side.args.ticker ?? "")}
+                onChange={(e) => {
+                  const { ticker: _removed, ...rest } = side.args;
+                  onChange({
+                    ...side,
+                    args: e.target.value ? { ...rest, ticker: e.target.value } : rest,
+                  });
+                }}
+                className="h-6 px-1.5 rounded border border-border/50 bg-background text-[11px] font-mono text-foreground outline-none focus:border-primary/50 transition-colors cursor-pointer"
+              >
+                <option value="">traded ticker</option>
+                {tickerOptions!.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
           )}
           {argKeys.map((param: string) => {
             const val = side.args[param];

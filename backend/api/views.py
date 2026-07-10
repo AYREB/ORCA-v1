@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import requests
 import ssl
 import threading
 import time
@@ -36,6 +37,7 @@ from core.analysis.parameter_optimiser import (
 )
 from core.main import dslJSONBacktest, dslTextToJsonBacktest, BacktestError, dataframe_to_response_records
 from core.parsing.extractingTickers import extract_tickers as _extract_tickers
+from core.parsing.extractingTickers import extract_signal_tickers as _extract_signal_tickers
 from core.data_pulling.datapull import get_data_with_indicator
 from .assistant import _market_csv_path, _load_market_csv
 from .assistant import (
@@ -55,6 +57,9 @@ from .indicator_sandbox import (
     validate_parameters,
 )
 from .models import BacktestRun, CustomIndicator, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from . import entitlements
+from .entitlements import PlanLimitError
+from .plans import PLANS
 from core.LLM.orca_llm import LLMUnavailableError, parse_strategy, parse_strategy_with_context
 
 LLM_UNAVAILABLE_MESSAGE = (
@@ -248,6 +253,9 @@ def user_payload(user) -> dict[str, Any]:
 
 
 def error_response(exc: Exception) -> JsonResponse:
+    if isinstance(exc, PlanLimitError):
+        return JsonResponse(exc.to_dict(), status=exc.status_code)
+
     if isinstance(exc, APIError):
         return json_error(exc.message, status=exc.status_code)
 
@@ -736,14 +744,20 @@ def serialize_backtest_run(run: BacktestRun):
 @token_required
 @rate_limit("assistant")
 def strategy_assistant_chat(request):
+    user = get_authenticated_user(request)
     payload = parse_body(request)
     messages = normalize_assistant_messages(payload.get("messages"))
     strategy_context = normalize_strategy_context(payload.get("strategy_context"))
 
+    entitlements.consume_quota(user, "ai")
     try:
         response = ask_strategy_assistant(messages, strategy_context)
     except AssistantError as exc:
+        entitlements.refund_quota(user, "ai")
         raise APIError(exc.message, status_code=exc.status_code)
+    except Exception:
+        entitlements.refund_quota(user, "ai")
+        raise
 
     return no_store(JsonResponse(response))
 
@@ -935,7 +949,75 @@ def me(request):
             raise APIError("Name cannot be empty.")
         user.first_name = name
         user.save(update_fields=["first_name"])
-    return no_store(JsonResponse(user_payload(user)))
+    payload = user_payload(user)
+    payload["plan"] = entitlements.plan_summary(user)
+    return no_store(JsonResponse(payload))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def plan_view(request):
+    """The signed-in user's plan, limits, and month-to-date usage."""
+    user = get_authenticated_user(request)
+    return no_store(JsonResponse(entitlements.plan_summary(user)))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@rate_limit("general")
+def plans_public(request):
+    """The full pricing table for the Plans page (no auth required)."""
+    return JsonResponse({"plans": entitlements.all_plans_public()})
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("general")
+def switch_plan(request):
+    """Change a user's plan.
+
+    PLAN_SELF_SERVICE (default: DEBUG) controls whether a user may change their
+    OWN plan without paying. It is OFF in production so nobody can self-upgrade
+    to Pro for free before billing exists — a non-staff self-switch then 403s.
+    Turn it on only once Stripe gates the upgrade. Staff can always switch.
+    Targeting another user by email stays staff-only.
+    Body: {"plan": "free|plus|pro", "email": "<optional target user>"}.
+    """
+    actor = get_authenticated_user(request)
+    body = parse_body(request)
+    raw_plan = str(body.get("plan") or "").strip().lower()
+    if raw_plan not in PLANS:
+        raise APIError("Invalid plan. Choose free, plus, or pro.")
+
+    target = actor
+    email = str(body.get("email") or "").strip()
+    if email:
+        User = get_user_model()
+        candidate = User.objects.filter(email__iexact=email).first()
+        if not candidate:
+            raise APIError("No user with that email.", status_code=404)
+        if candidate.id != actor.id and not getattr(actor, "is_staff", False):
+            raise APIError("Only staff can change another user's plan.", status_code=403)
+        target = candidate
+
+    self_service = bool(getattr(settings, "PLAN_SELF_SERVICE", False))
+    if target.id == actor.id and not self_service and not getattr(actor, "is_staff", False):
+        raise APIError("Plan changes are handled through checkout.", status_code=403)
+
+    profile = entitlements.get_profile(target)
+    profile.plan = raw_plan
+    profile.save(update_fields=["plan", "updated_at"])
+    return no_store(JsonResponse({
+        "email": target.email,
+        "plan": profile.plan,
+        "summary": entitlements.plan_summary(target),
+    }))
 
 
 @csrf_exempt
@@ -1113,6 +1195,8 @@ def strategies(request):
     if Strategy.objects.filter(user=user, name__iexact=name).exists():
         raise APIError("Strategy name already exists for this user.")
 
+    entitlements.enforce_count_cap(user, "strategies", Strategy.objects.filter(user=user).count())
+
     strategy = Strategy.objects.create(
         user=user,
         name=name,
@@ -1177,7 +1261,7 @@ def strategy_detail(request, strategy_id: int):
 
 def _native_indicators() -> list[dict[str, Any]]:
     """Native indicators, read-only: registry config merged with assistant knowledge."""
-    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
+    base = Path(settings.BASE_DIR) / "core" / "registries"
     try:
         with open(base / "indicatorRegistry.json", encoding="utf-8") as f:
             registry_data = json.load(f)
@@ -1258,6 +1342,8 @@ def custom_indicators(request):
 
     if CustomIndicator.objects.filter(user=user, name__iexact=name).exists():
         raise APIError("An indicator with that name already exists.")
+
+    entitlements.enforce_count_cap(user, "custom_indicators", CustomIndicator.objects.filter(user=user).count())
 
     test_result = run_indicator_test(code, parameters)
     if not test_result.get("passed"):
@@ -1381,15 +1467,21 @@ def custom_indicator_guide(request):
 @token_required
 @rate_limit("assistant")
 def indicator_assistant_chat(request):
+    user = get_authenticated_user(request)
     payload = parse_body(request)
     messages = normalize_assistant_messages(payload.get("messages"))
     indicator_context = normalize_indicator_context(payload.get("indicator_context"))
     mode = "agent" if str(payload.get("mode", "ask")).strip().lower() == "agent" else "ask"
 
+    entitlements.consume_quota(user, "ai")
     try:
         response = ask_indicator_assistant(messages, indicator_context, mode=mode)
     except AssistantError as exc:
+        entitlements.refund_quota(user, "ai")
         raise APIError(exc.message, status_code=exc.status_code)
+    except Exception:
+        entitlements.refund_quota(user, "ai")
+        raise
 
     return no_store(JsonResponse(response))
 
@@ -1417,7 +1509,13 @@ def backtestDSLText(request):
             raise APIError("strategy_id must be an integer.")
         strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-    result = dslTextToJsonBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
+    entitlements.consume_quota(user, "backtest")
+    try:
+        result = dslTextToJsonBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
+    except Exception:
+        entitlements.refund_quota(user, "backtest")
+        raise
+    result["ticker_names"] = resolve_ticker_names(list(result.get("data", {}).keys()))
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
     if strategy:
         strategy.last_result = result
@@ -1487,6 +1585,7 @@ def backtestDSLJSON(request):
 
     # Guard: cap tickers per request to prevent excessive data fetching
     MAX_TICKERS_PER_BACKTEST = 5
+    MAX_SIGNAL_TICKERS_PER_BACKTEST = 3
     _tickers = _extract_tickers(dsl)
     if len(_tickers) > MAX_TICKERS_PER_BACKTEST:
         return JsonResponse({
@@ -1494,10 +1593,21 @@ def backtestDSLJSON(request):
             "code": "too_many_tickers",
             "success": False,
         }, status=400)
+    _signal_tickers = _extract_signal_tickers(dsl)
+    if len(_signal_tickers) > MAX_SIGNAL_TICKERS_PER_BACKTEST:
+        return JsonResponse({
+            "error": f"Too many watch-only tickers. Maximum {MAX_SIGNAL_TICKERS_PER_BACKTEST} per backtest.",
+            "code": "too_many_tickers",
+            "success": False,
+        }, status=400)
 
+    # Reserve quota only now that every cheap validation guard above has passed,
+    # so a rejected request never burns a backtest. Refund on any failure.
+    entitlements.consume_quota(user, "backtest")
     try:
         result = dslJSONBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
     except BacktestError as e:
+        entitlements.refund_quota(user, "backtest")
         return JsonResponse({
             "error": e.message,
             "code": e.code,
@@ -1505,12 +1615,14 @@ def backtestDSLJSON(request):
         }, status=400)
     except ValueError as e:
         # DSL validation errors
+        entitlements.refund_quota(user, "backtest")
         return JsonResponse({
             "error": str(e),
             "code": "validation_error",
             "success": False
         }, status=400)
     except Exception as e:
+        entitlements.refund_quota(user, "backtest")
         logger.exception("Unexpected backtest error")
         return JsonResponse({
             "error": "An unexpected error occurred. Please try again.",
@@ -1518,6 +1630,7 @@ def backtestDSLJSON(request):
             "success": False
         }, status=500)
 
+    result["ticker_names"] = resolve_ticker_names(list(result.get("data", {}).keys()))
     record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
 
     if strategy:
@@ -1550,7 +1663,9 @@ def dslParameterOptimiser(request):
     total_runs = 1
     for vals in param_grid.values():
         total_runs *= len(vals)
-    enforce_optimize_intensity(total_runs)
+    entitlements.enforce_optimizer_method(user, "grid")
+    entitlements.enforce_optimize_intensity(user, total_runs)
+    entitlements.consume_quota(user, "optimize")
 
     if async_mode:
         cleanup_jobs(optimizer_jobs)
@@ -1629,7 +1744,9 @@ def dslGeneticOptimiser(request):
     except (TypeError, ValueError):
         raise APIError("ga_settings population and generations must be integers.")
     total_runs = max(1, population) * max(1, generations)
-    enforce_optimize_intensity(total_runs)
+    entitlements.enforce_optimizer_method(user, "genetic")
+    entitlements.enforce_optimize_intensity(user, total_runs)
+    entitlements.consume_quota(user, "optimize")
 
     if async_mode:
         cleanup_jobs(genetic_jobs)
@@ -1731,7 +1848,9 @@ def dslOptimiser(request):
 
     # Size the search up front and cap it (applies to both sync and async paths).
     total_runs = estimate_total_runs(method, opt_settings)
-    enforce_optimize_intensity(total_runs)
+    entitlements.enforce_optimizer_method(user, "meta")
+    entitlements.enforce_optimize_intensity(user, total_runs)
+    entitlements.consume_quota(user, "optimize")
 
     if async_mode:
         cleanup_jobs(optimiser_jobs)
@@ -1804,15 +1923,22 @@ def strategy_to_dsl(request):
     if not message:
         raise APIError("message is required")
 
+    entitlements.consume_quota(user, "ai")
+
     # 1. Call LLM parser
     try:
         result = parse_strategy(message)
     except LLMUnavailableError as e:
+        entitlements.refund_quota(user, "ai")
         logger.warning(f"LLM unavailable for strategy_to_dsl: {e}")
         return JsonResponse({"success": False, "error": LLM_UNAVAILABLE_MESSAGE}, status=503)
+    except Exception:
+        entitlements.refund_quota(user, "ai")
+        raise
 
     # 2. Handle failure from model
     if isinstance(result, dict) and "error" in result:
+        entitlements.refund_quota(user, "ai")
         return JsonResponse({
             "success": False,
             "error": result["error"],
@@ -1963,6 +2089,42 @@ def log_query(
 @api_error_boundary
 @require_methods("POST")
 @token_required
+@rate_limit("general")
+def strategy_chat_outcome(request):
+    """Post-parse feedback: did the user run the AI-parsed strategy, and which
+    fields did they correct first? Stamped onto the matching query log — this
+    is the ground-truth signal for whether the model's parses are RIGHT
+    (schema-valid but wrong parses show up here as edits, nowhere else)."""
+    user = get_authenticated_user(request)
+    body = parse_body(request)
+
+    session_id = str(body.get("session_id") or "").strip()
+    if not session_id:
+        raise APIError("session_id is required")
+
+    edited = body.get("edited_fields")
+    if not isinstance(edited, list):
+        edited = []
+    edited = [str(f)[:50] for f in edited][:20]
+
+    log = (
+        StrategyQueryLog.objects
+        .filter(user=user, session_id=session_id, status="complete")
+        .order_by("-id")
+        .first()
+    )
+    if log:
+        log.ran_backtest = bool(body.get("ran_backtest", True))
+        log.edited_fields = edited
+        log.save(update_fields=["ran_backtest", "edited_fields"])
+
+    return no_store(JsonResponse({"ok": True}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
 @rate_limit("assistant")
 def strategy_chat(request):
     user = get_authenticated_user(request)
@@ -2088,6 +2250,10 @@ def strategy_chat(request):
     # ---- Get user constraints ----
     constraints = get_user_constraints(user)
 
+    # ---- Plan quota (only the real model call is metered, not clarify turns) ----
+    # Reserve atomically before the model call; refund if the model is unavailable.
+    entitlements.consume_quota(user, "ai")
+
     # ---- Try to parse with full context ----
     try:
         strategy, errors, raw_output = parse_strategy_with_context(
@@ -2096,8 +2262,12 @@ def strategy_chat(request):
             allowed_timeframes=constraints["allowed_timeframes"]
         )
     except LLMUnavailableError as e:
+        entitlements.refund_quota(user, "ai")
         logger.warning(f"LLM unavailable for strategy_chat: {e}")
         return JsonResponse({"success": False, "error": LLM_UNAVAILABLE_MESSAGE}, status=503)
+    except Exception:
+        entitlements.refund_quota(user, "ai")
+        raise
 
     # ---- Check for invalid timeframe in errors ----
     timeframe_errors = [e for e in errors if "Invalid timeframe" in e]
@@ -2219,7 +2389,7 @@ def strategy_chat(request):
 @require_methods("GET")
 @rate_limit("general")
 def registry(request):
-    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
+    base = Path(settings.BASE_DIR) / "core" / "registries"
 
     with open(base / "commandRegistry.json", encoding="utf-8") as f:
         commands = json.load(f)
@@ -2311,9 +2481,132 @@ _TIMEFRAME_TO_YF_INTERVAL = {
 
 
 def _load_ticker_registry() -> dict:
-    base = Path(__file__).resolve().parent.parent.parent / "backend/core/registries"
-    with open(base / "tickerRegistry.json", encoding="utf-8") as f:
-        return json.load(f).get("TICKERS", {})
+    try:
+        base = Path(settings.BASE_DIR) / "core" / "registries"
+        with open(base / "tickerRegistry.json", encoding="utf-8") as f:
+            return json.load(f).get("TICKERS", {})
+    except (OSError, ValueError) as exc:  # missing/corrupt file -> treat all as custom
+        logger.warning("ticker registry unavailable: %s", exc)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Ticker symbol search / name resolution (Yahoo Finance-backed)
+# ---------------------------------------------------------------------------
+_YF_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+# Yahoo rejects requests without a browser-ish UA.
+_YF_SEARCH_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; OrcaBacktester/1.0)"}
+_TICKER_NAME_CACHE_TTL = 7 * 24 * 3600
+_YF_SEARCH_CACHE_TTL = 6 * 3600
+
+
+def _yahoo_symbol_search(query: str) -> list:
+    """Search Yahoo Finance for symbols matching ``query``.
+
+    Returns [{symbol, name, exchange, type}], cached per query so typing in the
+    UI (and repeated name lookups) don't hammer Yahoo. Failures degrade to an
+    empty list with a short negative-cache so an outage doesn't retry per call.
+    """
+    key = f"yf_search:{query.lower()}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        resp = requests.get(
+            _YF_SEARCH_URL,
+            params={"q": query, "quotesCount": 10, "newsCount": 0, "listsCount": 0},
+            headers=_YF_SEARCH_HEADERS,
+            timeout=4,
+        )
+        resp.raise_for_status()
+        quotes = resp.json().get("quotes", []) or []
+    except Exception as exc:  # noqa: BLE001 — any network/parse failure degrades the same way
+        logger.warning("Yahoo ticker search failed for %r: %s", query, exc)
+        cache.set(key, [], 60)
+        return []
+
+    results = []
+    for item in quotes:
+        symbol = str(item.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        name = item.get("shortname") or item.get("longname") or symbol
+        results.append({
+            "symbol": symbol,
+            "name": name,
+            "exchange": item.get("exchDisp") or item.get("exchange") or "",
+            "type": item.get("quoteTypeDisp") or item.get("quoteType") or "",
+        })
+        # Every search doubles as a name lookup for later resolution.
+        cache.set(f"ticker_name:{symbol.upper()}", name, _TICKER_NAME_CACHE_TTL)
+
+    cache.set(key, results, _YF_SEARCH_CACHE_TTL)
+    return results
+
+
+def resolve_ticker_names(symbols) -> dict:
+    """Map each symbol to its full asset name.
+
+    Resolution order: local ticker registry -> cached Yahoo lookups -> a live
+    Yahoo search for that symbol -> the symbol itself (never fails).
+    """
+    registry = _load_ticker_registry()
+    names = {}
+    for sym in symbols:
+        entry = registry.get(sym)
+        if entry and entry.get("name"):
+            names[sym] = entry["name"]
+            continue
+        cached = cache.get(f"ticker_name:{sym.upper()}")
+        if cached:
+            names[sym] = cached
+            continue
+        match = next(
+            (r for r in _yahoo_symbol_search(sym) if r["symbol"].upper() == sym.upper()),
+            None,
+        )
+        names[sym] = match["name"] if match else sym
+    return names
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def ticker_search(request):
+    """Symbol autocomplete: local registry matches first, then live Yahoo Finance.
+
+    Each result: {symbol, name, exchange, type, local}. ``local`` marks symbols
+    with pre-pulled Orca data (they support more timeframes / faster backtests).
+    """
+    query = (request.GET.get("q") or "").strip()[:40]
+    if not query:
+        return no_store(JsonResponse({"results": []}))
+
+    query_lower = query.lower()
+    results, seen = [], set()
+
+    for sym, meta in _load_ticker_registry().items():
+        haystack = " ".join([sym, meta.get("name", ""), *meta.get("aliases", [])]).lower()
+        if query_lower in haystack:
+            results.append({
+                "symbol": sym,
+                "name": meta.get("name", sym),
+                "exchange": "Orca data",
+                "type": "",
+                "local": True,
+            })
+            seen.add(sym.upper())
+
+    for item in _yahoo_symbol_search(query):
+        if item["symbol"].upper() in seen:
+            continue
+        results.append({**item, "local": False})
+        seen.add(item["symbol"].upper())
+
+    return no_store(JsonResponse({"results": results[:15]}))
 
 
 def _load_chart_dataframe(ticker: str, timeframe: str):
@@ -2375,25 +2668,34 @@ def chart_data(request):
 
     registry = _load_ticker_registry()
     ticker_config = registry.get(ticker)
-    if ticker_config is None:
-        raise APIError(f"Unknown ticker '{ticker}'.", status_code=404)
 
-    available = ticker_config.get("available_timeframes", [])
-    if timeframe not in available:
+    # Allowed timeframes = anything yfinance can fetch live (1m…1h, 1D) plus, for
+    # stored tickers, the extra ones baked into their CSVs (e.g. 4h). So a known
+    # ticker like AAPL can still be viewed on 1h — it just comes from Yahoo.
+    yf_timeframes = set(_TIMEFRAME_TO_YF_INTERVAL)
+    if ticker_config is not None:
+        name = ticker_config.get("name", ticker)
+        allowed = set(ticker_config.get("available_timeframes", [])) | yf_timeframes
+    else:
+        # Unknown ticker: resolve its real asset name (cached Yahoo lookup).
+        name = resolve_ticker_names([ticker]).get(ticker, ticker)
+        allowed = yf_timeframes
+
+    if timeframe not in allowed:
         raise APIError(
-            f"Timeframe '{timeframe}' is not available for {ticker}. "
-            f"Available: {', '.join(available) or 'none'}."
+            f"Timeframe '{timeframe}' isn't available for {ticker}. "
+            f"Try one of: {', '.join(sorted(allowed)) or 'none'}."
         )
 
     df, error_message = _load_chart_dataframe(ticker, timeframe)
     if error_message:
-        raise APIError(error_message)
+        raise APIError(error_message, status_code=404)
 
     records = dataframe_to_response_records(df)
 
     return no_store(JsonResponse({
         "ticker": ticker,
-        "name": ticker_config.get("name", ticker),
+        "name": name,
         "timeframe": timeframe,
         "candles": records,
     }))
@@ -2485,6 +2787,7 @@ def paper_accounts(request):
         raise APIError("accounts must be a list.")
     if len(accounts) > MAX_PAPER_ACCOUNTS:
         raise APIError(f"Too many paper accounts (max {MAX_PAPER_ACCOUNTS}).")
+    entitlements.enforce_total_count(user, "paper_accounts", len(accounts))
     if len(json.dumps(accounts)) > MAX_PAPER_ACCOUNTS_BYTES:
         raise APIError("Paper account data is too large to save.")
 

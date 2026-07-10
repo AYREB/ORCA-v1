@@ -2,7 +2,7 @@ import pandas as pd
 from .BacktesterHelpers.ConditionEvaluation import evaluate_condition_capture
 from .BacktesterHelpers.DSLArgumentParser import get_long_short_conditions, get_open_args, get_close_args
 from .BacktesterHelpers.CalculateShares import calculate_shares
-from core.parsing.extractingTickers import extract_execution_timeframe, extract_data_timeframes, extract_dateframe
+from core.parsing.extractingTickers import extract_execution_timeframe, extract_data_timeframes, extract_dateframe, extract_signal_tickers
 
 # ---------------- TRANSACTION COST HELPERS ---------------- #
 # Two independent cost components, combinable to model any retail broker:
@@ -140,10 +140,15 @@ def backtester(parsed_dsl, data_dict, indicator_functions, initial_balance=10000
     reentry_cooldown = max(0, int(close_args.get("reentryCooldownBars", 0) or 0))
 
     # -------- DATA SETUP -------- #
+    # Signal (watch-only) tickers stay in data_dict so conditions can reference
+    # them via an explicit `ticker` arg, but they must never be traded — so
+    # they're excluded from the execution set the main loop iterates.
+    signal_tickers = set(extract_signal_tickers(parsed_dsl))
+
     exec_dfs = {
         t: data_dict[t][execution_tf]
         for t in data_dict
-        if execution_tf in data_dict[t]
+        if execution_tf in data_dict[t] and t not in signal_tickers
     }
 
     if not exec_dfs:

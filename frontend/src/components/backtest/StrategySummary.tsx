@@ -114,8 +114,12 @@ interface Props {
     const start = pick(dateframe, "start", "from");
     const end = pick(dateframe, "end", "to");
   
+    const signalTickers = pick(ctx, "signal_tickers", "signalTickers");
+
     const facts: string[] = [];
     if (tickers) facts.push(`Tickers: ${Array.isArray(tickers) ? tickers.join(", ") : tickers}`);
+    if (signalTickers && (!Array.isArray(signalTickers) || signalTickers.length > 0))
+      facts.push(`Watching: ${Array.isArray(signalTickers) ? signalTickers.join(", ") : signalTickers}`);
     if (execTf) facts.push(`Timeframe: ${execTf}`);
     if (dataTfs) facts.push(`Data: ${Array.isArray(dataTfs) ? dataTfs.join(", ") : dataTfs}`);
     if (start || end) facts.push(`Dates: ${start || "?"} → ${end || "?"}`);

@@ -34,6 +34,7 @@ const Backtest = () => {
   const [prefillDslJson, setPrefillDslJson] = useState<Record<string, any> | null>(null);
   const [editedDslJson, setEditedDslJson] = useState<Record<string, any> | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isRerunning, setIsRerunning] = useState(false);
   const { user } = useAuth();
 
   // Load last backtest on mount
@@ -175,6 +176,31 @@ const Backtest = () => {
       toast.error(message);
     }
     setIsUpdating(false);
+  };
+
+  // Rerun the backtest with whatever is currently in the Strategy tab's builder /
+  // raw DSL — no save required. Updates the saved strategy's results only if one
+  // is already linked to this run.
+  const handleRerunEdited = async () => {
+    const currentDslJson = (editedDslJson || prefillDslJson || results?.json_dsl) as Record<string, any> | null;
+    if (!currentDslJson || Object.keys(currentDslJson).length === 0) {
+      toast.error("No strategy to run. Edit the builder or the raw DSL first.");
+      return;
+    }
+    setIsRerunning(true);
+    try {
+      const result = await api.backtestDSLJSON(
+        currentDslJson,
+        savedStrategyId ? { strategyId: savedStrategyId, strategyName: strategyName.trim() || undefined } : undefined,
+      );
+      handleEasyModeResults(result);
+      toast.success("Backtest re-run with your edits");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Backtest failed";
+      toast.error(message);
+    } finally {
+      setIsRerunning(false);
+    }
   };
 
   const handleEditInBuilder = () => {
@@ -360,7 +386,25 @@ const Backtest = () => {
                             />
                           </div>
                           <div className="flex items-end gap-2">
-                            <Button variant="hero" className="flex-1" onClick={() => handleSaveStrategy(strategyName)}>
+                            <Button
+                              variant="hero"
+                              className="flex-1"
+                              disabled={isRerunning}
+                              onClick={handleRerunEdited}
+                            >
+                              {isRerunning ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  Running...
+                                </>
+                              ) : (
+                                <>
+                                  <Play className="h-4 w-4 mr-2" />
+                                  Rerun with Edits
+                                </>
+                              )}
+                            </Button>
+                            <Button variant="secondary" className="flex-1" onClick={() => handleSaveStrategy(strategyName)}>
                               Save Strategy
                             </Button>
                             <Button
