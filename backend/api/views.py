@@ -1781,7 +1781,12 @@ def dslParameterOptimiser(request):
     async_mode = bool(body.get("async", False))
 
     # Size the grid up front and cap it (applies to both sync and async paths).
-    param_grid, _ = build_param_grid(dsl, parameter_choice)
+    # The cap (MAX_GRID_COMBINATIONS) is user-actionable, so surface it as a
+    # friendly 400 instead of a raw 500.
+    try:
+        param_grid, _ = build_param_grid(dsl, parameter_choice)
+    except ValueError as e:
+        raise APIError(str(e), status_code=400)
     if not param_grid:
         raise APIError("No parameters selected for optimization")
     total_runs = 1
@@ -1888,7 +1893,10 @@ def dslGeneticOptimiser(request):
         cleanup_jobs(genetic_jobs)
         ensure_user_can_create_job(genetic_jobs, user.id)
 
-        param_values, _ = build_param_values(dsl, parameter_choice)
+        try:
+            param_values, _ = build_param_values(dsl, parameter_choice)
+        except ValueError as e:
+            raise APIError(str(e), status_code=400)
         if not param_values:
             raise APIError("No parameters selected for optimization")
 

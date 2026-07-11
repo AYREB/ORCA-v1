@@ -253,12 +253,20 @@ def _resolve_choice(path, value, choice):
     raise ValueError(f"Invalid mode '{mode}' for '{path}'")
 
 
-def build_param_grid(parsed_dsl, param_choices=None):
-    """Return (param_grid, base_params) for grid-search optimization.
+def build_param_grid(parsed_dsl, param_choices=None, enforce_grid_cap=True):
+    """Return (param_grid, base_params) as {dot_path: [candidate values]}.
 
     Every candidate list is sanitized against the parameter's valid domain
     (clamped, integer-rounded, deduped) so no optimizer ever backtests a
     nonsense value like a negative period or an RSI threshold of 400.
+
+    ``enforce_grid_cap`` gates the MAX_GRID_COMBINATIONS ceiling on the *product*
+    of the value lists. That ceiling only makes sense for GRID search, which
+    enumerates every combination. Genetic and the metaheuristics merely SAMPLE
+    this space (their work is bounded by population×generations / iterations, not
+    the product), so they build the same value lists with the cap disabled —
+    otherwise a wide search space (exactly what those methods are for) would be
+    wrongly rejected with "Too many combinations".
     """
     base_params = extract_optimizable_parameters(parsed_dsl)
     if param_choices is None:
@@ -280,20 +288,26 @@ def build_param_grid(parsed_dsl, param_choices=None):
         if values:
             grid[path] = values
 
-    total = 1
-    for vals in grid.values():
-        total *= len(vals)
-    if total > MAX_GRID_COMBINATIONS:
-        raise ValueError(
-            f"Too many combinations ({total:,}). Reduce ranges/steps to at most "
-            f"{MAX_GRID_COMBINATIONS:,} total combinations."
-        )
+    if enforce_grid_cap:
+        total = 1
+        for vals in grid.values():
+            total *= len(vals)
+        if total > MAX_GRID_COMBINATIONS:
+            raise ValueError(
+                f"Too many combinations ({total:,}). Reduce ranges/steps to at most "
+                f"{MAX_GRID_COMBINATIONS:,} total combinations."
+            )
     return grid, base_params
- 
- 
+
+
 def build_param_values(parsed_dsl, param_choices=None):
-    """Return (param_values, base_params) for genetic optimization."""
-    return build_param_grid(parsed_dsl, param_choices)  # identical structure
+    """Return (param_values, base_params) for genetic / metaheuristic optimizers.
+
+    Same value-list structure as the grid, but WITHOUT the grid-combination cap:
+    these methods sample the space rather than enumerate it, so a large space is
+    expected and fine (the run count is bounded separately by the caller).
+    """
+    return build_param_grid(parsed_dsl, param_choices, enforce_grid_cap=False)
  
 # ---------------- DATA LOADING ---------------- #
  

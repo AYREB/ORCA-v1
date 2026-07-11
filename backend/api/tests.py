@@ -847,6 +847,48 @@ class OptimizerDataPipelineTests(TestCase):
             for frame in tf_map.values():
                 self.assertIsNone(frame.index.tz)
 
+    def test_genetic_metaheuristic_space_is_not_grid_capped(self):
+        """Genetic/metaheuristics sample the space, so build_param_values must
+        NOT enforce the grid-combination cap (build_param_grid still does).
+        Regression: a large search space made the genetic endpoint 500 with
+        'Too many combinations'."""
+        from core.analysis.parameter_optimiser import (
+            build_param_grid, build_param_values, MAX_GRID_COMBINATIONS,
+        )
+
+        dsl = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1D",
+                    "dateframe": {"start": "2025-01-01", "end": "2025-06-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 30},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+        # Two wide ranges whose product far exceeds the grid cap.
+        choices = {
+            "LONG.OPEN.CONDITIONS.left.arg.period": {"mode": "range", "start": 2, "end": 500, "steps": 200},
+            "LONG.OPEN.CONDITIONS.right.value": {"mode": "range", "start": 1, "end": 99, "steps": 99},
+        }
+
+        with self.assertRaises(ValueError):
+            build_param_grid(dsl, choices)  # grid enumerates → capped
+
+        # Genetic/meta only sample → must succeed, product may exceed the cap.
+        values, _ = build_param_values(dsl, choices)
+        product = 1
+        for v in values.values():
+            product *= len(v)
+        self.assertGreater(product, MAX_GRID_COMBINATIONS)
+
     def test_optimizer_runs_end_to_end_on_tz_aware_source(self):
         import pandas as pd
         import core.analysis.parameter_optimiser as opt
