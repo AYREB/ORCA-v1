@@ -16,7 +16,13 @@ if _PROJECT_ROOT not in sys.path:
 from core.backtesting.backtesterCore import backtester
 from core.data_pulling.datapull import get_data_with_indicator
 from core.fetcher_calculators.indicatorEvaluator import build_indicator_functions
-from core.main import apply_default_arguments, merge_indicator_defaults
+from core.main import (
+    apply_default_arguments,
+    clip_dataframe_to_dateframe,
+    get_fetch_date_bound,
+    get_max_indicator_period,
+    merge_indicator_defaults,
+)
 from core.parsing.extractingTickers import collect_timeframes_from_dsl, extract_execution_timeframe
 from core.parsing.validateParsedDSL import validate_parsed_dsl
  
@@ -325,26 +331,66 @@ def _context(parsed_dsl):
  
  
 def _prepare(parsed_dsl, internet=True, csv_folder="Data_CSVs"):
-    """Validate DSL, load indicators and data. Returns (parsed_dsl, data_dict, indicator_functions)."""
+    """Validate DSL, load indicators and data. Returns (parsed_dsl, data_dict, indicator_functions).
+
+    The online path mirrors ``core.main.main`` exactly: it fetches with an
+    indicator-warmup lead-in, then normalises every dataframe's index to
+    tz-naive and clips it to the requested window (keeping warmup bars). This
+    matters because the backtester compares each bar's timestamp against the
+    tz-naive dateframe bounds — feeding it a raw, tz-AWARE yfinance frame (as
+    this used to) makes pandas raise "Cannot compare tz-naive and tz-aware
+    datetime-like objects", which surfaced as every optimizer run failing even
+    though the identical standalone backtest worked. Sharing main's pipeline
+    also gives indicators the same warmup they get in a normal backtest, so an
+    optimized run's numbers match a re-run of the winning parameters.
+    """
     parsed_dsl = apply_default_arguments(parsed_dsl)
     parsed_dsl = merge_indicator_defaults(parsed_dsl)
     validate_parsed_dsl(parsed_dsl)
- 
+
     indicator_functions = _load_indicator_functions()
     ctx = _context(parsed_dsl)
     execution_tf = extract_execution_timeframe(parsed_dsl)
+    # The text parser can hand back a list of execution timeframes; the
+    # backtester uses the first, so normalise to match here too.
+    if isinstance(execution_tf, list):
+        execution_tf = execution_tf[0] if execution_tf else "1h"
     timeframes = collect_timeframes_from_dsl(parsed_dsl, execution_tf)
- 
+
     # Include signal (watch-only) tickers so cross-asset conditions can be
     # evaluated; the backtester itself excludes them from trading.
     all_tickers = list(ctx["tickers"]) + [
         t for t in ctx.get("signal_tickers", []) if t not in ctx["tickers"]
     ]
-    data_dict = load_data_dict(
-        all_tickers, timeframes,
-        ctx["dateframe"]["start"], ctx["dateframe"]["end"],
-        indicator_functions, internet, csv_folder
-    )
+    start_date = ctx["dateframe"]["start"]
+    end_date = ctx["dateframe"]["end"]
+
+    if not internet:
+        data_dict = load_data_dict(
+            all_tickers, timeframes, start_date, end_date,
+            indicator_functions, internet, csv_folder,
+        )
+        return parsed_dsl, data_dict, indicator_functions
+
+    # Online: replicate core.main.main's fetch → normalise → clip pipeline.
+    warmup_days = get_max_indicator_period(parsed_dsl)
+    fetch_start = get_fetch_date_bound(start_date, warmup_days=warmup_days)
+    fetch_end = get_fetch_date_bound(end_date, is_end=True)
+
+    data_dict = {}
+    for ticker in all_tickers:
+        data_dict[ticker] = {}
+        for tf in timeframes:
+            df = get_data_with_indicator(ticker=ticker, start=fetch_start, end=fetch_end, interval=tf)
+            if df is None or df.empty:
+                raise ValueError(f"No data for '{ticker}' on '{tf}' between {start_date} and {end_date}")
+            # Normalise index to tz-naive and clip to the window (keep warmup bars
+            # so indicators are warm before the first tradable bar).
+            df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=False)
+            if df.empty:
+                raise ValueError(f"No data for '{ticker}' on '{tf}' between {start_date} and {end_date}")
+            data_dict[ticker][tf] = df
+
     return parsed_dsl, data_dict, indicator_functions
  
 # ---------------- BACKTESTER WRAPPER ---------------- #

@@ -229,11 +229,17 @@ def run_async_job(
             final_total = job.get("total_runs", total_runs) if job else total_runs
             store.update(job_id, result=result, status="completed", completed_runs=final_total)
         except Exception as exc:
-            store.update(
-                job_id,
-                error=str(exc) if settings.DEBUG else "Optimization failed.",
-                status="error",
-            )
+            # ValueError from the optimizer is a user-actionable, safe message
+            # ("No data for …", "All optimizer runs failed…", "Too many
+            # combinations…") — surface it even in production. Anything else is
+            # masked to avoid leaking internals.
+            if isinstance(exc, ValueError):
+                message = str(exc)
+            elif settings.DEBUG:
+                message = str(exc)
+            else:
+                message = "Optimization failed. Please try again."
+            store.update(job_id, error=message, status="error")
             if on_error is not None:
                 try:
                     on_error()
@@ -394,6 +400,11 @@ def rate_limit(bucket: str) -> Callable:
     def decorator(view_func: Callable) -> Callable:
         @wraps(view_func)
         def wrapped(request, *args, **kwargs):
+            # Master kill-switch (settings.RATE_LIMITING_ENABLED). Off on
+            # QA/staging so testing isn't throttled; always on in production.
+            if not getattr(settings, "RATE_LIMITING_ENABLED", True):
+                return view_func(request, *args, **kwargs)
+
             max_requests, window_seconds = resolve_rate_limit(bucket)
             cache_key = f"ratelimit:{bucket}:{get_rate_limit_identifier(request)}"
 
@@ -1804,6 +1815,9 @@ def dslParameterOptimiser(request):
     entitlements.consume_quota(user, "optimize")
     try:
         result = optimizer(parsed_dsl=dsl, param_choices=parameter_choice, initial_balance=initial_balance)
+    except ValueError as e:
+        entitlements.refund_quota(user, "optimize")
+        raise APIError(str(e), status_code=400)
     except Exception:
         entitlements.refund_quota(user, "optimize")
         raise
@@ -1902,6 +1916,9 @@ def dslGeneticOptimiser(request):
             initial_balance=initial_balance,
             ga_settings=ga_settings,
         )
+    except ValueError as e:
+        entitlements.refund_quota(user, "optimize")
+        raise APIError(str(e), status_code=400)
     except Exception:
         entitlements.refund_quota(user, "optimize")
         raise
@@ -2010,6 +2027,9 @@ def dslOptimiser(request):
             initial_balance=initial_balance,
             settings=opt_settings,
         )
+    except ValueError as e:
+        entitlements.refund_quota(user, "optimize")
+        raise APIError(str(e), status_code=400)
     except Exception:
         entitlements.refund_quota(user, "optimize")
         raise

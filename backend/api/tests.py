@@ -796,8 +796,96 @@ class OptimizerQuotaRefundTests(TestCase):
                 HTTP_AUTHORIZATION=f"Token {self.token.key}",
             )
 
-        self.assertEqual(response.status_code, 500)
+        # A ValueError from the optimizer is user-actionable, so it maps to a
+        # friendly 400 (not a raw 500), and the quota is refunded.
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("all runs failed", response.json().get("error", ""))
         self.assertEqual(entitlements.usage_count(self.user, "optimize"), 0)
+
+
+class OptimizerDataPipelineTests(TestCase):
+    """The optimizer must normalise market data exactly like core.main so the
+    backtester never hits 'Cannot compare tz-naive and tz-aware' (the bug that
+    made every optimizer run fail while the standalone backtest worked)."""
+
+    def test_prepare_normalizes_tz_aware_index_to_naive(self):
+        import pandas as pd
+        import core.analysis.parameter_optimiser as opt
+
+        idx = pd.date_range("2025-01-01", periods=120, freq="D", tz="America/New_York")
+        aware = pd.DataFrame(
+            {
+                "Open": range(120), "High": range(1, 121), "Low": range(120),
+                "Close": range(1, 121), "Volume": [1000] * 120,
+            },
+            index=idx,
+        )
+
+        dsl = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1D",
+                    "dateframe": {"start": "2025-01-01", "end": "2025-04-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 30},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+
+        with patch.object(opt, "get_data_with_indicator", return_value=aware.copy()):
+            _, data_dict, _ = opt._prepare(dict(dsl))
+
+        # Every loaded frame must be tz-naive after _prepare.
+        for tf_map in data_dict.values():
+            for frame in tf_map.values():
+                self.assertIsNone(frame.index.tz)
+
+    def test_optimizer_runs_end_to_end_on_tz_aware_source(self):
+        import pandas as pd
+        import core.analysis.parameter_optimiser as opt
+
+        idx = pd.date_range("2025-01-01", periods=200, freq="D", tz="UTC")
+        # Oscillating close so RSI actually crosses thresholds and trades fire.
+        closes = [100 + (i % 15) - 7 for i in range(200)]
+        aware = pd.DataFrame(
+            {
+                "Open": closes, "High": [c + 2 for c in closes],
+                "Low": [c - 2 for c in closes], "Close": closes, "Volume": [1000] * 200,
+            },
+            index=idx,
+        )
+        dsl = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1D",
+                    "dateframe": {"start": "2025-01-01", "end": "2025-06-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 40},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+        choice = {"LONG.OPEN.CONDITIONS.left.arg.period": {"mode": "manual", "values": [10, 14, 20]}}
+
+        with patch.object(opt, "get_data_with_indicator", return_value=aware.copy()):
+            result = opt.optimizer(parsed_dsl=dict(dsl), param_choices=choice, initial_balance=10000)
+
+        # No run should fail with the tz comparison error.
+        self.assertEqual(result["total_runs"], 3)
+        self.assertEqual(result["errors"], [])
 
 
 class SsoAccountManagementTests(TestCase):

@@ -425,6 +425,13 @@ PLAN_SELF_SERVICE = env_bool("PLAN_SELF_SERVICE", DEBUG)
 # production, or every user gets unlimited Pro for free. Defaults to True.
 PLAN_ENFORCEMENT = env_bool("PLAN_ENFORCEMENT", True)
 
+# Master switch for API rate limiting. When False, every @rate_limit gate in
+# api.views is bypassed (per-minute bursts AND per-day quotas). Meant for
+# QA/staging so testing isn't throttled by the abuse limits — leave ON (the
+# default) in production. Mirrors PLAN_ENFORCEMENT; set RATE_LIMITING_ENABLED=
+# false on the QA backend only.
+RATE_LIMITING_ENABLED = env_bool("RATE_LIMITING_ENABLED", True)
+
 # Email — defaults to console backend for local dev so no SMTP setup is needed.
 # In production set EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
 # and supply EMAIL_HOST / EMAIL_HOST_USER / EMAIL_HOST_PASSWORD / EMAIL_PORT.
