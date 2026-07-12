@@ -73,13 +73,87 @@ def canonical_tf(alias: str) -> str:
 
 
 def random_ticker_tf():
-    """Return (ticker_alias, canonical_ticker, tf_alias, canonical_tf) respecting per-ticker timeframes."""
-    ticker = random.choice(list(TICKERS.keys()))
+    """Return (ticker_alias, canonical_ticker, tf_alias, canonical_tf) respecting per-ticker timeframes.
+    FX pairs are excluded here: generic templates use stock-sized TP/SL (15%+)
+    which are absurd for FX — pairs only appear via the FX-aware generators."""
+    ticker = random.choice([t for t in TICKERS if not t.endswith("=X")])
     available = TICKER_AVAILABLE_TFS.get(ticker, list(_tf_reg.keys()))
     tf        = random.choice(available)
     tf_alias  = random.choice(TIMEFRAME_ALIASES.get(tf, [tf]))
     ticker_alias = random.choice(TICKERS[ticker])
     return ticker_alias, ticker, tf_alias, tf
+
+
+# Symbols OUTSIDE the registry — teaches the model to copy any real exchange
+# symbol verbatim instead of substituting a known asset (bakes in what v1
+# achieves via prompt instructions). Names teach company-name -> symbol.
+EXTRA_UNIVERSE = {
+    "PLTR": ["PLTR", "palantir", "Palantir"],
+    "HOOD": ["HOOD", "robinhood", "Robinhood"],
+    "COIN": ["COIN", "coinbase", "Coinbase"],
+    "AMD":  ["AMD", "amd"],
+    "SOFI": ["SOFI", "sofi", "SoFi"],
+    "UBER": ["UBER", "uber", "Uber"],
+    "DIS":  ["DIS", "disney", "Disney"],
+    "GME":  ["GME", "gamestop", "GameStop"],
+    "AMC":  ["AMC", "amc"],
+    "SHOP": ["SHOP", "shopify", "Shopify"],
+    "PYPL": ["PYPL", "paypal", "PayPal"],
+    "INTC": ["INTC", "intel", "Intel"],
+    "F":    ["F", "ford", "Ford"],
+    "BA":   ["BA", "boeing", "Boeing"],
+    "JPM":  ["JPM", "jpmorgan", "JP Morgan"],
+    "KO":   ["KO", "coca cola", "Coca-Cola"],
+    "NKE":  ["NKE", "nike", "Nike"],
+    "NIO":  ["NIO", "nio"],
+}
+_EXTRA_TFS = ["15m", "1h", "4h", "1D"]
+
+
+def random_extra_ticker_tf():
+    """A ticker from OUTSIDE the registry (verbatim-copy training)."""
+    ticker = random.choice(list(EXTRA_UNIVERSE))
+    alias = random.choice(EXTRA_UNIVERSE[ticker])
+    tf = random.choice(_EXTRA_TFS)
+    tf_alias = random.choice(TIMEFRAME_ALIASES.get(tf, [tf]))
+    return alias, ticker, tf_alias, tf
+
+
+def is_fx(ticker: str) -> bool:
+    return ticker.endswith("=X")
+
+
+def realistic_tpsl(ticker: str, tp: float, sl: float):
+    """FX moves ~1% a day, not 15 — scale TP/SL to believable magnitudes so
+    the model never learns 'eurusd, tp 30%' as normal."""
+    if is_fx(ticker):
+        return random.choice([1, 1.5, 2, 3]), random.choice([0.5, 0.7, 1, 1.5])
+    return tp, sl
+
+
+# Watch-only signal sources for cross-ticker strategies (index/benchmark-ish).
+SIGNAL_SOURCES = {
+    "SPY":     ["SPY", "the S&P", "the market", "spy"],
+    "QQQ":     ["QQQ", "the nasdaq", "tech"],
+    "BTC-USD": ["BTC-USD", "bitcoin", "btc"],
+    "AAPL":    ["AAPL", "apple"],
+    "NVDA":    ["NVDA", "nvidia"],
+    "EURUSD=X": ["EURUSD=X", "eurusd", "the euro"],
+}
+
+
+def random_signal_pair():
+    """(traded ticker info, signal ticker info) — always different symbols.
+    Traded side may be FX (cross generators apply realistic_tpsl)."""
+    while True:
+        traded = random.choice(list(TICKERS.keys()))
+        available = TICKER_AVAILABLE_TFS.get(traded, list(_tf_reg.keys()))
+        tf = random.choice(available)
+        tf_alias = random.choice(TIMEFRAME_ALIASES.get(tf, [tf]))
+        t_alias = random.choice(TICKERS[traded])
+        signal = random.choice(list(SIGNAL_SOURCES))
+        if signal != traded:
+            return (t_alias, traded, tf_alias, tf), (random.choice(SIGNAL_SOURCES[signal]), signal)
 
 
 # ---------------- CONFIG ----------------
@@ -298,6 +372,10 @@ LONG_OPENERS = [
     "I want to buy {t}", "Take a long on {t}", "Get long {t}",
     "Purchase {t}", "Go long on {t}", "I'd like to go long on {t}",
     "Set up a long trade on {t}", "Enter {t} long",
+    # retail-speak
+    "ape into {t}", "yolo into {t}", "load up on {t}", "grab some {t}",
+    "scoop up some {t}", "stack {t}", "buy the dip on {t}",
+    "get me some {t}", "im buying {t}", "gonna buy {t}",
 ]
 
 SHORT_OPENERS = [
@@ -306,6 +384,9 @@ SHORT_OPENERS = [
     "I want to short {t}", "Take a short on {t}", "Sell short {t}",
     "Fade {t}", "Go short on {t}", "I'd like to short {t}",
     "Set up a short trade on {t}", "Enter {t} short",
+    # retail-speak
+    "dump {t}", "bet against {t}", "short the hell out of {t}",
+    "im shorting {t}", "gonna short {t}", "nuke {t}",
 ]
 
 WHEN_PHRASES = [
@@ -319,6 +400,10 @@ TP_PHRASES = [
     "target {v}% profit", "profit target {v}%",
     "exit at {v}% gain", "{v}% take profit", "take {v}% profit",
     "aim for {v}% gain", "set TP to {v}%",
+    # retail-speak
+    "take profits when it rips {v}%", "sell when its up {v}%",
+    "cash out at {v}%", "let it ride to {v}%", "im out at +{v}%",
+    "secure the bag at {v}%",
 ]
 
 SL_PHRASES = [
@@ -326,6 +411,10 @@ SL_PHRASES = [
     "stop at {v}%", "risk {v}%", "max loss {v}%",
     "{v}% stop", "tight stop at {v}%", "hard stop {v}%",
     "set SL to {v}%", "no more than {v}% loss",
+    # retail-speak
+    "cut it if it tanks {v}%", "bail if it drops {v}%",
+    "get out if it dumps {v}%", "im out if it falls {v}%",
+    "dont let me lose more than {v}%",
 ]
 
 TF_PHRASES = [
@@ -1330,6 +1419,249 @@ def gen_breakout_volume_confirmed(direction):
     return text, strategy
 
 
+def _with_ticker(ind: dict, ticker: str) -> dict:
+    """Retarget an indicator node at a watch symbol (cross-ticker condition)."""
+    ind["arg"]["ticker"] = ticker
+    return ind
+
+
+def gen_cross_ticker_rsi(direction):
+    """Trade B when watch-symbol A's RSI crosses a threshold."""
+    (t_alias, traded, tf_alias, tf), (s_alias, signal) = random_signal_pair()
+    tp = random.choice([10, 15, 20, 25])
+    sl = random.choice([5, 7, 10])
+    tp, sl = realistic_tpsl(traded, tp, sl)
+    date_phrase, start, end = random_date()
+
+    if direction == "LONG":
+        threshold, op = random.choice([25, 30, 35]), "<"
+        cond_texts = [
+            f"{s_alias}'s RSI drops below {threshold}",
+            f"the RSI on {s_alias} goes under {threshold}",
+            f"{s_alias} RSI is oversold below {threshold}",
+            f"{s_alias} gets oversold (rsi under {threshold})",
+        ]
+    else:
+        threshold, op = random.choice([65, 70, 75]), ">"
+        cond_texts = [
+            f"{s_alias}'s RSI rises above {threshold}",
+            f"the RSI on {s_alias} climbs over {threshold}",
+            f"{s_alias} looks overbought above {threshold} rsi",
+        ]
+
+    cond_text = random.choice(cond_texts)
+    structures = [
+        f"{opener(direction, t_alias)} {when(cond_text)} {tf_str(tf_alias)}, {tpsl(tp, sl)}",
+        f"watch {s_alias} — {when(cond_text)}, {opener(direction, t_alias).lower()}, {tpsl(tp, sl)}",
+        f"{opener(direction, t_alias)} {tf_str(tf_alias)} {when(cond_text)}, {tpsl(tp, sl)}",
+    ]
+    text = inject_date(random.choice(structures), date_phrase)
+
+    strategy = {
+        direction: {
+            "context": {"tickers": [traded], "signal_tickers": [signal],
+                        "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
+            "OPEN": {
+                "CONDITIONS": cond(_with_ticker(rsi_ind(tf, 14), signal), op, val(threshold)),
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
+            }
+        }
+    }
+
+    # 30%: exit when the WATCH symbol recovers/reverses — "sell when SPY recovers"
+    if random.random() < 0.3:
+        if direction == "LONG":
+            c_thr, c_op = random.choice([50, 55, 60]), ">"
+            c_texts = [f"{s_alias}'s RSI recovers above {c_thr}",
+                       f"{s_alias} rsi bounces back over {c_thr}"]
+        else:
+            c_thr, c_op = random.choice([40, 45, 50]), "<"
+            c_texts = [f"{s_alias}'s RSI falls back below {c_thr}",
+                       f"{s_alias} cools off under {c_thr} rsi"]
+        c_text = random.choice(c_texts)
+        strategy[direction]["CLOSE"] = {
+            "CONDITIONS": cond(_with_ticker(rsi_ind(tf, 14), signal), c_op, val(c_thr)),
+            "ARGUMENTS":  random_close_args(),
+        }
+        text = text.rstrip(".") + f", close {when(c_text)}"
+
+    return text, strategy
+
+
+def gen_cross_ticker_sma(direction):
+    """Trade B when watch-symbol A crosses its own moving average."""
+    (t_alias, traded, tf_alias, tf), (s_alias, signal) = random_signal_pair()
+    period = random.choice([50, 100, 200])
+    tp = random.choice([10, 15, 20, 30])
+    sl = random.choice([5, 7, 10])
+    tp, sl = realistic_tpsl(traded, tp, sl)
+    date_phrase, start, end = random_date()
+
+    if direction == "LONG":
+        op = ">"
+        cond_texts = [
+            f"{s_alias} crosses above its {period}-day moving average",
+            f"{s_alias} breaks above the {period} SMA",
+            f"{s_alias} is trading above its {period} day MA",
+        ]
+    else:
+        op = "<"
+        cond_texts = [
+            f"{s_alias} falls below its {period}-day moving average",
+            f"{s_alias} breaks under the {period} SMA",
+            f"{s_alias} dumps below its {period} day MA",
+        ]
+
+    cond_text = random.choice(cond_texts)
+    text = inject_date(
+        f"{opener(direction, t_alias)} {when(cond_text)} {tf_str(tf_alias)}, {tpsl(tp, sl)}",
+        date_phrase
+    )
+
+    strategy = {
+        direction: {
+            "context": {"tickers": [traded], "signal_tickers": [signal],
+                        "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
+            "OPEN": {
+                "CONDITIONS": cond(
+                    _with_ticker(price_ind("close", 0), signal), op,
+                    _with_ticker(sma_ind(tf, period), signal)
+                ),
+                "ARGUMENTS": open_args(tp=tp, sl=sl)
+            }
+        }
+    }
+    return text, strategy
+
+
+def gen_cross_ticker_drop(direction):
+    """Trade B when watch-symbol A moves x% in a bar (panic/momentum signal)."""
+    (t_alias, traded, tf_alias, tf), (s_alias, signal) = random_signal_pair()
+    pct = random.choice([1, 2, 3, 5])
+    tp = random.choice([10, 15, 20])
+    sl = random.choice([5, 7, 10])
+    tp, sl = realistic_tpsl(traded, tp, sl)
+    date_phrase, start, end = random_date()
+
+    if direction == "LONG":
+        multiplier = round(1 - pct / 100, 4)
+        op = "<"
+        cond_texts = [
+            f"{s_alias} drops {pct}% in a day",
+            f"{s_alias} falls {pct}% or more",
+            f"{s_alias} tanks {pct}%",
+            f"{s_alias} dumps {pct}% in a session",
+        ]
+    else:
+        multiplier = round(1 + pct / 100, 4)
+        op = ">"
+        cond_texts = [
+            f"{s_alias} rips {pct}% in a day",
+            f"{s_alias} jumps {pct}% or more",
+            f"{s_alias} pumps {pct}%",
+        ]
+
+    cond_text = random.choice(cond_texts)
+    text = inject_date(
+        f"{opener(direction, t_alias)} {when(cond_text)} {tf_str(tf_alias)}, {tpsl(tp, sl)}",
+        date_phrase
+    )
+
+    strategy = {
+        direction: {
+            "context": {"tickers": [traded], "signal_tickers": [signal],
+                        "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
+            "OPEN": {
+                "CONDITIONS": cond(
+                    _with_ticker(price_ind("close", 0), signal), op,
+                    arith(_with_ticker(price_ind("close", 1), signal), "*", val(multiplier))
+                ),
+                "ARGUMENTS": open_args(tp=tp, sl=sl)
+            }
+        }
+    }
+    return text, strategy
+
+
+def gen_fx_pair(direction):
+    """FX strategy with realistic (small) TP/SL magnitudes."""
+    fx_keys = [k for k in TICKERS if k.endswith("=X")]
+    if not fx_keys:
+        return gen_rsi_simple(direction)
+    ticker = random.choice(fx_keys)
+    alias = random.choice(TICKERS[ticker])
+    tf = random.choice(["1h", "1D"])
+    tf_alias = random.choice(TIMEFRAME_ALIASES.get(tf, [tf]))
+    tp, sl = realistic_tpsl(ticker, 0, 0)
+    date_phrase, start, end = random_date()
+
+    if direction == "LONG":
+        threshold, op = random.choice([25, 30, 35]), "<"
+        cond_texts = [f"RSI drops below {threshold}", f"rsi is oversold under {threshold}"]
+    else:
+        threshold, op = random.choice([65, 70, 75]), ">"
+        cond_texts = [f"RSI rises above {threshold}", f"rsi is overbought over {threshold}"]
+
+    cond_text = random.choice(cond_texts)
+    text = inject_date(
+        f"{opener(direction, alias)} {when(cond_text)} {tf_str(tf_alias)}, {tpsl(tp, sl)}",
+        date_phrase
+    )
+
+    strategy = {
+        direction: {
+            "context": {"tickers": [ticker], "execution_timeframe": tf,
+                        "dateframe": {"start": start, "end": end}},
+            "OPEN": {
+                "CONDITIONS": cond(rsi_ind(tf, 14), op, val(threshold)),
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
+            }
+        }
+    }
+    return text, strategy
+
+
+def gen_unknown_ticker(direction):
+    """Ticker OUTSIDE the registry — verbatim symbol copying + name mapping."""
+    alias, ticker, tf_alias, tf = random_extra_ticker_tf()
+    period = random.choice([7, 14, 21])
+    tp = random.choice([10, 15, 20, 25])
+    sl = random.choice([5, 7, 10])
+    date_phrase, start, end = random_date()
+
+    if direction == "LONG":
+        threshold, op = random.choice([25, 30, 35]), "<"
+        cond_texts = [
+            f"RSI({period}) drops below {threshold}",
+            f"rsi dips under {threshold}",
+            f"RSI is oversold below {threshold}",
+        ]
+    else:
+        threshold, op = random.choice([65, 70, 75]), ">"
+        cond_texts = [
+            f"RSI({period}) rises above {threshold}",
+            f"rsi is overbought above {threshold}",
+        ]
+
+    cond_text = random.choice(cond_texts)
+    text = inject_date(
+        f"{opener(direction, alias)} {when(cond_text)} {tf_str(tf_alias)}, {tpsl(tp, sl)}",
+        date_phrase
+    )
+
+    strategy = {
+        direction: {
+            "context": {"tickers": [ticker], "execution_timeframe": tf,
+                        "dateframe": {"start": start, "end": end}},
+            "OPEN": {
+                "CONDITIONS": cond(rsi_ind(tf, period), op, val(threshold)),
+                "ARGUMENTS":  open_args(tp=tp, sl=sl)
+            }
+        }
+    }
+    return text, strategy
+
+
 # ---------------- GENERATOR REGISTRY ----------------
 
 GENERATORS = [
@@ -1373,6 +1705,14 @@ GENERATORS = [
     gen_triple_condition,
     gen_multi_timeframe,
     gen_price_percent_from_sma,
+    # Cross-ticker (watch symbols) — the v2 headline feature
+    gen_cross_ticker_rsi, gen_cross_ticker_rsi, gen_cross_ticker_rsi,
+    gen_cross_ticker_sma, gen_cross_ticker_sma,
+    gen_cross_ticker_drop, gen_cross_ticker_drop,
+    # FX with realistic magnitudes
+    gen_fx_pair, gen_fx_pair,
+    # Out-of-registry symbols (verbatim copying + company-name mapping)
+    gen_unknown_ticker, gen_unknown_ticker, gen_unknown_ticker,
 ]
 
 

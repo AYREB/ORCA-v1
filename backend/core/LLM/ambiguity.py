@@ -42,6 +42,9 @@ TIMEFRAME_PATTERNS = [
 DIRECTION_PATTERNS = [
     r'\b(buy|long|purchase|enter long|go long|enter a long|get long)\b',
     r'\b(sell|short|go short|enter short|fade|sell short|dump)\b',
+    # retail-speak the v2 model is trained on — the gate must not block it
+    r'\b(ape into|yolo into|load up on|grab some|scoop up|stack|buy the dip|get me some|im buying|gonna buy)\b',
+    r'\b(nuke|bet against|im shorting|gonna short|short the hell out)\b',
 ]
 
 # Common keyboard typos of direction words (curated: none are real English
