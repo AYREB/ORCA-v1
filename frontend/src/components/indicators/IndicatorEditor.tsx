@@ -204,10 +204,16 @@ const IndicatorEditor = ({ open, onOpenChange, indicator, onSaved }: IndicatorEd
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <Button variant="ghost" size="sm" onClick={() => setAssistantOpen(true)}>
-                <Bot className="h-4 w-4 mr-1.5" />
-                Assistant
-              </Button>
+              {/* OpenAI-backed indicator assistant is temporarily disabled. */}
+              <div className="relative inline-flex">
+                <Button variant="ghost" size="sm" className="opacity-60" disabled>
+                  <Bot className="h-4 w-4 mr-1.5" />
+                  Assistant
+                </Button>
+                <span className="pointer-events-none absolute -right-1 -top-1.5 rounded-full bg-primary px-1.5 py-0 text-[9px] font-medium text-primary-foreground">
+                  Soon
+                </span>
+              </div>
               <Button variant="ghost" size="sm" asChild>
                 <Link to="/dashboard/indicators/docs" target="_blank" rel="noreferrer">
                   <BookOpen className="h-4 w-4 mr-1.5" />

@@ -18,6 +18,7 @@ urlpatterns = [
     path("plan/", views.plan_view),
     path("plans/", views.plans_public),
     path("plan/switch/", views.switch_plan),
+    path("feedback/", views.submit_feedback),
     path("delete-account/", views.delete_account),
     path("change-password/", views.change_password),
     path("forgot-password/", views.forgot_password),

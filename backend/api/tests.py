@@ -124,18 +124,17 @@ class EntitlementQuotaTests(TestCase):
         from api.entitlements import PlanLimitError
         from api.models import UsageCounter
 
-        # Free plan allows 3 AI generations/month. Reserve exactly the limit.
-        for _ in range(3):
+        # Free plan allows 5 AI generations (all-time). Reserve exactly the limit.
+        for _ in range(5):
             entitlements.consume_quota(self.user, "ai")
 
         with self.assertRaises(PlanLimitError):
             entitlements.consume_quota(self.user, "ai")
 
-        row = UsageCounter.objects.get(
-            user=self.user, metric="ai", period=entitlements.current_period()
-        )
+        ai_period = entitlements.period_key(entitlements.metric_period_of(self.user, "ai"))
+        row = UsageCounter.objects.get(user=self.user, metric="ai", period=ai_period)
         # A rejected reservation must NOT have incremented the counter past the cap.
-        self.assertEqual(row.count, 3)
+        self.assertEqual(row.count, 5)
 
     def test_refund_restores_a_reserved_use(self):
         from api import entitlements
@@ -159,8 +158,9 @@ class EntitlementQuotaTests(TestCase):
         profile.plan = "pro"
         profile.save(update_fields=["plan", "updated_at"])
 
+        # Backtests are genuinely unlimited on Pro.
         for _ in range(50):
-            entitlements.consume_quota(self.user, "ai")  # must not raise
+            entitlements.consume_quota(self.user, "backtest")  # must not raise
 
 
 class PlanSwitchAuthorizationTests(TestCase):
@@ -628,3 +628,359 @@ class TickerSearchTests(TestCase):
         with patch("api.views.requests.get", side_effect=OSError("down")):
             names = resolve_ticker_names(["ZZZUNKNOWN"])
         self.assertEqual(names["ZZZUNKNOWN"], "ZZZUNKNOWN")
+
+
+class BacktestTextEndpointErrorTests(TestCase):
+    """The text endpoint must map engine failures to friendly 400s (it used to
+    surface them as generic 500s) and share the JSON endpoint's guards."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="text@example.com", email="text@example.com", password="P@ssword123!"
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    def _post(self, dsl_text):
+        return self.client.post(
+            "/api/backtestDSLText/",
+            data=json.dumps({"dsl_text": dsl_text}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    VALID_TEXT = """
+:TICKER(AAPL)
+:EXECUTION_TIMEFRAME(1h)
+:DATEFRAME(2024-01-01, 2024-06-01)
+:LONG(
+   OPEN{
+       CONDITIONS{
+           RSI() < 30
+       }
+   }
+)
+"""
+
+    def test_engine_failure_returns_friendly_400_and_refunds_quota(self):
+        from api import entitlements
+        from core.main import BacktestError
+
+        with patch(
+            "api.views.dslJSONBacktest",
+            side_effect=BacktestError("No market data found for 'AAPL'.", code="no_data"),
+        ):
+            response = self._post(self.VALID_TEXT)
+
+        self.assertEqual(response.status_code, 400)
+        body = response.json()
+        self.assertEqual(body["code"], "no_data")
+        self.assertIn("No market data", body["error"])
+        # The failed run must not be charged against the monthly quota.
+        self.assertEqual(entitlements.usage_count(self.user, "backtest"), 0)
+
+    def test_unparseable_text_returns_400_not_500(self):
+        response = self._post(":DATEFRAME(not-even-close)")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], "dsl_parse_error")
+
+    def test_text_endpoint_enforces_ticker_cap(self):
+        many = ",".join(f"T{i}" for i in range(10))
+        dsl = self.VALID_TEXT.replace(":TICKER(AAPL)", f":TICKER({many})")
+        response = self._post(dsl)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], "too_many_tickers")
+
+
+class StrategyToDslBacktestQuotaTests(TestCase):
+    """strategy_to_dsl's run_backtest flag must be metered like a normal backtest."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="nlp@example.com", email="nlp@example.com", password="P@ssword123!"
+        )
+        self.token = Token.objects.create(user=self.user)
+        self.strategy = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1h",
+                    "dateframe": {"start": "2024-01-01", "end": "2024-06-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 30},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+
+    def _post(self):
+        return self.client.post(
+            "/api/strategy-to-dsl/",
+            data=json.dumps({"message": "buy AAPL when RSI under 30", "run_backtest": True}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    def test_run_backtest_consumes_backtest_quota(self):
+        from api import entitlements
+
+        fake_result = {"cash": 10000, "invested": 0, "total_portfolio": 10000, "pct_change": 0, "trades": [], "data": {}}
+        with patch("api.views.parse_strategy", return_value=self.strategy), patch(
+            "api.views.dslJSONBacktest", return_value=fake_result
+        ):
+            response = self._post()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(entitlements.usage_count(self.user, "backtest"), 1)
+
+    def test_run_backtest_over_quota_returns_plan_limit_not_free_run(self):
+        from api import entitlements
+
+        limit = entitlements.monthly_limit(self.user, "backtest")
+        entitlements.consume_quota(self.user, "backtest", n=limit)
+
+        with patch("api.views.parse_strategy", return_value=self.strategy), patch(
+            "api.views.dslJSONBacktest"
+        ) as engine:
+            response = self._post()
+
+        self.assertEqual(response.status_code, 200)
+        engine.assert_not_called()  # no free ride past the quota
+        body = response.json()
+        self.assertEqual(body["backtest"]["code"], "plan_limit")
+
+
+class OptimizerQuotaRefundTests(TestCase):
+    """A failed optimization must refund the optimize quota."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="opt@example.com", email="opt@example.com", password="P@ssword123!"
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    def test_sync_grid_failure_refunds_optimize_quota(self):
+        from api import entitlements
+
+        dsl = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1h",
+                    "dateframe": {"start": "2024-01-01", "end": "2024-06-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 30},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+        choice = {"LONG.OPEN.CONDITIONS.left.arg.period": {"mode": "manual", "values": [10, 14]}}
+
+        with patch("api.views.optimizer", side_effect=ValueError("all runs failed")):
+            response = self.client.post(
+                "/api/dslParameterOptimiser/",
+                data=json.dumps({"dsl_json": dsl, "parameter_choice": choice}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Token {self.token.key}",
+            )
+
+        # A ValueError from the optimizer is user-actionable, so it maps to a
+        # friendly 400 (not a raw 500), and the quota is refunded.
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("all runs failed", response.json().get("error", ""))
+        self.assertEqual(entitlements.usage_count(self.user, "optimize"), 0)
+
+
+class OptimizerDataPipelineTests(TestCase):
+    """The optimizer must normalise market data exactly like core.main so the
+    backtester never hits 'Cannot compare tz-naive and tz-aware' (the bug that
+    made every optimizer run fail while the standalone backtest worked)."""
+
+    def test_prepare_normalizes_tz_aware_index_to_naive(self):
+        import pandas as pd
+        import core.analysis.parameter_optimiser as opt
+
+        idx = pd.date_range("2025-01-01", periods=120, freq="D", tz="America/New_York")
+        aware = pd.DataFrame(
+            {
+                "Open": range(120), "High": range(1, 121), "Low": range(120),
+                "Close": range(1, 121), "Volume": [1000] * 120,
+            },
+            index=idx,
+        )
+
+        dsl = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1D",
+                    "dateframe": {"start": "2025-01-01", "end": "2025-04-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 30},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+
+        with patch.object(opt, "get_data_with_indicator", return_value=aware.copy()):
+            _, data_dict, _ = opt._prepare(dict(dsl))
+
+        # Every loaded frame must be tz-naive after _prepare.
+        for tf_map in data_dict.values():
+            for frame in tf_map.values():
+                self.assertIsNone(frame.index.tz)
+
+    def test_genetic_metaheuristic_space_is_not_grid_capped(self):
+        """Genetic/metaheuristics sample the space, so build_param_values must
+        NOT enforce the grid-combination cap (build_param_grid still does).
+        Regression: a large search space made the genetic endpoint 500 with
+        'Too many combinations'."""
+        from core.analysis.parameter_optimiser import (
+            build_param_grid, build_param_values, MAX_GRID_COMBINATIONS,
+        )
+
+        dsl = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1D",
+                    "dateframe": {"start": "2025-01-01", "end": "2025-06-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 30},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+        # Two wide ranges whose product far exceeds the grid cap.
+        choices = {
+            "LONG.OPEN.CONDITIONS.left.arg.period": {"mode": "range", "start": 2, "end": 500, "steps": 200},
+            "LONG.OPEN.CONDITIONS.right.value": {"mode": "range", "start": 1, "end": 99, "steps": 99},
+        }
+
+        with self.assertRaises(ValueError):
+            build_param_grid(dsl, choices)  # grid enumerates → capped
+
+        # Genetic/meta only sample → must succeed, product may exceed the cap.
+        values, _ = build_param_values(dsl, choices)
+        product = 1
+        for v in values.values():
+            product *= len(v)
+        self.assertGreater(product, MAX_GRID_COMBINATIONS)
+
+    def test_optimizer_runs_end_to_end_on_tz_aware_source(self):
+        import pandas as pd
+        import core.analysis.parameter_optimiser as opt
+
+        idx = pd.date_range("2025-01-01", periods=200, freq="D", tz="UTC")
+        # Oscillating close so RSI actually crosses thresholds and trades fire.
+        closes = [100 + (i % 15) - 7 for i in range(200)]
+        aware = pd.DataFrame(
+            {
+                "Open": closes, "High": [c + 2 for c in closes],
+                "Low": [c - 2 for c in closes], "Close": closes, "Volume": [1000] * 200,
+            },
+            index=idx,
+        )
+        dsl = {
+            "LONG": {
+                "context": {
+                    "tickers": ["AAPL"],
+                    "execution_timeframe": "1D",
+                    "dateframe": {"start": "2025-01-01", "end": "2025-06-01"},
+                },
+                "OPEN": {
+                    "CONDITIONS": {
+                        "left": {"func": "RSI", "arg": {"period": 14}},
+                        "operator": "<",
+                        "right": {"value": 40},
+                    },
+                    "ARGUMENTS": {},
+                },
+            }
+        }
+        choice = {"LONG.OPEN.CONDITIONS.left.arg.period": {"mode": "manual", "values": [10, 14, 20]}}
+
+        with patch.object(opt, "get_data_with_indicator", return_value=aware.copy()):
+            result = opt.optimizer(parsed_dsl=dict(dsl), param_choices=choice, initial_balance=10000)
+
+        # No run should fail with the tz comparison error.
+        self.assertEqual(result["total_runs"], 3)
+        self.assertEqual(result["errors"], [])
+
+
+class SsoAccountManagementTests(TestCase):
+    """Google-SSO users (no usable password) must still be able to delete their
+    account and set a first password."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username="sso@example.com", email="sso@example.com", password=None
+        )
+        self.token = Token.objects.create(user=self.user)
+
+    def _post(self, path, payload):
+        return self.client.post(
+            path,
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+    def test_me_reports_has_password_false_for_sso(self):
+        response = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["has_password"])
+
+    def test_sso_delete_with_matching_email_succeeds(self):
+        response = self._post("/api/delete-account/", {"confirm_email": "SSO@example.com"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(email="sso@example.com").exists())
+
+    def test_sso_delete_with_wrong_email_fails(self):
+        response = self._post("/api/delete-account/", {"confirm_email": "wrong@example.com"})
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(User.objects.filter(email="sso@example.com").exists())
+
+    def test_password_holder_still_requires_password_to_delete(self):
+        user = User.objects.create_user(
+            username="pw@example.com", email="pw@example.com", password="P@ssword123!"
+        )
+        token = Token.objects.create(user=user)
+        response = self.client.post(
+            "/api/delete-account/",
+            data=json.dumps({"confirm_email": "pw@example.com"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(User.objects.filter(email="pw@example.com").exists())
+
+    def test_sso_can_set_first_password_without_current(self):
+        response = self._post("/api/change-password/", {"new_password": "N3wS3cret!pass"})
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.has_usable_password())
+        self.assertTrue(self.user.check_password("N3wS3cret!pass"))

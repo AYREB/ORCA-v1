@@ -16,7 +16,13 @@ if _PROJECT_ROOT not in sys.path:
 from core.backtesting.backtesterCore import backtester
 from core.data_pulling.datapull import get_data_with_indicator
 from core.fetcher_calculators.indicatorEvaluator import build_indicator_functions
-from core.main import apply_default_arguments, merge_indicator_defaults
+from core.main import (
+    apply_default_arguments,
+    clip_dataframe_to_dateframe,
+    get_fetch_date_bound,
+    get_max_indicator_period,
+    merge_indicator_defaults,
+)
 from core.parsing.extractingTickers import collect_timeframes_from_dsl, extract_execution_timeframe
 from core.parsing.validateParsedDSL import validate_parsed_dsl
  
@@ -247,12 +253,20 @@ def _resolve_choice(path, value, choice):
     raise ValueError(f"Invalid mode '{mode}' for '{path}'")
 
 
-def build_param_grid(parsed_dsl, param_choices=None):
-    """Return (param_grid, base_params) for grid-search optimization.
+def build_param_grid(parsed_dsl, param_choices=None, enforce_grid_cap=True):
+    """Return (param_grid, base_params) as {dot_path: [candidate values]}.
 
     Every candidate list is sanitized against the parameter's valid domain
     (clamped, integer-rounded, deduped) so no optimizer ever backtests a
     nonsense value like a negative period or an RSI threshold of 400.
+
+    ``enforce_grid_cap`` gates the MAX_GRID_COMBINATIONS ceiling on the *product*
+    of the value lists. That ceiling only makes sense for GRID search, which
+    enumerates every combination. Genetic and the metaheuristics merely SAMPLE
+    this space (their work is bounded by population×generations / iterations, not
+    the product), so they build the same value lists with the cap disabled —
+    otherwise a wide search space (exactly what those methods are for) would be
+    wrongly rejected with "Too many combinations".
     """
     base_params = extract_optimizable_parameters(parsed_dsl)
     if param_choices is None:
@@ -274,20 +288,26 @@ def build_param_grid(parsed_dsl, param_choices=None):
         if values:
             grid[path] = values
 
-    total = 1
-    for vals in grid.values():
-        total *= len(vals)
-    if total > MAX_GRID_COMBINATIONS:
-        raise ValueError(
-            f"Too many combinations ({total:,}). Reduce ranges/steps to at most "
-            f"{MAX_GRID_COMBINATIONS:,} total combinations."
-        )
+    if enforce_grid_cap:
+        total = 1
+        for vals in grid.values():
+            total *= len(vals)
+        if total > MAX_GRID_COMBINATIONS:
+            raise ValueError(
+                f"Too many combinations ({total:,}). Reduce ranges/steps to at most "
+                f"{MAX_GRID_COMBINATIONS:,} total combinations."
+            )
     return grid, base_params
- 
- 
+
+
 def build_param_values(parsed_dsl, param_choices=None):
-    """Return (param_values, base_params) for genetic optimization."""
-    return build_param_grid(parsed_dsl, param_choices)  # identical structure
+    """Return (param_values, base_params) for genetic / metaheuristic optimizers.
+
+    Same value-list structure as the grid, but WITHOUT the grid-combination cap:
+    these methods sample the space rather than enumerate it, so a large space is
+    expected and fine (the run count is bounded separately by the caller).
+    """
+    return build_param_grid(parsed_dsl, param_choices, enforce_grid_cap=False)
  
 # ---------------- DATA LOADING ---------------- #
  
@@ -325,26 +345,66 @@ def _context(parsed_dsl):
  
  
 def _prepare(parsed_dsl, internet=True, csv_folder="Data_CSVs"):
-    """Validate DSL, load indicators and data. Returns (parsed_dsl, data_dict, indicator_functions)."""
+    """Validate DSL, load indicators and data. Returns (parsed_dsl, data_dict, indicator_functions).
+
+    The online path mirrors ``core.main.main`` exactly: it fetches with an
+    indicator-warmup lead-in, then normalises every dataframe's index to
+    tz-naive and clips it to the requested window (keeping warmup bars). This
+    matters because the backtester compares each bar's timestamp against the
+    tz-naive dateframe bounds — feeding it a raw, tz-AWARE yfinance frame (as
+    this used to) makes pandas raise "Cannot compare tz-naive and tz-aware
+    datetime-like objects", which surfaced as every optimizer run failing even
+    though the identical standalone backtest worked. Sharing main's pipeline
+    also gives indicators the same warmup they get in a normal backtest, so an
+    optimized run's numbers match a re-run of the winning parameters.
+    """
     parsed_dsl = apply_default_arguments(parsed_dsl)
     parsed_dsl = merge_indicator_defaults(parsed_dsl)
     validate_parsed_dsl(parsed_dsl)
- 
+
     indicator_functions = _load_indicator_functions()
     ctx = _context(parsed_dsl)
     execution_tf = extract_execution_timeframe(parsed_dsl)
+    # The text parser can hand back a list of execution timeframes; the
+    # backtester uses the first, so normalise to match here too.
+    if isinstance(execution_tf, list):
+        execution_tf = execution_tf[0] if execution_tf else "1h"
     timeframes = collect_timeframes_from_dsl(parsed_dsl, execution_tf)
- 
+
     # Include signal (watch-only) tickers so cross-asset conditions can be
     # evaluated; the backtester itself excludes them from trading.
     all_tickers = list(ctx["tickers"]) + [
         t for t in ctx.get("signal_tickers", []) if t not in ctx["tickers"]
     ]
-    data_dict = load_data_dict(
-        all_tickers, timeframes,
-        ctx["dateframe"]["start"], ctx["dateframe"]["end"],
-        indicator_functions, internet, csv_folder
-    )
+    start_date = ctx["dateframe"]["start"]
+    end_date = ctx["dateframe"]["end"]
+
+    if not internet:
+        data_dict = load_data_dict(
+            all_tickers, timeframes, start_date, end_date,
+            indicator_functions, internet, csv_folder,
+        )
+        return parsed_dsl, data_dict, indicator_functions
+
+    # Online: replicate core.main.main's fetch → normalise → clip pipeline.
+    warmup_days = get_max_indicator_period(parsed_dsl)
+    fetch_start = get_fetch_date_bound(start_date, warmup_days=warmup_days)
+    fetch_end = get_fetch_date_bound(end_date, is_end=True)
+
+    data_dict = {}
+    for ticker in all_tickers:
+        data_dict[ticker] = {}
+        for tf in timeframes:
+            df = get_data_with_indicator(ticker=ticker, start=fetch_start, end=fetch_end, interval=tf)
+            if df is None or df.empty:
+                raise ValueError(f"No data for '{ticker}' on '{tf}' between {start_date} and {end_date}")
+            # Normalise index to tz-naive and clip to the window (keep warmup bars
+            # so indicators are warm before the first tradable bar).
+            df = clip_dataframe_to_dateframe(df, start_date, end_date, clip_start=False)
+            if df.empty:
+                raise ValueError(f"No data for '{ticker}' on '{tf}' between {start_date} and {end_date}")
+            data_dict[ticker][tf] = df
+
     return parsed_dsl, data_dict, indicator_functions
  
 # ---------------- BACKTESTER WRAPPER ---------------- #

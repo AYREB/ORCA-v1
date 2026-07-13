@@ -66,7 +66,8 @@ export interface DashboardBacktest {
 export interface DashboardSummary {
   strategyCount: number;
   backtestRunCount: number;
-  totalReturnPct: number;
+  /** Average pct_change across the user's backtest runs. */
+  avgReturnPct: number;
   winRate: number;
   equityCurve: Array<{ timestamp: string; equity: number }>;
   recentBacktests: DashboardBacktest[];
@@ -191,29 +192,6 @@ export interface RegistryResponse {
   timeframes?: Record<string, string>;
 }
 
-export interface MonteCarloResult {
-  paths: Array<{ trade: number; [key: string]: number }>;
-  all_final_values: number[];
-  metrics: {
-    expected_return: number;
-    median_return: number;
-    var_95: number;
-    cvar_95: number;
-    prob_positive: number;
-    prob_gt_10: number;
-    prob_gt_20: number;
-    prob_drawdown_20: number;
-  };
-  distribution: Array<{ return: number; frequency: number }>;
-  params: {
-    win_rate: number;
-    avg_win: number;
-    avg_loss: number;
-    num_simulations: number;
-    cooldown_buffer: number;
-  };
-}
-
 export interface SavedStrategy {
   id: number;
   name: string;
@@ -250,7 +228,8 @@ interface RawDashboardBacktest {
 interface RawDashboardSummary {
   strategy_count?: number;
   backtest_run_count?: number;
-  total_return_pct?: number;
+  avg_return_pct?: number;
+  total_return_pct?: number; // legacy name for avg_return_pct
   win_rate?: number;
   equity_curve?: Array<{ timestamp: string; equity: number }>;
   recent_backtests?: RawDashboardBacktest[];
@@ -401,15 +380,23 @@ export interface IndicatorAssistantChatResponse {
 
 export type PlanSlug = 'free' | 'plus' | 'pro';
 
+export type QuotaPeriod = 'all_time' | 'weekly' | 'monthly';
+
+/** A metered quota: its limit (null = unlimited) and the cadence it resets on. */
+export interface MetricQuota {
+  limit: number | null;
+  period: QuotaPeriod;
+}
+
 export interface PlanLimits {
-  monthly: Record<string, number | null>;
+  quotas: Record<string, MetricQuota>;
   caps: Record<string, number | null>;
   optimizer_methods: string[];
   optimize_intensity: number | null;
   timeframes: string[] | '*';
 }
 
-/** The signed-in user's plan + month-to-date usage (from /api/plan/). */
+/** The signed-in user's plan + period-to-date usage (from /api/plan/). */
 export interface PlanSummary {
   plan: PlanSlug;
   label: string;
@@ -424,7 +411,7 @@ export interface PublicPlan {
   plan: PlanSlug;
   label: string;
   price_usd: number;
-  monthly: Record<string, number | null>;
+  quotas: Record<string, MetricQuota>;
   caps: Record<string, number | null>;
   optimizer_methods: string[];
   optimize_intensity: number | null;
@@ -437,6 +424,8 @@ export interface AuthUser {
   name?: string;
   date_joined?: string;
   plan?: PlanSummary;
+  /** False for Google-SSO accounts that never set a password. */
+  has_password?: boolean;
 }
 
 export interface AuthResponse {
@@ -639,17 +628,32 @@ class DjangoAPI {
     });
   }
 
+  /** Capture a feedback-lead email (Plans page 'feedback for discounts' CTA). */
+  async submitFeedback(input: { email: string; message?: string; source?: string }): Promise<{ ok: boolean; message: string }> {
+    return this.request<{ ok: boolean; message: string }>('/feedback/', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
   async updateProfile(name: string): Promise<AuthUser> {
     return this.request<AuthUser>('/me/', { method: 'PATCH', body: JSON.stringify({ name }) });
   }
 
-  async deleteAccount(password: string): Promise<{ message: string }> {
+  /** Password-holders confirm with `password`; Google-SSO accounts (no
+   * password) confirm by typing their account email (`confirmEmail`). */
+  async deleteAccount(confirmation: { password?: string; confirmEmail?: string }): Promise<{ message: string }> {
     return this.request<{ message: string }>('/delete-account/', {
       method: 'POST',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({
+        ...(confirmation.password ? { password: confirmation.password } : {}),
+        ...(confirmation.confirmEmail ? { confirm_email: confirmation.confirmEmail } : {}),
+      }),
     });
   }
 
+  /** Pass an empty currentPassword for Google-SSO accounts setting their
+   * first password (the backend skips the current-password check for them). */
   async changePassword(currentPassword: string, newPassword: string): Promise<{ token: string; message: string }> {
     return this.request<{ token: string; message: string }>('/change-password/', {
       method: 'POST',
@@ -853,24 +857,6 @@ class DjangoAPI {
     });
   }
 
-  // Run Monte Carlo simulation
-  async runMonteCarloSim(
-    trades: TradeEntry[],
-    numSimulations: number = 10000,
-    numTradesForward: number = 100,
-    cooldownBuffer: number = 3
-  ): Promise<MonteCarloResult> {
-    return this.request<MonteCarloResult>('/monteCarloSim/', {
-      method: 'POST',
-      body: JSON.stringify({
-        trades,
-        num_simulations: numSimulations,
-        num_trades_forward: numTradesForward,
-        cooldown_buffer: cooldownBuffer,
-      }),
-    });
-  }
-
   // Strategies (persisted per user)
   async fetchStrategies(): Promise<SavedStrategy[]> {
     const data = await this.request<{ strategies: RawSavedStrategy[] }>('/strategies/');
@@ -1008,7 +994,7 @@ class DjangoAPI {
     return {
       strategyCount: data.strategy_count ?? 0,
       backtestRunCount: data.backtest_run_count ?? 0,
-      totalReturnPct: data.total_return_pct ?? 0,
+      avgReturnPct: data.avg_return_pct ?? data.total_return_pct ?? 0,
       winRate: data.win_rate ?? 0,
       equityCurve: data.equity_curve ?? [],
       recentBacktests: (data.recent_backtests ?? []).map((run) => ({

@@ -35,7 +35,8 @@ from core.analysis.parameter_optimiser import (
     genetic_optimizer,
     optimizer,
 )
-from core.main import dslJSONBacktest, dslTextToJsonBacktest, BacktestError, dataframe_to_response_records
+from core.main import dslJSONBacktest, BacktestError, dataframe_to_response_records
+from core.parsing.parser import parse_dsl as parse_dsl_text
 from core.parsing.extractingTickers import extract_tickers as _extract_tickers
 from core.parsing.extractingTickers import extract_signal_tickers as _extract_signal_tickers
 from core.data_pulling.datapull import get_data_with_indicator
@@ -56,7 +57,8 @@ from .indicator_sandbox import (
     run_indicator_test,
     validate_parameters,
 )
-from .models import BacktestRun, CustomIndicator, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from .models import BacktestRun, CustomIndicator, FeedbackLead, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from .ai_logging import log_ai_interaction
 from . import entitlements
 from .entitlements import PlanLimitError
 from .plans import PLANS
@@ -114,18 +116,41 @@ class CacheJobStore:
     def _index(self) -> set[str]:
         return set(cache.get(self.index_key) or [])
 
-    def _save_index(self, ids) -> None:
-        cache.set(self.index_key, list(ids), timeout=None)
+    def _mutate_index(self, mutate: Callable[[set[str]], None]) -> None:
+        """Apply ``mutate(ids)`` to the index under a short cache lock.
+
+        The index is a read-modify-write of one cache key, so two concurrent
+        job creations could otherwise each read the same snapshot and the
+        second save would silently drop the first job's id (making it invisible
+        to cleanup and the per-user active count). If the lock can't be
+        obtained quickly we proceed unguarded — a rare dropped index entry is
+        better than failing the user's request outright.
+        """
+        lock_key = f"{self.index_key}:lock"
+        acquired = False
+        try:
+            for _ in range(50):
+                try:
+                    acquired = bool(cache.add(lock_key, 1, timeout=5))
+                except Exception:
+                    break  # cache backend without working add(): fall through unguarded
+                if acquired:
+                    break
+                time.sleep(0.02)
+            ids = self._index()
+            mutate(ids)
+            cache.set(self.index_key, list(ids), timeout=None)
+        finally:
+            if acquired:
+                cache.delete(lock_key)
 
     def get(self, job_id: str):
         return cache.get(self._key(job_id))
 
     def set(self, job_id: str, job: dict[str, Any]) -> None:
         cache.set(self._key(job_id), job, timeout=self._ttl())
-        ids = self._index()
-        if job_id not in ids:
-            ids.add(job_id)
-            self._save_index(ids)
+        if job_id not in self._index():
+            self._mutate_index(lambda ids: ids.add(job_id))
 
     def update(self, job_id: str, **changes):
         job = self.get(job_id)
@@ -137,24 +162,21 @@ class CacheJobStore:
 
     def pop(self, job_id: str) -> None:
         cache.delete(self._key(job_id))
-        ids = self._index()
-        if job_id in ids:
-            ids.discard(job_id)
-            self._save_index(ids)
+        if job_id in self._index():
+            self._mutate_index(lambda ids: ids.discard(job_id))
 
     def all(self) -> dict[str, dict[str, Any]]:
         ids = self._index()
         result: dict[str, dict[str, Any]] = {}
-        stale = False
+        stale: set[str] = set()
         for job_id in list(ids):
             job = cache.get(self._key(job_id))
             if job is None:  # expired via TTL — drop from the index.
-                ids.discard(job_id)
-                stale = True
+                stale.add(job_id)
             else:
                 result[job_id] = job
         if stale:
-            self._save_index(ids)
+            self._mutate_index(lambda live: live.difference_update(stale))
         return result
 
 
@@ -165,11 +187,19 @@ genetic_jobs = CacheJobStore("genetic")
 optimiser_jobs = CacheJobStore("optimiser")
 
 
-def run_async_job(store: CacheJobStore, user_id: int, total_runs: int, work_fn: Callable) -> str:
+def run_async_job(
+    store: CacheJobStore,
+    user_id: int,
+    total_runs: int,
+    work_fn: Callable,
+    on_error: Callable[[], None] | None = None,
+) -> str:
     """Create a queued job and run ``work_fn(progress_hook)`` in a daemon thread.
 
     All job state is persisted to ``store`` (the shared cache) so any worker can
     serve the status poll. ``work_fn`` receives a progress hook ``(done, total)``.
+    ``on_error`` (if given) runs when the job fails — used to refund the
+    optimize quota so a failed run isn't charged against the monthly allowance.
     """
     job_id = str(uuid.uuid4())
     store.set(job_id, {
@@ -200,11 +230,22 @@ def run_async_job(store: CacheJobStore, user_id: int, total_runs: int, work_fn: 
             final_total = job.get("total_runs", total_runs) if job else total_runs
             store.update(job_id, result=result, status="completed", completed_runs=final_total)
         except Exception as exc:
-            store.update(
-                job_id,
-                error=str(exc) if settings.DEBUG else "Optimization failed.",
-                status="error",
-            )
+            # ValueError from the optimizer is a user-actionable, safe message
+            # ("No data for …", "All optimizer runs failed…", "Too many
+            # combinations…") — surface it even in production. Anything else is
+            # masked to avoid leaking internals.
+            if isinstance(exc, ValueError):
+                message = str(exc)
+            elif settings.DEBUG:
+                message = str(exc)
+            else:
+                message = "Optimization failed. Please try again."
+            store.update(job_id, error=message, status="error")
+            if on_error is not None:
+                try:
+                    on_error()
+                except Exception:
+                    logger.exception("Async job on_error hook failed")
 
     threading.Thread(target=run_job, daemon=True).start()
     return job_id
@@ -249,6 +290,10 @@ def user_payload(user) -> dict[str, Any]:
         "email": user.email,
         "name": user.first_name or user.username,
         "date_joined": user.date_joined.isoformat() if hasattr(user, "date_joined") else None,
+        # Google-SSO accounts are created without a usable password; the
+        # frontend uses this to swap password-confirmation flows (delete
+        # account, change password) for SSO-appropriate ones.
+        "has_password": user.has_usable_password(),
     }
 
 
@@ -356,6 +401,11 @@ def rate_limit(bucket: str) -> Callable:
     def decorator(view_func: Callable) -> Callable:
         @wraps(view_func)
         def wrapped(request, *args, **kwargs):
+            # Master kill-switch (settings.RATE_LIMITING_ENABLED). Off on
+            # QA/staging so testing isn't throttled; always on in production.
+            if not getattr(settings, "RATE_LIMITING_ENABLED", True):
+                return view_func(request, *args, **kwargs)
+
             max_requests, window_seconds = resolve_rate_limit(bucket)
             cache_key = f"ratelimit:{bucket}:{get_rate_limit_identifier(request)}"
 
@@ -702,7 +752,30 @@ def calculate_backtest_metrics(result: Dict[str, Any]):
     }
 
 
-def record_backtest_run(user, result: Dict[str, Any], strategy: Strategy | None = None, strategy_name: str = ""):
+def _backtest_config_snapshot(result: Dict[str, Any], initial_balance: float | None) -> Dict[str, Any]:
+    """Compact, JSON-safe description of what was run (for reproducibility)."""
+    data = result.get("data") if isinstance(result, dict) else None
+    tickers = list(data.keys()) if isinstance(data, dict) else []
+    cfg: Dict[str, Any] = {"tickers": tickers}
+    if initial_balance is not None:
+        cfg["initial_balance"] = initial_balance
+    for key in ("timeframe", "start", "end", "start_date", "end_date"):
+        if isinstance(result, dict) and result.get(key) is not None:
+            cfg[key] = result.get(key)
+    return cfg
+
+
+def record_backtest_run(
+    user,
+    result: Dict[str, Any],
+    strategy: Strategy | None = None,
+    strategy_name: str = "",
+    *,
+    dsl_json: dict | None = None,
+    dsl_text: str = "",
+    initial_balance: float | None = None,
+    source: str = "",
+):
     if not user:
         return None
 
@@ -722,6 +795,11 @@ def record_backtest_run(user, result: Dict[str, Any], strategy: Strategy | None 
         losing_trades=metrics["losing_trades"],
         win_rate=metrics["win_rate"],
         equity_curve=metrics["equity_curve"],
+        dsl_json=dsl_json if dsl_json else (strategy.dsl_json if strategy else None),
+        dsl_text=dsl_text or (strategy.dsl_text if strategy else ""),
+        config=_backtest_config_snapshot(result or {}, initial_balance),
+        result=result if isinstance(result, dict) else None,
+        source=source,
     )
 
 
@@ -750,15 +828,34 @@ def strategy_assistant_chat(request):
     strategy_context = normalize_strategy_context(payload.get("strategy_context"))
 
     entitlements.consume_quota(user, "ai")
+    started = time.monotonic()
     try:
         response = ask_strategy_assistant(messages, strategy_context)
     except AssistantError as exc:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="strategy_assistant", user=user, messages=messages,
+            request_meta={"strategy_context": strategy_context}, success=False,
+            error=exc.message, latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise APIError(exc.message, status_code=exc.status_code)
-    except Exception:
+    except Exception as exc:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="strategy_assistant", user=user, messages=messages,
+            request_meta={"strategy_context": strategy_context}, success=False,
+            error=str(exc), latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise
 
+    log_ai_interaction(
+        kind="strategy_assistant", user=user, provider=response.get("provider", ""),
+        model=response.get("model", ""), messages=messages,
+        request_meta={"strategy_context": strategy_context},
+        response_text=response.get("answer", ""), response_meta={"mode": response.get("mode")},
+        success=True, latency_ms=(time.monotonic() - started) * 1000,
+        usage=response.get("usage"),
+    )
     return no_store(JsonResponse(response))
 
 
@@ -1024,17 +1121,50 @@ def switch_plan(request):
 @api_error_boundary
 @require_methods("POST")
 @token_required
+@rate_limit("general")
+def submit_feedback(request):
+    """Capture a feedback-lead email (from the Plans page 'feedback for discounts /
+    giveaways' CTA) plus an optional message. Stored server-side so the list can
+    be exported and followed up on later."""
+    user = get_authenticated_user(request)
+    body = parse_body(request)
+    email = str(body.get("email") or user.email or "").strip()
+    message = str(body.get("message") or "").strip()[:5000]
+    source = str(body.get("source") or "plans_page").strip()[:64]
+
+    try:
+        validate_email(email)
+    except ValidationError:
+        raise APIError("Enter a valid email address.")
+
+    FeedbackLead.objects.create(user=user, email=email, message=message, source=source)
+    return no_store(JsonResponse({"ok": True, "message": "Thanks — we'll be in touch."}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
 @rate_limit("auth")
 def delete_account(request):
     user = get_authenticated_user(request)
     body = parse_body(request)
     password = body.get("password") or ""
 
-    if not password:
-        raise APIError("Password is required to delete your account.")
-
-    if not user.check_password(password):
-        raise APIError("Incorrect password.")
+    if user.has_usable_password():
+        if not password:
+            raise APIError("Password is required to delete your account.")
+        if not user.check_password(password):
+            raise APIError("Incorrect password.")
+    else:
+        # Google-SSO accounts have no password to check — confirm by having the
+        # user type their account email instead (the request is already
+        # token-authenticated; this guards against accidental clicks).
+        confirm_email = str(body.get("confirm_email") or "").strip().lower()
+        if not confirm_email:
+            raise APIError("Type your account email to confirm deletion.")
+        if confirm_email != (user.email or "").strip().lower():
+            raise APIError("The email you typed doesn't match your account email.")
 
     # Delete the user — CASCADE removes all related data (strategies, backtest
     # runs, custom indicators, paper accounts, password reset tokens, etc.)
@@ -1055,11 +1185,17 @@ def change_password(request):
     current = body.get("current_password") or ""
     new_pass = body.get("new_password") or ""
 
-    if not current or not new_pass:
-        raise APIError("Both current_password and new_password are required.")
+    if not new_pass:
+        raise APIError("new_password is required.")
 
-    if not user.check_password(current):
-        raise APIError("Current password is incorrect.")
+    if user.has_usable_password():
+        if not current:
+            raise APIError("Both current_password and new_password are required.")
+        if not user.check_password(current):
+            raise APIError("Current password is incorrect.")
+    # else: Google-SSO account with no password yet — this call SETS a first
+    # password (the request is already token-authenticated), which also enables
+    # email+password login and password-confirmed deletion for the account.
 
     try:
         validate_password(new_pass, user=user)
@@ -1474,16 +1610,152 @@ def indicator_assistant_chat(request):
     mode = "agent" if str(payload.get("mode", "ask")).strip().lower() == "agent" else "ask"
 
     entitlements.consume_quota(user, "ai")
+    started = time.monotonic()
     try:
         response = ask_indicator_assistant(messages, indicator_context, mode=mode)
     except AssistantError as exc:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="indicator_assistant", user=user, messages=messages,
+            request_meta={"indicator_context": indicator_context, "mode": mode},
+            success=False, error=exc.message, latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise APIError(exc.message, status_code=exc.status_code)
-    except Exception:
+    except Exception as exc:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="indicator_assistant", user=user, messages=messages,
+            request_meta={"indicator_context": indicator_context, "mode": mode},
+            success=False, error=str(exc), latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise
 
+    log_ai_interaction(
+        kind="indicator_assistant", user=user, provider=response.get("provider", ""),
+        model=response.get("model", ""), messages=messages,
+        request_meta={"indicator_context": indicator_context, "mode": mode},
+        response_text=response.get("answer", ""), response_meta={"mode": response.get("mode")},
+        success=True, latency_ms=(time.monotonic() - started) * 1000,
+        usage=response.get("usage"),
+    )
     return no_store(JsonResponse(response))
+
+
+# Caps shared by every endpoint that executes a backtest (JSON, text, and the
+# strategy-to-DSL convenience path) — one strategy can't fan out into unbounded
+# market-data fetches.
+MAX_TICKERS_PER_BACKTEST = 5
+MAX_SIGNAL_TICKERS_PER_BACKTEST = 3
+
+
+def validate_backtest_dsl_guards(dsl: dict) -> JsonResponse | None:
+    """Cheap pre-execution validation shared by all backtest entrypoints.
+
+    Returns a 400 JsonResponse describing the problem, or None if the DSL
+    passes. Runs BEFORE any quota is consumed so a rejected request never
+    burns a backtest.
+    """
+    if not isinstance(dsl, dict) or not ("LONG" in dsl or "SHORT" in dsl):
+        return JsonResponse({
+            "error": "Strategy must contain a LONG or SHORT block.",
+            "code": "invalid_dsl",
+            "success": False,
+        }, status=400)
+
+    # Guard: risk-based position sizing requires a stop loss
+    _direction = "LONG" if "LONG" in dsl else "SHORT"
+    _open_args = dsl.get(_direction, {}).get("OPEN", {}).get("ARGUMENTS", {})
+    if not isinstance(_open_args, dict):
+        _open_args = {}
+    _invest_type = _open_args.get("initialOpenPositionInvestType", "")
+    if _invest_type in ("riskFixedAmount", "riskPercentBalance"):
+        _sl = _open_args.get("stopLossPercent")
+        try:
+            _sl_num = float(_sl) if _sl is not None else 0.0
+        except (TypeError, ValueError):
+            _sl_num = 0.0
+        if _sl_num <= 0:
+            return JsonResponse({
+                "error": "Risk-based position sizing requires a stop loss. Set Stop Loss % > 0 in the Risk Management section.",
+                "code": "missing_stop_loss",
+                "success": False,
+            }, status=400)
+
+    # Guard: fees and risk percentages must not be negative. The engine also
+    # clamps these defensively, but rejecting here tells API users what was
+    # wrong instead of silently ignoring the value.
+    for _field in ("fee_value", "fee_fixed", "spread", "stopLossPercent", "takeProfitPercent"):
+        _raw = _open_args.get(_field)
+        if _raw is None:
+            continue
+        try:
+            _num = float(_raw)
+        except (TypeError, ValueError):
+            return JsonResponse({
+                "error": f"{_field} must be a number.",
+                "code": "invalid_argument",
+                "success": False,
+            }, status=400)
+        if _num < 0:
+            return JsonResponse({
+                "error": f"{_field} cannot be negative.",
+                "code": "invalid_argument",
+                "success": False,
+            }, status=400)
+
+    # Guard: cap tickers per request to prevent excessive data fetching
+    _tickers = _extract_tickers(dsl)
+    if len(_tickers) > MAX_TICKERS_PER_BACKTEST:
+        return JsonResponse({
+            "error": f"Too many tickers. Maximum {MAX_TICKERS_PER_BACKTEST} tickers per backtest.",
+            "code": "too_many_tickers",
+            "success": False,
+        }, status=400)
+    _signal_tickers = _extract_signal_tickers(dsl)
+    if len(_signal_tickers) > MAX_SIGNAL_TICKERS_PER_BACKTEST:
+        return JsonResponse({
+            "error": f"Too many watch-only tickers. Maximum {MAX_SIGNAL_TICKERS_PER_BACKTEST} per backtest.",
+            "code": "too_many_tickers",
+            "success": False,
+        }, status=400)
+
+    return None
+
+
+def execute_dsl_backtest(user, dsl: dict, initial_balance: float, custom_indicators: dict):
+    """Reserve one backtest of quota, run the engine, and map failures to
+    friendly 400/500 responses (refunding the quota on any failure).
+
+    Returns (result, None) on success or (None, JsonResponse) on failure.
+    Raises PlanLimitError (rendered as a 402) if the monthly quota is spent.
+    """
+    entitlements.consume_quota(user, "backtest")
+    try:
+        result = dslJSONBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
+    except BacktestError as e:
+        entitlements.refund_quota(user, "backtest")
+        return None, JsonResponse({
+            "error": e.message,
+            "code": e.code,
+            "success": False,
+        }, status=400)
+    except ValueError as e:
+        # DSL validation errors
+        entitlements.refund_quota(user, "backtest")
+        return None, JsonResponse({
+            "error": str(e),
+            "code": "validation_error",
+            "success": False,
+        }, status=400)
+    except Exception:
+        entitlements.refund_quota(user, "backtest")
+        logger.exception("Unexpected backtest error")
+        return None, JsonResponse({
+            "error": "An unexpected error occurred. Please try again.",
+            "code": "unexpected_error",
+            "success": False,
+        }, status=500)
+    return result, None
 
 
 @csrf_exempt
@@ -1509,14 +1781,31 @@ def backtestDSLText(request):
             raise APIError("strategy_id must be an integer.")
         strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-    entitlements.consume_quota(user, "backtest")
+    # Parse the DSL text up front so the same guards and error mapping the JSON
+    # endpoint uses apply here too (previously a bad ticker/date range surfaced
+    # as a generic 500 on this path).
     try:
-        result = dslTextToJsonBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
-    except Exception:
-        entitlements.refund_quota(user, "backtest")
-        raise
+        dsl_json = parse_dsl_text(dsl)
+    except Exception as e:
+        return JsonResponse({
+            "error": f"Could not parse the strategy DSL: {e}",
+            "code": "dsl_parse_error",
+            "success": False,
+        }, status=400)
+
+    guard_error = validate_backtest_dsl_guards(dsl_json)
+    if guard_error is not None:
+        return guard_error
+
+    result, error_response_ = execute_dsl_backtest(user, dsl_json, initial_balance, custom_indicators)
+    if error_response_ is not None:
+        return error_response_
+
     result["ticker_names"] = resolve_ticker_names(list(result.get("data", {}).keys()))
-    record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
+    record_backtest_run(
+        user, result, strategy=strategy, strategy_name=strategy_label,
+        dsl_json=dsl_json, dsl_text=dsl, initial_balance=initial_balance, source="text",
+    )
     if strategy:
         strategy.last_result = result
         strategy.dsl_text = dsl or strategy.dsl_text
@@ -1548,90 +1837,22 @@ def backtestDSLJSON(request):
             raise APIError("strategy_id must be an integer.")
         strategy = Strategy.objects.filter(id=strategy_id, user=user).first()
 
-    # Guard: risk-based position sizing requires a stop loss
-    _direction = "LONG" if "LONG" in dsl else "SHORT"
-    _open_args = dsl.get(_direction, {}).get("OPEN", {}).get("ARGUMENTS", {})
-    _invest_type = _open_args.get("initialOpenPositionInvestType", "")
-    if _invest_type in ("riskFixedAmount", "riskPercentBalance"):
-        _sl = _open_args.get("stopLossPercent")
-        if not _sl or float(_sl) <= 0:
-            return JsonResponse({
-                "error": "Risk-based position sizing requires a stop loss. Set Stop Loss % > 0 in the Risk Management section.",
-                "code": "missing_stop_loss",
-                "success": False,
-            }, status=400)
+    guard_error = validate_backtest_dsl_guards(dsl)
+    if guard_error is not None:
+        return guard_error
 
-    # Guard: fees and risk percentages must not be negative. The engine also
-    # clamps these defensively, but rejecting here tells API users what was
-    # wrong instead of silently ignoring the value.
-    for _field in ("fee_value", "fee_fixed", "spread", "stopLossPercent", "takeProfitPercent"):
-        _raw = _open_args.get(_field)
-        if _raw is None:
-            continue
-        try:
-            _num = float(_raw)
-        except (TypeError, ValueError):
-            return JsonResponse({
-                "error": f"{_field} must be a number.",
-                "code": "invalid_argument",
-                "success": False,
-            }, status=400)
-        if _num < 0:
-            return JsonResponse({
-                "error": f"{_field} cannot be negative.",
-                "code": "invalid_argument",
-                "success": False,
-            }, status=400)
-
-    # Guard: cap tickers per request to prevent excessive data fetching
-    MAX_TICKERS_PER_BACKTEST = 5
-    MAX_SIGNAL_TICKERS_PER_BACKTEST = 3
-    _tickers = _extract_tickers(dsl)
-    if len(_tickers) > MAX_TICKERS_PER_BACKTEST:
-        return JsonResponse({
-            "error": f"Too many tickers. Maximum {MAX_TICKERS_PER_BACKTEST} tickers per backtest.",
-            "code": "too_many_tickers",
-            "success": False,
-        }, status=400)
-    _signal_tickers = _extract_signal_tickers(dsl)
-    if len(_signal_tickers) > MAX_SIGNAL_TICKERS_PER_BACKTEST:
-        return JsonResponse({
-            "error": f"Too many watch-only tickers. Maximum {MAX_SIGNAL_TICKERS_PER_BACKTEST} per backtest.",
-            "code": "too_many_tickers",
-            "success": False,
-        }, status=400)
-
-    # Reserve quota only now that every cheap validation guard above has passed,
-    # so a rejected request never burns a backtest. Refund on any failure.
-    entitlements.consume_quota(user, "backtest")
-    try:
-        result = dslJSONBacktest(dsl, initial_balance=initial_balance, custom_indicators=custom_indicators)
-    except BacktestError as e:
-        entitlements.refund_quota(user, "backtest")
-        return JsonResponse({
-            "error": e.message,
-            "code": e.code,
-            "success": False
-        }, status=400)
-    except ValueError as e:
-        # DSL validation errors
-        entitlements.refund_quota(user, "backtest")
-        return JsonResponse({
-            "error": str(e),
-            "code": "validation_error",
-            "success": False
-        }, status=400)
-    except Exception as e:
-        entitlements.refund_quota(user, "backtest")
-        logger.exception("Unexpected backtest error")
-        return JsonResponse({
-            "error": "An unexpected error occurred. Please try again.",
-            "code": "unexpected_error",
-            "success": False
-        }, status=500)
+    # Quota is reserved only after every cheap validation guard has passed
+    # (inside execute_dsl_backtest), so a rejected request never burns a
+    # backtest; failures refund it.
+    result, error_response_ = execute_dsl_backtest(user, dsl, initial_balance, custom_indicators)
+    if error_response_ is not None:
+        return error_response_
 
     result["ticker_names"] = resolve_ticker_names(list(result.get("data", {}).keys()))
-    record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
+    record_backtest_run(
+        user, result, strategy=strategy, strategy_name=strategy_label,
+        dsl_json=dsl, initial_balance=initial_balance, source="json",
+    )
 
     if strategy:
         strategy.last_result = result
@@ -1657,7 +1878,12 @@ def dslParameterOptimiser(request):
     async_mode = bool(body.get("async", False))
 
     # Size the grid up front and cap it (applies to both sync and async paths).
-    param_grid, _ = build_param_grid(dsl, parameter_choice)
+    # The cap (MAX_GRID_COMBINATIONS) is user-actionable, so surface it as a
+    # friendly 400 instead of a raw 500.
+    try:
+        param_grid, _ = build_param_grid(dsl, parameter_choice)
+    except ValueError as e:
+        raise APIError(str(e), status_code=400)
     if not param_grid:
         raise APIError("No parameters selected for optimization")
     total_runs = 1
@@ -1665,11 +1891,13 @@ def dslParameterOptimiser(request):
         total_runs *= len(vals)
     entitlements.enforce_optimizer_method(user, "grid")
     entitlements.enforce_optimize_intensity(user, total_runs)
-    entitlements.consume_quota(user, "optimize")
 
     if async_mode:
+        # Check the job slot BEFORE reserving quota so a 429 here doesn't
+        # silently burn one of the user's monthly optimizations.
         cleanup_jobs(optimizer_jobs)
         ensure_user_can_create_job(optimizer_jobs, user.id)
+        entitlements.consume_quota(user, "optimize")
 
         job_id = run_async_job(
             optimizer_jobs,
@@ -1682,10 +1910,19 @@ def dslParameterOptimiser(request):
                 progress_hook=hook,
                 param_grid_override=param_grid,
             ),
+            on_error=lambda: entitlements.refund_quota(user, "optimize"),
         )
         return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
-    result = optimizer(parsed_dsl=dsl, param_choices=parameter_choice, initial_balance=initial_balance)
+    entitlements.consume_quota(user, "optimize")
+    try:
+        result = optimizer(parsed_dsl=dsl, param_choices=parameter_choice, initial_balance=initial_balance)
+    except ValueError as e:
+        entitlements.refund_quota(user, "optimize")
+        raise APIError(str(e), status_code=400)
+    except Exception:
+        entitlements.refund_quota(user, "optimize")
+        raise
     return JsonResponse(result, safe=False)
 
 
@@ -1746,16 +1983,21 @@ def dslGeneticOptimiser(request):
     total_runs = max(1, population) * max(1, generations)
     entitlements.enforce_optimizer_method(user, "genetic")
     entitlements.enforce_optimize_intensity(user, total_runs)
-    entitlements.consume_quota(user, "optimize")
 
     if async_mode:
+        # Job-slot + parameter checks BEFORE reserving quota so a rejected
+        # request doesn't burn one of the user's monthly optimizations.
         cleanup_jobs(genetic_jobs)
         ensure_user_can_create_job(genetic_jobs, user.id)
 
-        param_values, _ = build_param_values(dsl, parameter_choice)
+        try:
+            param_values, _ = build_param_values(dsl, parameter_choice)
+        except ValueError as e:
+            raise APIError(str(e), status_code=400)
         if not param_values:
             raise APIError("No parameters selected for optimization")
 
+        entitlements.consume_quota(user, "optimize")
         job_id = run_async_job(
             genetic_jobs,
             user.id,
@@ -1767,15 +2009,24 @@ def dslGeneticOptimiser(request):
                 ga_settings=ga_settings,
                 progress_hook=hook,
             ),
+            on_error=lambda: entitlements.refund_quota(user, "optimize"),
         )
         return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
-    result = genetic_optimizer(
-        parsed_dsl=dsl,
-        param_choices=parameter_choice,
-        initial_balance=initial_balance,
-        ga_settings=ga_settings,
-    )
+    entitlements.consume_quota(user, "optimize")
+    try:
+        result = genetic_optimizer(
+            parsed_dsl=dsl,
+            param_choices=parameter_choice,
+            initial_balance=initial_balance,
+            ga_settings=ga_settings,
+        )
+    except ValueError as e:
+        entitlements.refund_quota(user, "optimize")
+        raise APIError(str(e), status_code=400)
+    except Exception:
+        entitlements.refund_quota(user, "optimize")
+        raise
     return JsonResponse(result, safe=False)
 
 def get_user_constraints(user):
@@ -1850,11 +2101,13 @@ def dslOptimiser(request):
     total_runs = estimate_total_runs(method, opt_settings)
     entitlements.enforce_optimizer_method(user, "meta")
     entitlements.enforce_optimize_intensity(user, total_runs)
-    entitlements.consume_quota(user, "optimize")
 
     if async_mode:
+        # Job-slot check BEFORE reserving quota so a 429 here doesn't burn one
+        # of the user's monthly optimizations.
         cleanup_jobs(optimiser_jobs)
         ensure_user_can_create_job(optimiser_jobs, user.id)
+        entitlements.consume_quota(user, "optimize")
 
         job_id = run_async_job(
             optimiser_jobs,
@@ -1867,15 +2120,24 @@ def dslOptimiser(request):
                 settings=opt_settings,
                 progress_hook=hook,
             ),
+            on_error=lambda: entitlements.refund_quota(user, "optimize"),
         )
         return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
-    result = runner(
-        parsed_dsl=dsl,
-        param_choices=parameter_choice,
-        initial_balance=initial_balance,
-        settings=opt_settings,
-    )
+    entitlements.consume_quota(user, "optimize")
+    try:
+        result = runner(
+            parsed_dsl=dsl,
+            param_choices=parameter_choice,
+            initial_balance=initial_balance,
+            settings=opt_settings,
+        )
+    except ValueError as e:
+        entitlements.refund_quota(user, "optimize")
+        raise APIError(str(e), status_code=400)
+    except Exception:
+        entitlements.refund_quota(user, "optimize")
+        raise
     return JsonResponse(result, safe=False)
 
 
@@ -1946,20 +2208,40 @@ def strategy_to_dsl(request):
             "raw_model_output": result.get("raw_output", "")
         }, status=400)
 
-    # 3. Optional: immediately run backtest if requested
+    # 3. Optional: immediately run backtest if requested. This goes through the
+    # same guards + metered quota as the dedicated backtest endpoints (it used
+    # to bypass both, letting the "backtest" quota be dodged via this route),
+    # and includes the user's custom indicators so parity holds.
     run_backtest = body.get("run_backtest", False)
 
     backtest_result = None
     if run_backtest:
-        try:
-            backtest_result = dslJSONBacktest(
-                result,
-                initial_balance=parse_initial_balance(body.get("initial_balance", 10000))
-            )
-        except BacktestError as e:
-            backtest_result = {"error": e.message, "code": e.code}
-        except Exception as e:
-            backtest_result = {"error": "Backtest failed unexpectedly"}
+        guard_error = validate_backtest_dsl_guards(result)
+        if guard_error is not None:
+            guard_payload = json.loads(guard_error.content.decode("utf-8"))
+            backtest_result = {"error": guard_payload.get("error"), "code": guard_payload.get("code")}
+        else:
+            try:
+                backtest_result, error_response_ = execute_dsl_backtest(
+                    user,
+                    result,
+                    parse_initial_balance(body.get("initial_balance", 10000)),
+                    build_custom_indicator_runtime(user),
+                )
+                if error_response_ is not None:
+                    error_payload = json.loads(error_response_.content.decode("utf-8"))
+                    backtest_result = {"error": error_payload.get("error"), "code": error_payload.get("code")}
+                else:
+                    record_backtest_run(
+                        user, backtest_result, strategy_name="Generated Strategy",
+                        dsl_json=result,
+                        initial_balance=parse_initial_balance(body.get("initial_balance", 10000)),
+                        source="assistant",
+                    )
+            except PlanLimitError as e:
+                # Parse succeeded but the monthly backtest quota is spent —
+                # return the strategy anyway, with the limit noted.
+                backtest_result = e.to_dict()
 
     return JsonResponse({
         "success": True,
@@ -2460,6 +2742,9 @@ def dashboard_summary(request):
     response = {
         "strategy_count": strategies_qs.count(),
         "backtest_run_count": backtests_qs.count(),
+        # Average pct_change across the user's runs. The old key name
+        # ("total_return_pct") is kept alongside for any stale clients.
+        "avg_return_pct": aggregates.get("avg_return") or 0,
         "total_return_pct": aggregates.get("avg_return") or 0,
         "win_rate": (total_wins / closed_trades * 100) if closed_trades else 0,
         "equity_curve": equity_curve,

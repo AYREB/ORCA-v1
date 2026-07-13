@@ -50,7 +50,9 @@ class UsageCounter(models.Model):
         related_name="usage_counters",
     )
     metric = models.CharField(max_length=32)   # "ai" | "backtest" | "optimize"
-    period = models.CharField(max_length=7)    # "YYYY-MM"
+    # Period key produced by entitlements.period_key(): "all" (lifetime),
+    # "YYYY-Www" (weekly) or "YYYY-MM" (monthly), depending on the metric's cadence.
+    period = models.CharField(max_length=16)
     count = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -109,7 +111,20 @@ class BacktestRun(models.Model):
     losing_trades = models.IntegerField(default=0)
     win_rate = models.FloatField(default=0)
     equity_curve = models.JSONField(default=list, blank=True)
+    # --- Full input capture (reproducibility + future training) -----------
+    # The exact strategy definition + run config that produced this result, so
+    # every recorded backtest can be replayed or mined later without guessing.
+    dsl_json = models.JSONField(blank=True, null=True)
+    dsl_text = models.TextField(blank=True, default="")
+    config = models.JSONField(default=dict, blank=True)   # tickers, timeframe, dates, initial_balance, ...
+    result = models.JSONField(blank=True, null=True)       # full engine result payload
+    source = models.CharField(max_length=32, blank=True, default="")  # manual | text | optimizer | assistant
+    # ---------------------------------------------------------------------
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "created_at"])]
 
     def __str__(self):
         name = self.strategy_name or (self.strategy.name if self.strategy else "Backtest")
@@ -254,3 +269,92 @@ class PasswordResetToken(models.Model):
 
     def __str__(self):
         return f"PasswordResetToken({self.user.email}, used={self.used})"
+
+
+class AIInteractionLog(models.Model):
+    """Durable record of every AI prompt/response and how it performed.
+
+    One row per model call across all AI surfaces (the strategy/indicator
+    assistants and the NL->strategy parser). Captures the full input (system
+    prompt + context + messages) and the output plus performance signals
+    (latency, tokens, success/error). Stored verbatim so the data can later be
+    viewed, audited, and mined/curated into training sets — pair it with the
+    ``export_ai_interactions`` management command.
+    """
+
+    KIND_CHOICES = [
+        ("strategy_assistant", "Strategy Assistant"),
+        ("indicator_assistant", "Indicator Assistant"),
+        ("nl_parse", "NL Strategy Parse"),
+        ("nl_chat", "NL Strategy Chat"),
+        ("other", "Other"),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ai_interactions",
+    )
+    kind = models.CharField(max_length=32, choices=KIND_CHOICES, default="other")
+    provider = models.CharField(max_length=32, blank=True, default="")   # openai | ollama | modal | ...
+    model = models.CharField(max_length=120, blank=True, default="")
+
+    # --- Full input ------------------------------------------------------
+    system_prompt = models.TextField(blank=True, default="")
+    context_text = models.TextField(blank=True, default="")
+    messages = models.JSONField(default=list, blank=True)   # [{role, content}, ...]
+    request_meta = models.JSONField(default=dict, blank=True)  # strategy/indicator context, mode, etc.
+
+    # --- Output ----------------------------------------------------------
+    response_text = models.TextField(blank=True, default="")
+    response_meta = models.JSONField(default=dict, blank=True)  # raw finish reason, mode, etc.
+
+    # --- Performance / quality signals -----------------------------------
+    success = models.BooleanField(default=True)
+    error = models.TextField(blank=True, default="")
+    latency_ms = models.IntegerField(null=True, blank=True)
+    prompt_tokens = models.IntegerField(null=True, blank=True)
+    completion_tokens = models.IntegerField(null=True, blank=True)
+    total_tokens = models.IntegerField(null=True, blank=True)
+    # Optional post-hoc quality label (thumbs up/down, edits, etc.) for curation.
+    user_rating = models.SmallIntegerField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["kind", "created_at"]),
+            models.Index(fields=["user", "created_at"]),
+        ]
+
+    def __str__(self):
+        who = self.user.email if self.user else "anon"
+        return f"AIInteractionLog({self.kind}, {who}, ok={self.success})"
+
+
+class FeedbackLead(models.Model):
+    """Email captured from the 'give feedback for discounts/giveaways' CTA on the
+    Plans page, plus any message left. Stored server-side so the list can be
+    exported and followed up on later."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="feedback_leads",
+    )
+    email = models.EmailField()
+    message = models.TextField(blank=True, default="")
+    source = models.CharField(max_length=64, blank=True, default="plans_page")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["email", "created_at"])]
+
+    def __str__(self):
+        return f"FeedbackLead({self.email}, {self.source})"

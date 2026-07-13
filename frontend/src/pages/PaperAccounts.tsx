@@ -64,6 +64,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { api, ApiError, BacktestResult, SavedStrategy, TradeEntry } from "@/lib/api";
+import { detectDirection, isEntryTrade, isExitTrade } from "@/lib/tradeUtils";
 import BacktestResults from "@/components/backtest/BacktestResults";
 import ChartView from "@/components/backtest/ChartView";
 import StrategySummary from "@/components/backtest/StrategySummary";
@@ -504,27 +505,33 @@ const normalizeAccount = (raw: unknown): PaperAccount => {
 };
 
 const summarizeTradeOutcomes = (trades: TradeEntry[]): TradeOutcomeSummary => {
-  const openPositions = new Map<string, number[]>();
+  // Direction-aware: a short strategy opens with SELL and closes with BUY.
+  // The engine always closes the FULL position, so an exit settles every open
+  // entry at once — compare against the average entry price.
+  const directions = detectDirection(trades);
+  const openEntries = new Map<string, number[]>();
   let wins = 0;
   let losses = 0;
 
   for (const trade of trades) {
-    if (trade.type === "BUY" || trade.type === "Recurring_Entry") {
-      const entries = openPositions.get(trade.ticker) ?? [];
+    const dir = directions.get(trade.ticker) ?? "long";
+
+    if (isEntryTrade(trade, dir)) {
+      const entries = openEntries.get(trade.ticker) ?? [];
       entries.push(trade.price);
-      openPositions.set(trade.ticker, entries);
+      openEntries.set(trade.ticker, entries);
       continue;
     }
 
-    if (trade.type === "SELL") {
-      const entries = openPositions.get(trade.ticker) ?? [];
-      const entryPrice = entries.shift();
-      if (entryPrice !== undefined) {
-        if (trade.price >= entryPrice) wins += 1;
+    if (isExitTrade(trade, dir)) {
+      const entries = openEntries.get(trade.ticker) ?? [];
+      if (entries.length > 0) {
+        const avgEntry = entries.reduce((sum, p) => sum + p, 0) / entries.length;
+        const profitable = dir === "long" ? trade.price >= avgEntry : trade.price <= avgEntry;
+        if (profitable) wins += 1;
         else losses += 1;
       }
-      if (entries.length > 0) openPositions.set(trade.ticker, entries);
-      else openPositions.delete(trade.ticker);
+      openEntries.delete(trade.ticker);
     }
   }
 

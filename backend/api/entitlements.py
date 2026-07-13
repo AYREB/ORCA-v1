@@ -6,13 +6,18 @@ Views call these helpers to gate metered features:
     refund_quota(user, "backtest")         # give it back if the metered work then failed
     enforce_count_cap(user, "strategies", current_count)
 
-Always enforce a monthly quota with ``consume_quota`` (a concurrency-safe reserve),
+Always enforce a quota with ``consume_quota`` (a concurrency-safe reserve),
 NOT the older ``check_quota`` + ``record_usage`` pair — that read-then-increment
 has a race that lets parallel requests overshoot the limit. ``check_quota`` remains
 only as a cheap soft pre-check for friendly early failures.
     enforce_optimizer_method(user, "genetic")
     optimize_intensity_cap(user)           # max backtests allowed in one optimization
     plan_summary(user)                     # plan + limits + usage, for /api/plan/
+
+Each metered metric resets on its own cadence (see plans.py): Free AI is an
+all-time lifetime cap, backtests/optimizer runs reset weekly, and paid AI resets
+monthly. ``period_key`` maps a metric's cadence to the string stored on the
+``UsageCounter`` row, so a new week/month/lifetime naturally starts a fresh row.
 
 A ``PlanLimitError`` is a 402 that the view error boundary renders as JSON with
 an ``upgrade`` hint so the frontend can show an "upgrade to unlock" prompt.
@@ -54,9 +59,24 @@ def enforcement_enabled() -> bool:
     return bool(getattr(settings, "PLAN_ENFORCEMENT", True))
 
 
+def period_key(period: str) -> str:
+    """Map a quota cadence to the ``UsageCounter.period`` string it counts under.
+
+    all_time -> "all"           (one row forever — a lifetime cap)
+    weekly   -> "2026-W28"      (ISO year + week — resets every week)
+    monthly  -> "2026-07"       (calendar month — resets every month)
+    """
+    now = timezone.now()
+    if period == plans.ALL_TIME:
+        return "all"
+    if period == plans.WEEKLY:
+        return now.strftime("%G-W%V")
+    return now.strftime("%Y-%m")
+
+
 def current_period() -> str:
-    """Calendar-month key, e.g. '2026-07'. A new month resets every quota."""
-    return timezone.now().strftime("%Y-%m")
+    """Legacy calendar-month key, kept for the /api/plan/ ``period`` field."""
+    return period_key(plans.MONTHLY)
 
 
 def get_profile(user):
@@ -78,19 +98,24 @@ def config_of(user) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Monthly usage quotas
+# Metered usage quotas (per-metric reset cadence)
 # --------------------------------------------------------------------------
+def metric_period_of(user, metric: str) -> str:
+    return plans.metric_period(plan_of(user), metric)
+
+
 def monthly_limit(user, metric: str):
+    """The user's current allowance for ``metric`` (None = unlimited)."""
     if not enforcement_enabled():
         return plans.UNLIMITED
-    return config_of(user).get("monthly", {}).get(metric, plans.UNLIMITED)
+    return plans.metric_limit(plan_of(user), metric)
 
 
 def usage_count(user, metric: str) -> int:
     from .models import UsageCounter
 
     row = UsageCounter.objects.filter(
-        user=user, metric=metric, period=current_period()
+        user=user, metric=metric, period=period_key(metric_period_of(user, metric))
     ).first()
     return row.count if row else 0
 
@@ -98,20 +123,21 @@ def usage_count(user, metric: str) -> int:
 def _quota_exceeded_error(user, metric: str, limit: int) -> "PlanLimitError":
     plan = plan_of(user)
     label = plans.METRIC_LABELS.get(metric, metric)
+    period = plans.metric_period(plan, metric)
+    window = plans.PERIOD_LABELS.get(period, "this month")
     upgrade = plans.min_plan_unlocking(
         lambda cfg, m=metric, l=limit: _allows_more(cfg, m, l)
     )
     return PlanLimitError(
-        f"You've used all {limit} {label} on the "
-        f"{plans.plan_config(plan)['label']} plan this month. "
-        f"Upgrade for more.",
+        f"You've used all {limit} {label} {window} on the "
+        f"{plans.plan_config(plan)['label']} plan. Upgrade for more.",
         current_plan=plan,
         upgrade_to=upgrade,
     )
 
 
 def check_quota(user, metric: str) -> None:
-    """Raise if the user has no monthly allowance left for ``metric``.
+    """Raise if the user has no allowance left for ``metric``.
 
     This is only a *soft* pre-check for a fast, friendly failure. It is NOT the
     authoritative gate — a read here followed by a later ``record_usage`` has a
@@ -128,7 +154,7 @@ def check_quota(user, metric: str) -> None:
 
 def consume_quota(user, metric: str, n: int = 1) -> None:
     """Atomically reserve ``n`` uses of ``metric``, raising 402 if that would
-    exceed the monthly allowance.
+    exceed the current allowance.
 
     Concurrency-safe: the reservation is a single conditional ``UPDATE ... WHERE
     count <= limit - n`` that the database serializes on the counter row, so
@@ -142,7 +168,7 @@ def consume_quota(user, metric: str, n: int = 1) -> None:
         return
     from .models import UsageCounter
 
-    period = current_period()
+    period = period_key(metric_period_of(user, metric))
     UsageCounter.objects.get_or_create(user=user, metric=metric, period=period)
     reserved = UsageCounter.objects.filter(
         user=user, metric=metric, period=period, count__lte=limit - n
@@ -159,16 +185,16 @@ def refund_quota(user, metric: str, n: int = 1) -> None:
     """
     from .models import UsageCounter
 
-    period = current_period()
+    period = period_key(metric_period_of(user, metric))
     UsageCounter.objects.filter(
         user=user, metric=metric, period=period, count__gte=n
     ).update(count=F("count") - n)
 
 
 def _allows_more(cfg: dict, metric: str, current_limit: int) -> bool:
-    """True if ``cfg``'s monthly allowance for ``metric`` beats current_limit
+    """True if ``cfg``'s allowance for ``metric`` beats current_limit
     (or is unlimited) — used to find the cheapest unlocking plan."""
-    lim = cfg.get("monthly", {}).get(metric, plans.UNLIMITED)
+    lim = cfg.get("quotas", {}).get(metric, {}).get("limit", plans.UNLIMITED)
     return lim is None or lim > current_limit
 
 
@@ -177,7 +203,7 @@ def record_usage(user, metric: str, n: int = 1) -> None:
     metered work succeeds so failures aren't charged against the quota."""
     from .models import UsageCounter
 
-    period = current_period()
+    period = period_key(metric_period_of(user, metric))
     obj, created = UsageCounter.objects.get_or_create(
         user=user, metric=metric, period=period, defaults={"count": n}
     )
@@ -275,13 +301,21 @@ def enforce_optimize_intensity(user, total_runs: int) -> None:
 # --------------------------------------------------------------------------
 # Summary for the frontend (/api/plan/ and /api/me/)
 # --------------------------------------------------------------------------
+def _quota_view(cfg: dict) -> dict:
+    """Serialize a plan's quotas as {metric: {limit, period}} for the frontend."""
+    return {
+        metric: {"limit": q.get("limit"), "period": q.get("period", plans.MONTHLY)}
+        for metric, q in cfg.get("quotas", {}).items()
+    }
+
+
 def plan_summary(user) -> dict:
-    """Everything the UI needs: current plan, its limits, and usage this month."""
+    """Everything the UI needs: current plan, its limits, and usage this period."""
     plan = plan_of(user)
     cfg = plans.plan_config(plan)
     period = current_period()
 
-    usage = {m: usage_count(user, m) for m in cfg.get("monthly", {})}
+    usage = {m: usage_count(user, m) for m in cfg.get("quotas", {})}
 
     if not enforcement_enabled():
         # QA/staging: report what is actually enforced (nothing), so the
@@ -293,7 +327,10 @@ def plan_summary(user) -> dict:
             "price_usd": cfg["price_usd"],
             "period": period,
             "limits": {
-                "monthly": {m: plans.UNLIMITED for m in cfg.get("monthly", {})},
+                "quotas": {
+                    m: {"limit": plans.UNLIMITED, "period": q.get("period", plans.MONTHLY)}
+                    for m, q in cfg.get("quotas", {}).items()
+                },
                 "caps": {c: plans.UNLIMITED for c in cfg.get("caps", {})},
                 "optimizer_methods": pro["optimizer_methods"],
                 "optimize_intensity": pro["optimize_intensity"],
@@ -308,7 +345,7 @@ def plan_summary(user) -> dict:
         "price_usd": cfg["price_usd"],
         "period": period,
         "limits": {
-            "monthly": cfg.get("monthly", {}),
+            "quotas": _quota_view(cfg),
             "caps": cfg.get("caps", {}),
             "optimizer_methods": cfg.get("optimizer_methods", []),
             "optimize_intensity": cfg.get("optimize_intensity"),
@@ -327,7 +364,7 @@ def all_plans_public() -> list:
             "plan": slug,
             "label": cfg["label"],
             "price_usd": cfg["price_usd"],
-            "monthly": cfg["monthly"],
+            "quotas": _quota_view(cfg),
             "caps": cfg["caps"],
             "optimizer_methods": cfg["optimizer_methods"],
             "optimize_intensity": cfg["optimize_intensity"],

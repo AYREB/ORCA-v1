@@ -294,8 +294,13 @@ const Settings = () => {
   const [deletePw, setDeletePw] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
 
+  // Google-SSO accounts have no password yet: the same form SETS a first
+  // password (no "current password" field), which also unlocks email+password
+  // login and password-confirmed account deletion.
+  const hasPassword = user?.has_password !== false;
+
   const handleChangePassword = useCallback(async () => {
-    if (!currentPw || !newPw || !confirmPw) {
+    if ((hasPassword && !currentPw) || !newPw || !confirmPw) {
       toast.error("Please fill in all password fields.");
       return;
     }
@@ -309,33 +314,37 @@ const Settings = () => {
     }
     setPwSaving(true);
     try {
-      const res = await api.changePassword(currentPw, newPw);
+      const res = await api.changePassword(hasPassword ? currentPw : "", newPw);
       updateToken(res.token);
       setCurrentPw("");
       setNewPw("");
       setConfirmPw("");
-      toast.success("Password changed successfully.");
+      toast.success(hasPassword ? "Password changed successfully." : "Password set successfully.");
+      if (!hasPassword) {
+        // Refresh so has_password flips and the UI switches to the normal flows.
+        void refreshUser().catch(() => undefined);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to change password.");
     } finally {
       setPwSaving(false);
     }
-  }, [currentPw, newPw, confirmPw, updateToken]);
+  }, [hasPassword, currentPw, newPw, confirmPw, updateToken, refreshUser]);
 
   const handleDeleteAccount = useCallback(async () => {
     if (!deletePw) {
-      toast.error("Please enter your password to confirm.");
+      toast.error(hasPassword ? "Please enter your password to confirm." : "Please type your account email to confirm.");
       return;
     }
     setDeleteLoading(true);
     try {
-      await api.deleteAccount(deletePw);
+      await api.deleteAccount(hasPassword ? { password: deletePw } : { confirmEmail: deletePw });
       logout();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete account.");
       setDeleteLoading(false);
     }
-  }, [deletePw, logout]);
+  }, [deletePw, hasPassword, logout]);
 
   // Other sections
   const [appearance, setAppearance]       = useState(settings.appearance);
@@ -813,20 +822,28 @@ const Settings = () => {
           </div>
         </Block>
 
-        <Block title="Change Password">
+        <Block title={hasPassword ? "Change Password" : "Set Password"}>
           <div className="rounded-xl border border-border/40 bg-card/30 p-4 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs text-muted-foreground mb-1 block">Current password</Label>
-                <Input
-                  type="password"
-                  value={currentPw}
-                  onChange={(e) => setCurrentPw(e.target.value)}
-                  placeholder="••••••••"
-                  className="bg-secondary border-border h-9 text-sm"
-                  autoComplete="current-password"
-                />
-              </div>
+            {!hasPassword && (
+              <p className="text-xs text-muted-foreground">
+                You signed up with Google, so your account has no password yet. Setting one also lets
+                you sign in with email + password.
+              </p>
+            )}
+            <div className={`grid grid-cols-1 gap-3 ${hasPassword ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+              {hasPassword && (
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1 block">Current password</Label>
+                  <Input
+                    type="password"
+                    value={currentPw}
+                    onChange={(e) => setCurrentPw(e.target.value)}
+                    placeholder="••••••••"
+                    className="bg-secondary border-border h-9 text-sm"
+                    autoComplete="current-password"
+                  />
+                </div>
+              )}
               <div>
                 <Label className="text-xs text-muted-foreground mb-1 block">New password</Label>
                 <Input
@@ -854,10 +871,10 @@ const Settings = () => {
               size="sm"
               variant="outline"
               onClick={handleChangePassword}
-              disabled={pwSaving || !currentPw || !newPw || !confirmPw}
+              disabled={pwSaving || (hasPassword && !currentPw) || !newPw || !confirmPw}
               className="gap-1.5"
             >
-              {pwSaving ? "Saving…" : "Update password"}
+              {pwSaving ? "Saving…" : hasPassword ? "Update password" : "Set password"}
             </Button>
           </div>
         </Block>
@@ -961,16 +978,18 @@ const Settings = () => {
                 <span className="block">
                   This permanently deletes your account and <strong>all</strong> associated data — strategies, backtest history, custom indicators, and paper accounts. There is no way to recover this.
                 </span>
-                <span className="block pt-1">Enter your password to confirm.</span>
+                <span className="block pt-1">
+                  {hasPassword ? "Enter your password to confirm." : "Type your account email to confirm."}
+                </span>
               </AlertDialogDescription>
             </AlertDialogHeader>
             <Input
-              type="password"
-              placeholder="Your password"
+              type={hasPassword ? "password" : "email"}
+              placeholder={hasPassword ? "Your password" : user?.email ?? "Your account email"}
               value={deletePw}
               onChange={(e) => setDeletePw(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleDeleteAccount()}
-              autoComplete="current-password"
+              autoComplete={hasPassword ? "current-password" : "email"}
               className="mt-1"
               disabled={deleteLoading}
             />

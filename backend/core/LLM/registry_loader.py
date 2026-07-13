@@ -121,6 +121,12 @@ JSON SCHEMA RULES:
 - Top level key must be LONG or SHORT
 - LONG = buying, SHORT = selling short
 - context contains: tickers (list of canonical tickers), execution_timeframe, dateframe (start/end)
+- context may also contain signal_tickers: watch-only symbols whose market data
+  is loaded so conditions can reference them, but which are NEVER traded
+- Any indicator may take a "ticker" argument to evaluate against a watch symbol:
+  {{"func": "RSI", "arg": {{"period": 14, "timeframe": "1h", "offset": 0, "ticker": "SPY"}}}}
+- "buy B when A does X" => tickers=[B], signal_tickers=[A], and every indicator
+  in the condition that refers to A carries "ticker": "A"
 - OPEN contains: CONDITIONS and ARGUMENTS
 - CLOSE is optional - only include if explicitly mentioned
 - CONDITIONS use: left, operator, right structure

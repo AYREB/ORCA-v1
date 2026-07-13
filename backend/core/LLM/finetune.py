@@ -46,10 +46,10 @@ TRAINING_CONFIG = {
     "per_device_eval_batch_size": 1,
     "gradient_accumulation_steps": 8,
     "warmup_steps": 30,
-    # 600 steps x effective batch 8 = ~1.8 epochs over 2,700 examples. On a
-    # free T4 with gradient offloading (~37s/step) that's ~6.5h — fits inside
-    # Kaggle's ~9h session cap. 1500 steps would be killed at ~60%.
-    "max_steps": 600,
+    # v2: 750 steps x effective batch 8 = ~1.5 epochs over 4,050 train
+    # examples (4,500 - val split). ~6.5-7.5h on a free T4 — fits Kaggle's
+    # 12h batch-session cap with room for the GGUF export.
+    "max_steps": 750,
     "learning_rate": 2e-4,
     "logging_steps": 25,
     "eval_steps": 200,

@@ -23,7 +23,7 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install("kaggle")
     secrets=[modal.Secret.from_name("kaggle-api")],
     timeout=3600,
 )
-def fetch(kernel: str) -> int:
+def fetch(kernel: str, dest: str = "orca-qwen2.5.gguf") -> int:
     import glob
     import os
     import shutil
@@ -33,10 +33,14 @@ def fetch(kernel: str) -> int:
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"downloading output of kernel: {kernel}")
-    subprocess.run(
+    result = subprocess.run(
         ["kaggle", "kernels", "output", kernel, "-p", out_dir],
-        check=True,
+        capture_output=True, text=True,
     )
+    print("stdout:", result.stdout[-2000:])
+    print("stderr:", result.stderr[-2000:])
+    if result.returncode != 0:
+        raise RuntimeError(f"kaggle output failed rc={result.returncode}")
 
     ggufs = glob.glob(os.path.join(out_dir, "**", "*.gguf"), recursive=True)
     if not ggufs:
@@ -45,18 +49,18 @@ def fetch(kernel: str) -> int:
     size = os.path.getsize(src)
     print(f"found {src} ({size:,} bytes) — moving to volume")
 
-    shutil.move(src, "/models/orca-qwen2.5.gguf")
+    shutil.move(src, os.path.join("/models", dest))
 
     # Clean up any partial chunked-upload leftovers from earlier attempts.
     if os.path.isdir("/models/parts"):
         shutil.rmtree("/models/parts")
 
     volume.commit()
-    print(f"DONE: /models/orca-qwen2.5.gguf = {size:,} bytes")
+    print(f"DONE: /models/{dest} = {size:,} bytes")
     return size
 
 
 @app.local_entrypoint()
-def main(kernel: str):
-    size = fetch.remote(kernel)
+def main(kernel: str, dest: str = "orca-qwen2.5.gguf"):
+    size = fetch.remote(kernel, dest)
     print(f"MODEL ON VOLUME: {size:,} bytes")
