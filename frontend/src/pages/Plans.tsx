@@ -1,13 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, Sparkles, Zap, Rocket, ArrowUpRight, Loader2 } from "lucide-react";
+import { Check, Sparkles, Zap, Rocket, Loader2, Gift, Clock, Lock } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout, { PageHeader } from "@/components/dashboard/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
-import { api, ApiError, PublicPlan, PlanSummary, PlanSlug, isPlanLimitError } from "@/lib/api";
+import { api, PublicPlan, PlanSummary, PlanSlug, MetricQuota, QuotaPeriod } from "@/lib/api";
 
 const PLAN_ICON: Record<PlanSlug, typeof Sparkles> = {
   free: Sparkles,
@@ -20,26 +30,41 @@ const METRIC_LABEL: Record<string, string> = {
   backtest: "Backtests",
   optimize: "Optimizer runs",
 };
-const CAP_LABEL: Record<string, string> = {
-  strategies: "Saved strategies",
-  paper_accounts: "Paper accounts",
-  custom_indicators: "Custom indicators",
-};
 const METHOD_LABEL: Record<string, string> = {
   grid: "Grid search",
   genetic: "Genetic",
   meta: "Metaheuristics",
 };
 
+/** Short suffix describing a quota's reset cadence, e.g. "/ wk". */
+const PERIOD_SUFFIX: Record<QuotaPeriod, string> = {
+  all_time: "all-time",
+  weekly: "/ wk",
+  monthly: "/ mo",
+};
+/** How the usage panel describes when a metric resets. */
+const PERIOD_RESET: Record<QuotaPeriod, string> = {
+  all_time: "Lifetime — upgrade to reset",
+  weekly: "Resets weekly",
+  monthly: "Resets monthly",
+};
+
 const fmt = (v: number | null | undefined) => (v === null || v === undefined ? "Unlimited" : String(v));
+
+const quotaLine = (label: string, q: MetricQuota | undefined) => {
+  if (!q) return `${label}`;
+  if (q.limit === null) return `Unlimited ${label.toLowerCase()}`;
+  const suffix = PERIOD_SUFFIX[q.period] ?? "";
+  return `${q.limit} ${label.toLowerCase()} ${suffix}`.trim();
+};
 
 /** Build the ordered feature rows shown on each plan card. */
 function featureRows(plan: PublicPlan): string[] {
   const methods = plan.optimizer_methods.map((m) => METHOD_LABEL[m] ?? m).join(", ");
   return [
-    `${fmt(plan.monthly.ai)} AI generations / mo`,
-    `${fmt(plan.monthly.backtest)} backtests / mo`,
-    `${fmt(plan.monthly.optimize)} optimizer runs / mo`,
+    quotaLine("AI generations", plan.quotas.ai),
+    quotaLine("Backtests", plan.quotas.backtest),
+    quotaLine("Optimizer runs", plan.quotas.optimize),
     `Optimizers: ${methods}`,
     `Up to ${fmt(plan.optimize_intensity)} backtests per optimization`,
     `${fmt(plan.caps.strategies)} saved strategies`,
@@ -50,11 +75,17 @@ function featureRows(plan: PublicPlan): string[] {
 }
 
 const Plans = () => {
-  const { user, refreshUser } = useAuth();
+  const { user } = useAuth();
   const [plans, setPlans] = useState<PublicPlan[]>([]);
   const [summary, setSummary] = useState<PlanSummary | null>(user?.plan ?? null);
   const [loading, setLoading] = useState(true);
-  const [switching, setSwitching] = useState<PlanSlug | null>(null);
+
+  // Feedback CTA
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [email, setEmail] = useState(user?.email ?? "");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   const currentPlan: PlanSlug = summary?.plan ?? "free";
 
@@ -77,27 +108,27 @@ const Plans = () => {
     };
   }, []);
 
-  const handleUpgrade = async (plan: PlanSlug) => {
-    if (plan === currentPlan) return;
-    setSwitching(plan);
+  useEffect(() => {
+    if (user?.email) setEmail((prev) => prev || user.email);
+  }, [user?.email]);
+
+  const handleFeedbackSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    const trimmed = email.trim();
+    if (!trimmed) {
+      toast.error("Enter your email so we can reach you.");
+      return;
+    }
+    setSubmitting(true);
     try {
-      // No paywall yet — anyone can self-select their plan. Billing (Stripe)
-      // will replace this free switch later.
-      await api.switchPlan(plan);
-      await Promise.all([refreshUser(), api.getPlan().then(setSummary)]);
-      toast.success(`Switched to ${plan.charAt(0).toUpperCase() + plan.slice(1)}.`);
+      await api.submitFeedback({ email: trimmed, message: message.trim(), source: "plans_page" });
+      setSubmitted(true);
+      toast.success("Thanks! You're on the list for discounts & giveaways.");
+      setTimeout(() => setFeedbackOpen(false), 1200);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
-        toast("Payments are coming soon", {
-          description: "You'll be able to upgrade right here. Hang tight!",
-        });
-      } else if (isPlanLimitError(err)) {
-        // handled by the global dialog
-      } else {
-        toast.error(err instanceof Error ? err.message : "Could not change plan.");
-      }
+      toast.error(err instanceof Error ? err.message : "Could not submit feedback.");
     } finally {
-      setSwitching(null);
+      setSubmitting(false);
     }
   };
 
@@ -107,8 +138,38 @@ const Plans = () => {
         icon={Sparkles}
         eyebrow="Subscription"
         title="Plans & Usage"
-        description="Pick the plan that fits how you trade. Upgrade or downgrade anytime."
+        description="Track your usage and preview the plans coming soon."
       />
+
+      {/* Coming-soon disclosure banner */}
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="mb-8 overflow-hidden rounded-2xl border border-primary/40 bg-primary/[0.06] p-6 backdrop-blur-xl"
+      >
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Clock className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-semibold sm:text-xl">Paid upgrades are coming soon</h2>
+            </div>
+            <p className="max-w-xl text-sm text-muted-foreground">
+              We're putting the finishing touches on secure checkout and the Plus &amp; Pro tiers.
+              For now you're on the Free plan — help shape what ships next and get rewarded for it.
+            </p>
+            <p className="flex items-center gap-1.5 text-sm font-medium text-primary">
+              <Gift className="h-4 w-4" />
+              Share feedback to unlock subscription discounts, giveaways &amp; freebies.
+            </p>
+          </div>
+          <div className="flex-shrink-0">
+            <Button size="lg" className="gap-2" onClick={() => { setSubmitted(false); setFeedbackOpen(true); }}>
+              <Gift className="h-4 w-4" />
+              Provide feedback for perks
+            </Button>
+          </div>
+        </div>
+      </motion.div>
 
       {/* Current usage */}
       {summary && (
@@ -122,12 +183,13 @@ const Plans = () => {
               <span className="text-sm font-medium text-muted-foreground">Current plan</span>
               <Badge variant="secondary" className="capitalize">{summary.label}</Badge>
             </div>
-            <span className="text-xs text-muted-foreground">Resets monthly · {summary.period}</span>
+            <span className="text-xs text-muted-foreground">Usage · {summary.period}</span>
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
-            {Object.keys(summary.limits.monthly).map((metric) => {
+            {Object.keys(summary.limits.quotas).map((metric) => {
+              const quota = summary.limits.quotas[metric];
+              const limit = quota?.limit ?? null;
               const used = summary.usage[metric] ?? 0;
-              const limit = summary.limits.monthly[metric];
               const pct = limit === null || limit === 0 ? (limit === null ? 0 : 100) : Math.min(100, (used / limit) * 100);
               return (
                 <div key={metric} className="rounded-xl border border-border/50 bg-background/40 p-4">
@@ -138,6 +200,11 @@ const Plans = () => {
                     </span>
                   </div>
                   <Progress value={limit === null ? 0 : pct} className="h-1.5" />
+                  {quota && (
+                    <span className="mt-2 block text-[11px] text-muted-foreground">
+                      {PERIOD_RESET[quota.period]}
+                    </span>
+                  )}
                 </div>
               );
             })}
@@ -145,7 +212,7 @@ const Plans = () => {
         </motion.div>
       )}
 
-      {/* Pricing cards */}
+      {/* Pricing cards — preview only (upgrades disabled until checkout ships) */}
       {loading ? (
         <div className="flex items-center justify-center py-20 text-muted-foreground">
           <Loader2 className="h-5 w-5 animate-spin" />
@@ -198,21 +265,14 @@ const Plans = () => {
                   <Button variant="secondary" disabled className="w-full">
                     Current plan
                   </Button>
+                ) : plan.plan === "free" ? (
+                  <Button variant="outline" disabled className="w-full">
+                    Free plan
+                  </Button>
                 ) : (
-                  <Button
-                    variant={isFeatured ? "default" : "outline"}
-                    className="w-full gap-1.5"
-                    disabled={switching !== null}
-                    onClick={() => handleUpgrade(plan.plan)}
-                  >
-                    {switching === plan.plan ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <>
-                        {plan.price_usd > (summary?.price_usd ?? 0) ? "Upgrade" : "Switch"} to {plan.label}
-                        <ArrowUpRight className="h-4 w-4" />
-                      </>
-                    )}
+                  <Button variant={isFeatured ? "default" : "outline"} disabled className="w-full gap-1.5">
+                    <Lock className="h-4 w-4" />
+                    Coming soon
                   </Button>
                 )}
               </motion.div>
@@ -222,8 +282,66 @@ const Plans = () => {
       )}
 
       <p className="mt-6 text-center text-xs text-muted-foreground">
-        No billing yet — pick whichever plan you'd like. Secure checkout is coming soon.
+        Upgrades aren't available yet — secure checkout is coming soon. Everyone's on Free for now.
       </p>
+
+      {/* Feedback capture dialog */}
+      <Dialog open={feedbackOpen} onOpenChange={setFeedbackOpen}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Gift className="h-5 w-5 text-primary" />
+              Feedback = perks
+            </DialogTitle>
+            <DialogDescription>
+              Tell us what you'd want from a paid plan. We'll use your email to send subscription
+              discounts, giveaways, and early-access freebies.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleFeedbackSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="feedback-email" className="text-sm font-medium">Email</label>
+              <Input
+                id="feedback-email"
+                type="email"
+                required
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="feedback-message" className="text-sm font-medium">
+                What would make you upgrade? <span className="text-muted-foreground">(optional)</span>
+              </label>
+              <Textarea
+                id="feedback-message"
+                rows={4}
+                placeholder="Features you want, pricing thoughts, anything…"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="submit" className="w-full gap-2" disabled={submitting || submitted}>
+                {submitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : submitted ? (
+                  <>
+                    <Check className="h-4 w-4" />
+                    You're on the list!
+                  </>
+                ) : (
+                  <>
+                    <Gift className="h-4 w-4" />
+                    Send feedback & claim perks
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 };

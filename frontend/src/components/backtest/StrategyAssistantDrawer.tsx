@@ -102,6 +102,23 @@ const StrategyAssistantDrawer = ({ context }: StrategyAssistantDrawerProps) => {
 
   const tickerLabel = context.markets.tickers.length > 0 ? context.markets.tickers.join(", ") : "No ticker";
 
+  // The OpenAI-backed assistant is temporarily disabled — surface a clear
+  // "coming soon" affordance instead of opening the (non-functional) drawer.
+  const COMING_SOON = true;
+  if (COMING_SOON) {
+    return (
+      <div className="relative inline-flex">
+        <Button type="button" variant="outline" className="gap-2 opacity-60" disabled>
+          <Bot className="h-4 w-4" />
+          Strategy Assistant
+        </Button>
+        <Badge className="pointer-events-none absolute -right-2 -top-2 bg-primary px-1.5 py-0 text-[10px] text-primary-foreground">
+          Coming soon
+        </Badge>
+      </div>
+    );
+  }
+
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>

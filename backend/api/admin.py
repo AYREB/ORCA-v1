@@ -1,6 +1,14 @@
 from django.contrib import admin
 
-from .models import Strategy, UserProfile, UsageCounter
+from .models import (
+    AIInteractionLog,
+    BacktestRun,
+    CustomIndicator,
+    FeedbackLead,
+    Strategy,
+    UsageCounter,
+    UserProfile,
+)
 
 
 @admin.register(Strategy)
@@ -8,6 +16,43 @@ class StrategyAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "user", "created_at", "updated_at")
     search_fields = ("name", "user__email")
     list_filter = ("created_at",)
+
+
+@admin.register(BacktestRun)
+class BacktestRunAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "strategy_name", "user", "source", "pct_change",
+        "win_rate", "trades_count", "created_at",
+    )
+    list_filter = ("source", "created_at")
+    search_fields = ("strategy_name", "user__email")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(CustomIndicator)
+class CustomIndicatorAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "user", "created_at", "updated_at")
+    search_fields = ("name", "user__email")
+    list_filter = ("created_at",)
+
+
+@admin.register(AIInteractionLog)
+class AIInteractionLogAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "kind", "user", "provider", "model", "success",
+        "latency_ms", "total_tokens", "created_at",
+    )
+    list_filter = ("kind", "provider", "success", "created_at")
+    search_fields = ("user__email", "model", "response_text")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(FeedbackLead)
+class FeedbackLeadAdmin(admin.ModelAdmin):
+    list_display = ("id", "email", "user", "source", "created_at")
+    list_filter = ("source", "created_at")
+    search_fields = ("email", "user__email", "message")
+    readonly_fields = ("created_at",)
 
 
 @admin.register(UserProfile)

@@ -380,15 +380,23 @@ export interface IndicatorAssistantChatResponse {
 
 export type PlanSlug = 'free' | 'plus' | 'pro';
 
+export type QuotaPeriod = 'all_time' | 'weekly' | 'monthly';
+
+/** A metered quota: its limit (null = unlimited) and the cadence it resets on. */
+export interface MetricQuota {
+  limit: number | null;
+  period: QuotaPeriod;
+}
+
 export interface PlanLimits {
-  monthly: Record<string, number | null>;
+  quotas: Record<string, MetricQuota>;
   caps: Record<string, number | null>;
   optimizer_methods: string[];
   optimize_intensity: number | null;
   timeframes: string[] | '*';
 }
 
-/** The signed-in user's plan + month-to-date usage (from /api/plan/). */
+/** The signed-in user's plan + period-to-date usage (from /api/plan/). */
 export interface PlanSummary {
   plan: PlanSlug;
   label: string;
@@ -403,7 +411,7 @@ export interface PublicPlan {
   plan: PlanSlug;
   label: string;
   price_usd: number;
-  monthly: Record<string, number | null>;
+  quotas: Record<string, MetricQuota>;
   caps: Record<string, number | null>;
   optimizer_methods: string[];
   optimize_intensity: number | null;
@@ -617,6 +625,14 @@ class DjangoAPI {
     return this.request<{ plan: PlanSlug; summary: PlanSummary }>('/plan/switch/', {
       method: 'POST',
       body: JSON.stringify({ plan, ...(email ? { email } : {}) }),
+    });
+  }
+
+  /** Capture a feedback-lead email (Plans page 'feedback for discounts' CTA). */
+  async submitFeedback(input: { email: string; message?: string; source?: string }): Promise<{ ok: boolean; message: string }> {
+    return this.request<{ ok: boolean; message: string }>('/feedback/', {
+      method: 'POST',
+      body: JSON.stringify(input),
     });
   }
 

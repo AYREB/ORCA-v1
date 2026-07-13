@@ -57,7 +57,8 @@ from .indicator_sandbox import (
     run_indicator_test,
     validate_parameters,
 )
-from .models import BacktestRun, CustomIndicator, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from .models import BacktestRun, CustomIndicator, FeedbackLead, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from .ai_logging import log_ai_interaction
 from . import entitlements
 from .entitlements import PlanLimitError
 from .plans import PLANS
@@ -751,7 +752,30 @@ def calculate_backtest_metrics(result: Dict[str, Any]):
     }
 
 
-def record_backtest_run(user, result: Dict[str, Any], strategy: Strategy | None = None, strategy_name: str = ""):
+def _backtest_config_snapshot(result: Dict[str, Any], initial_balance: float | None) -> Dict[str, Any]:
+    """Compact, JSON-safe description of what was run (for reproducibility)."""
+    data = result.get("data") if isinstance(result, dict) else None
+    tickers = list(data.keys()) if isinstance(data, dict) else []
+    cfg: Dict[str, Any] = {"tickers": tickers}
+    if initial_balance is not None:
+        cfg["initial_balance"] = initial_balance
+    for key in ("timeframe", "start", "end", "start_date", "end_date"):
+        if isinstance(result, dict) and result.get(key) is not None:
+            cfg[key] = result.get(key)
+    return cfg
+
+
+def record_backtest_run(
+    user,
+    result: Dict[str, Any],
+    strategy: Strategy | None = None,
+    strategy_name: str = "",
+    *,
+    dsl_json: dict | None = None,
+    dsl_text: str = "",
+    initial_balance: float | None = None,
+    source: str = "",
+):
     if not user:
         return None
 
@@ -771,6 +795,11 @@ def record_backtest_run(user, result: Dict[str, Any], strategy: Strategy | None 
         losing_trades=metrics["losing_trades"],
         win_rate=metrics["win_rate"],
         equity_curve=metrics["equity_curve"],
+        dsl_json=dsl_json if dsl_json else (strategy.dsl_json if strategy else None),
+        dsl_text=dsl_text or (strategy.dsl_text if strategy else ""),
+        config=_backtest_config_snapshot(result or {}, initial_balance),
+        result=result if isinstance(result, dict) else None,
+        source=source,
     )
 
 
@@ -799,15 +828,34 @@ def strategy_assistant_chat(request):
     strategy_context = normalize_strategy_context(payload.get("strategy_context"))
 
     entitlements.consume_quota(user, "ai")
+    started = time.monotonic()
     try:
         response = ask_strategy_assistant(messages, strategy_context)
     except AssistantError as exc:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="strategy_assistant", user=user, messages=messages,
+            request_meta={"strategy_context": strategy_context}, success=False,
+            error=exc.message, latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise APIError(exc.message, status_code=exc.status_code)
-    except Exception:
+    except Exception as exc:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="strategy_assistant", user=user, messages=messages,
+            request_meta={"strategy_context": strategy_context}, success=False,
+            error=str(exc), latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise
 
+    log_ai_interaction(
+        kind="strategy_assistant", user=user, provider=response.get("provider", ""),
+        model=response.get("model", ""), messages=messages,
+        request_meta={"strategy_context": strategy_context},
+        response_text=response.get("answer", ""), response_meta={"mode": response.get("mode")},
+        success=True, latency_ms=(time.monotonic() - started) * 1000,
+        usage=response.get("usage"),
+    )
     return no_store(JsonResponse(response))
 
 
@@ -1067,6 +1115,30 @@ def switch_plan(request):
         "plan": profile.plan,
         "summary": entitlements.plan_summary(target),
     }))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("general")
+def submit_feedback(request):
+    """Capture a feedback-lead email (from the Plans page 'feedback for discounts /
+    giveaways' CTA) plus an optional message. Stored server-side so the list can
+    be exported and followed up on later."""
+    user = get_authenticated_user(request)
+    body = parse_body(request)
+    email = str(body.get("email") or user.email or "").strip()
+    message = str(body.get("message") or "").strip()[:5000]
+    source = str(body.get("source") or "plans_page").strip()[:64]
+
+    try:
+        validate_email(email)
+    except ValidationError:
+        raise APIError("Enter a valid email address.")
+
+    FeedbackLead.objects.create(user=user, email=email, message=message, source=source)
+    return no_store(JsonResponse({"ok": True, "message": "Thanks — we'll be in touch."}))
 
 
 @csrf_exempt
@@ -1538,15 +1610,34 @@ def indicator_assistant_chat(request):
     mode = "agent" if str(payload.get("mode", "ask")).strip().lower() == "agent" else "ask"
 
     entitlements.consume_quota(user, "ai")
+    started = time.monotonic()
     try:
         response = ask_indicator_assistant(messages, indicator_context, mode=mode)
     except AssistantError as exc:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="indicator_assistant", user=user, messages=messages,
+            request_meta={"indicator_context": indicator_context, "mode": mode},
+            success=False, error=exc.message, latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise APIError(exc.message, status_code=exc.status_code)
-    except Exception:
+    except Exception as exc:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="indicator_assistant", user=user, messages=messages,
+            request_meta={"indicator_context": indicator_context, "mode": mode},
+            success=False, error=str(exc), latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise
 
+    log_ai_interaction(
+        kind="indicator_assistant", user=user, provider=response.get("provider", ""),
+        model=response.get("model", ""), messages=messages,
+        request_meta={"indicator_context": indicator_context, "mode": mode},
+        response_text=response.get("answer", ""), response_meta={"mode": response.get("mode")},
+        success=True, latency_ms=(time.monotonic() - started) * 1000,
+        usage=response.get("usage"),
+    )
     return no_store(JsonResponse(response))
 
 
@@ -1711,7 +1802,10 @@ def backtestDSLText(request):
         return error_response_
 
     result["ticker_names"] = resolve_ticker_names(list(result.get("data", {}).keys()))
-    record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
+    record_backtest_run(
+        user, result, strategy=strategy, strategy_name=strategy_label,
+        dsl_json=dsl_json, dsl_text=dsl, initial_balance=initial_balance, source="text",
+    )
     if strategy:
         strategy.last_result = result
         strategy.dsl_text = dsl or strategy.dsl_text
@@ -1755,7 +1849,10 @@ def backtestDSLJSON(request):
         return error_response_
 
     result["ticker_names"] = resolve_ticker_names(list(result.get("data", {}).keys()))
-    record_backtest_run(user, result, strategy=strategy, strategy_name=strategy_label)
+    record_backtest_run(
+        user, result, strategy=strategy, strategy_name=strategy_label,
+        dsl_json=dsl, initial_balance=initial_balance, source="json",
+    )
 
     if strategy:
         strategy.last_result = result
@@ -2135,7 +2232,12 @@ def strategy_to_dsl(request):
                     error_payload = json.loads(error_response_.content.decode("utf-8"))
                     backtest_result = {"error": error_payload.get("error"), "code": error_payload.get("code")}
                 else:
-                    record_backtest_run(user, backtest_result, strategy_name="Generated Strategy")
+                    record_backtest_run(
+                        user, backtest_result, strategy_name="Generated Strategy",
+                        dsl_json=result,
+                        initial_balance=parse_initial_balance(body.get("initial_balance", 10000)),
+                        source="assistant",
+                    )
             except PlanLimitError as e:
                 # Parse succeeded but the monthly backtest quota is spent —
                 # return the strategy anyway, with the limit noted.

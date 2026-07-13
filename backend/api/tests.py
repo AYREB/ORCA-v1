@@ -124,18 +124,17 @@ class EntitlementQuotaTests(TestCase):
         from api.entitlements import PlanLimitError
         from api.models import UsageCounter
 
-        # Free plan allows 3 AI generations/month. Reserve exactly the limit.
-        for _ in range(3):
+        # Free plan allows 5 AI generations (all-time). Reserve exactly the limit.
+        for _ in range(5):
             entitlements.consume_quota(self.user, "ai")
 
         with self.assertRaises(PlanLimitError):
             entitlements.consume_quota(self.user, "ai")
 
-        row = UsageCounter.objects.get(
-            user=self.user, metric="ai", period=entitlements.current_period()
-        )
+        ai_period = entitlements.period_key(entitlements.metric_period_of(self.user, "ai"))
+        row = UsageCounter.objects.get(user=self.user, metric="ai", period=ai_period)
         # A rejected reservation must NOT have incremented the counter past the cap.
-        self.assertEqual(row.count, 3)
+        self.assertEqual(row.count, 5)
 
     def test_refund_restores_a_reserved_use(self):
         from api import entitlements
@@ -159,8 +158,9 @@ class EntitlementQuotaTests(TestCase):
         profile.plan = "pro"
         profile.save(update_fields=["plan", "updated_at"])
 
+        # Backtests are genuinely unlimited on Pro.
         for _ in range(50):
-            entitlements.consume_quota(self.user, "ai")  # must not raise
+            entitlements.consume_quota(self.user, "backtest")  # must not raise
 
 
 class PlanSwitchAuthorizationTests(TestCase):

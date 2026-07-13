@@ -1172,10 +1172,16 @@ def _ask_openai(messages: list[dict[str, str]], system_prompt: str, context_text
     if not answer:
         raise AssistantProviderError("Assistant returned an empty response.", status_code=502)
 
+    usage = response_payload.get("usage") or {}
     return {
         "answer": answer,
         "model": response_payload.get("model", model),
         "provider": "openai",
+        "usage": {
+            "prompt_tokens": usage.get("input_tokens"),
+            "completion_tokens": usage.get("output_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        },
     }
 
 
@@ -1245,6 +1251,11 @@ def _ask_ollama(messages: list[dict[str, str]], system_prompt: str, context_text
         "answer": answer.strip(),
         "model": response_payload.get("model", model),
         "provider": "ollama",
+        "usage": {
+            "prompt_tokens": response_payload.get("prompt_eval_count"),
+            "completion_tokens": response_payload.get("eval_count"),
+            "total_tokens": None,
+        },
     }
 
 
