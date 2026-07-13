@@ -50,4 +50,9 @@ urlpatterns = [
     path("strategy-to-dsl/", views.strategy_to_dsl),
     path('strategy/chat/', views.strategy_chat),
     path('strategy/chat/outcome/', views.strategy_chat_outcome),
+    # Admin analytics (superuser-only)
+    path("admin/overview/", views.admin_overview),
+    path("admin/users/", views.admin_users),
+    path("admin/users/<int:user_id>/", views.admin_user_detail),
+    path("admin/ai-interactions/", views.admin_ai_interactions),
 ]

@@ -426,6 +426,82 @@ export interface AuthUser {
   plan?: PlanSummary;
   /** False for Google-SSO accounts that never set a password. */
   has_password?: boolean;
+  /** Superuser gate for the admin analytics dashboard. */
+  is_staff?: boolean;
+  is_superuser?: boolean;
+}
+
+// ---- Admin analytics (superuser-only) ------------------------------------
+export interface AdminOverview {
+  users: { total: number; by_plan: Record<string, number>; superusers: number };
+  ai: {
+    total: number; success: number; failed: number; success_rate: number | null;
+    by_kind: Record<string, number>; avg_latency_ms: number | null; total_tokens: number;
+  };
+  backtests: { total: number };
+  custom_indicators: { total: number };
+  strategies: { total: number };
+  feedback_leads: { total: number };
+}
+
+export interface AdminUserSummary {
+  id: number;
+  email: string;
+  name: string;
+  date_joined: string | null;
+  last_login: string | null;
+  is_superuser: boolean;
+  has_password: boolean;
+  plan: PlanSlug;
+  plan_label: string;
+  quotas: Record<string, MetricQuota>;
+  usage: Record<string, number>;
+  counts: Record<string, number>;
+}
+
+export interface AdminAiInteraction {
+  id: number;
+  user_id: number | null;
+  user_email: string | null;
+  kind: string;
+  provider: string;
+  model: string;
+  success: boolean;
+  error: string;
+  latency_ms: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  created_at: string;
+  // list preview
+  prompt_preview?: string;
+  response_preview?: string;
+  // full (in user detail)
+  system_prompt?: string;
+  context_text?: string;
+  messages?: { role: string; content: string }[];
+  request_meta?: Record<string, unknown>;
+  response_text?: string;
+  response_meta?: Record<string, unknown>;
+}
+
+export interface AdminBacktestRow {
+  id: number;
+  strategy_id: number | null;
+  strategy_name: string;
+  pct_change: number;
+  win_rate: number;
+  trades: number;
+  final_balance: number;
+  created_at: string;
+}
+
+export interface AdminUserDetail {
+  user: AdminUserSummary;
+  ai_interactions: AdminAiInteraction[];
+  backtests: AdminBacktestRow[];
+  custom_indicators: CustomIndicator[];
+  feedback: { id: number; email: string; message: string; source: string; created_at: string }[];
 }
 
 export interface AuthResponse {
@@ -638,6 +714,31 @@ class DjangoAPI {
 
   async updateProfile(name: string): Promise<AuthUser> {
     return this.request<AuthUser>('/me/', { method: 'PATCH', body: JSON.stringify({ name }) });
+  }
+
+  // ---- Admin analytics (superuser-only; backend gates on is_superuser) ----
+  async getAdminOverview(): Promise<AdminOverview> {
+    return this.request<AdminOverview>('/admin/overview/');
+  }
+
+  async getAdminUsers(q = ''): Promise<{ total: number; users: AdminUserSummary[] }> {
+    const qs = q ? `?q=${encodeURIComponent(q)}` : '';
+    return this.request<{ total: number; users: AdminUserSummary[] }>(`/admin/users/${qs}`);
+  }
+
+  async getAdminUserDetail(userId: number): Promise<AdminUserDetail> {
+    return this.request<AdminUserDetail>(`/admin/users/${userId}/`);
+  }
+
+  async getAdminAiInteractions(params: { userId?: number; kind?: string; success?: boolean; limit?: number; offset?: number } = {}): Promise<{ total: number; interactions: AdminAiInteraction[] }> {
+    const sp = new URLSearchParams();
+    if (params.userId != null) sp.set('user_id', String(params.userId));
+    if (params.kind) sp.set('kind', params.kind);
+    if (params.success != null) sp.set('success', String(params.success));
+    if (params.limit != null) sp.set('limit', String(params.limit));
+    if (params.offset != null) sp.set('offset', String(params.offset));
+    const qs = sp.toString();
+    return this.request<{ total: number; interactions: AdminAiInteraction[] }>(`/admin/ai-interactions/${qs ? `?${qs}` : ''}`);
   }
 
   /** Password-holders confirm with `password`; Google-SSO accounts (no
