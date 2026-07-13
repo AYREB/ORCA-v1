@@ -198,15 +198,12 @@ def build_system_prompt(registry_context: dict) -> str:
     return build_full_system_prompt(registry_context)
 
 
-def fix_percentage_fields(block: dict) -> dict:
-    args = block.get("ARGUMENTS", {})
-    for field in ["stopLossPercent", "takeProfitPercent",
-                  "initialOpenPositionInvestAmount", "recurringInvestAmount"]:
-        if field in args:
-            val = args[field]
-            if isinstance(val, (int, float)) and 0 < val < 1:
-                args[field] = round(val * 100, 4)
-    return block
+# REMOVED: fix_percentage_fields. It assumed any TP/SL below 1.0 was a
+# decimal-fraction mistake and multiplied by 100 — but sub-1% stops are
+# legitimate for FX ("sl 0.7%" was silently becoming a 70% stop), and it
+# also corrupted invest amounts, whose CORRECT format is a fraction
+# (0.2 = 20% of cash). The model is trained on the right conventions —
+# trust its output.
 
 
 def validate_and_repair(raw: str, registry_context: dict = None) -> tuple:
@@ -308,11 +305,6 @@ def validate_and_repair(raw: str, registry_context: dict = None) -> tuple:
             "takeProfitPercent": 30,
         }
         errors.append("Missing ARGUMENTS - filled with defaults")
-
-    open_block = fix_percentage_fields(open_block)
-
-    if "CLOSE" in body:
-        body["CLOSE"] = fix_percentage_fields(body["CLOSE"])
 
     validate_conditions(open_block["CONDITIONS"])
 
