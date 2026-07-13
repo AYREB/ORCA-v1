@@ -57,7 +57,7 @@ from .indicator_sandbox import (
     run_indicator_test,
     validate_parameters,
 )
-from .models import AIInteractionLog, BacktestRun, CustomIndicator, FeedbackLead, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from .models import AIInteractionLog, BacktestRun, CustomIndicator, FeedbackLead, OptimizationRun, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
 from .ai_logging import log_ai_interaction
 from . import entitlements
 from .entitlements import PlanLimitError
@@ -193,6 +193,7 @@ def run_async_job(
     total_runs: int,
     work_fn: Callable,
     on_error: Callable[[], None] | None = None,
+    on_complete: Callable[[Any], None] | None = None,
 ) -> str:
     """Create a queued job and run ``work_fn(progress_hook)`` in a daemon thread.
 
@@ -229,6 +230,11 @@ def run_async_job(
             job = store.get(job_id)
             final_total = job.get("total_runs", total_runs) if job else total_runs
             store.update(job_id, result=result, status="completed", completed_runs=final_total)
+            if on_complete is not None:
+                try:
+                    on_complete(result)
+                except Exception:
+                    logger.exception("Async job on_complete hook failed")
         except Exception as exc:
             # ValueError from the optimizer is a user-actionable, safe message
             # ("No data for …", "All optimizer runs failed…", "Too many
@@ -805,6 +811,53 @@ def record_backtest_run(
         result=result if isinstance(result, dict) else None,
         source=source,
     )
+
+
+def record_optimization_run(
+    user,
+    *,
+    method: str,
+    algorithm: str = "",
+    dsl: dict | None = None,
+    parameter_choice: dict | None = None,
+    result: dict | None = None,
+    initial_balance: float | None = None,
+    strategy_name: str = "",
+):
+    """Best-effort persistence of an optimizer run (never raises).
+
+    Captures what was optimized (base strategy + parameter space), the winning
+    strategy/params/metrics, and a capped leaderboard — for the admin drill-down.
+    """
+    if not user or not isinstance(result, dict):
+        return None
+    try:
+        best = result.get("best_result") or {}
+        all_bt = result.get("all_backtests") or []
+        top = [
+            {"params": row.get("params"), "results": row.get("results")}
+            for row in all_bt[:25] if isinstance(row, dict)
+        ]
+        cfg: Dict[str, Any] = {}
+        if initial_balance is not None:
+            cfg["initial_balance"] = initial_balance
+        return OptimizationRun.objects.create(
+            user=user,
+            method=method,
+            algorithm=algorithm or "",
+            strategy_name=strategy_name or "",
+            input_dsl=dsl if isinstance(dsl, dict) else None,
+            parameter_space=parameter_choice if isinstance(parameter_choice, dict) else {},
+            config=cfg,
+            best_params=best.get("params"),
+            best_dsl=best.get("dsl"),
+            best_result=best.get("results"),
+            top_results=top,
+            total_runs=int(result.get("total_runs") or len(all_bt) or 0),
+        )
+    except Exception:
+        logger.warning("Failed to persist OptimizationRun", exc_info=True)
+        return None
 
 
 def serialize_backtest_run(run: BacktestRun):
@@ -1915,6 +1968,11 @@ def dslParameterOptimiser(request):
                 param_grid_override=param_grid,
             ),
             on_error=lambda: entitlements.refund_quota(user, "optimize"),
+            on_complete=lambda result: record_optimization_run(
+                user, method="grid", dsl=dsl, parameter_choice=parameter_choice,
+                result=result, initial_balance=initial_balance,
+                strategy_name=str(body.get("strategy_name") or ""),
+            ),
         )
         return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
@@ -1927,6 +1985,11 @@ def dslParameterOptimiser(request):
     except Exception:
         entitlements.refund_quota(user, "optimize")
         raise
+    record_optimization_run(
+        user, method="grid", dsl=dsl, parameter_choice=parameter_choice,
+        result=result, initial_balance=initial_balance,
+        strategy_name=str(body.get("strategy_name") or ""),
+    )
     return JsonResponse(result, safe=False)
 
 
@@ -2014,6 +2077,11 @@ def dslGeneticOptimiser(request):
                 progress_hook=hook,
             ),
             on_error=lambda: entitlements.refund_quota(user, "optimize"),
+            on_complete=lambda result: record_optimization_run(
+                user, method="genetic", dsl=dsl, parameter_choice=parameter_choice,
+                result=result, initial_balance=initial_balance,
+                strategy_name=str(body.get("strategy_name") or ""),
+            ),
         )
         return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
@@ -2031,6 +2099,11 @@ def dslGeneticOptimiser(request):
     except Exception:
         entitlements.refund_quota(user, "optimize")
         raise
+    record_optimization_run(
+        user, method="genetic", dsl=dsl, parameter_choice=parameter_choice,
+        result=result, initial_balance=initial_balance,
+        strategy_name=str(body.get("strategy_name") or ""),
+    )
     return JsonResponse(result, safe=False)
 
 def get_user_constraints(user):
@@ -2125,6 +2198,12 @@ def dslOptimiser(request):
                 progress_hook=hook,
             ),
             on_error=lambda: entitlements.refund_quota(user, "optimize"),
+            on_complete=lambda result: record_optimization_run(
+                user, method="meta", algorithm=method, dsl=dsl,
+                parameter_choice=parameter_choice, result=result,
+                initial_balance=initial_balance,
+                strategy_name=str(body.get("strategy_name") or ""),
+            ),
         )
         return JsonResponse({"job_id": job_id, "total_runs": total_runs})
 
@@ -2142,6 +2221,12 @@ def dslOptimiser(request):
     except Exception:
         entitlements.refund_quota(user, "optimize")
         raise
+    record_optimization_run(
+        user, method="meta", algorithm=method, dsl=dsl,
+        parameter_choice=parameter_choice, result=result,
+        initial_balance=initial_balance,
+        strategy_name=str(body.get("strategy_name") or ""),
+    )
     return JsonResponse(result, safe=False)
 
 
@@ -2192,25 +2277,51 @@ def strategy_to_dsl(request):
     entitlements.consume_quota(user, "ai")
 
     # 1. Call LLM parser
+    started = time.monotonic()
     try:
         result = parse_strategy(message)
     except LLMUnavailableError as e:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="nl_parse", user=user, provider="modal",
+            messages=[{"role": "user", "content": message}], success=False,
+            error=str(e), latency_ms=(time.monotonic() - started) * 1000,
+        )
         logger.warning(f"LLM unavailable for strategy_to_dsl: {e}")
         return JsonResponse({"success": False, "error": LLM_UNAVAILABLE_MESSAGE}, status=503)
-    except Exception:
+    except Exception as e:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="nl_parse", user=user, provider="modal",
+            messages=[{"role": "user", "content": message}], success=False,
+            error=str(e), latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise
 
     # 2. Handle failure from model
     if isinstance(result, dict) and "error" in result:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="nl_parse", user=user, provider="modal",
+            messages=[{"role": "user", "content": message}], success=False,
+            error=str(result.get("error")),
+            response_text=str(result.get("raw_output", "")),
+            latency_ms=(time.monotonic() - started) * 1000,
+        )
         return JsonResponse({
             "success": False,
             "error": result["error"],
             "issues": result.get("issues", []),
             "raw_model_output": result.get("raw_output", "")
         }, status=400)
+
+    log_ai_interaction(
+        kind="nl_parse", user=user, provider="modal",
+        messages=[{"role": "user", "content": message}],
+        response_text=json.dumps(result) if isinstance(result, (dict, list)) else str(result),
+        response_meta={"kind": "strategy_dsl"}, success=True,
+        latency_ms=(time.monotonic() - started) * 1000,
+    )
 
     # 3. Optional: immediately run backtest if requested. This goes through the
     # same guards + metered quota as the dedicated backtest endpoints (it used
@@ -2541,6 +2652,7 @@ def strategy_chat(request):
     entitlements.consume_quota(user, "ai")
 
     # ---- Try to parse with full context ----
+    started = time.monotonic()
     try:
         strategy, errors, raw_output = parse_strategy_with_context(
             history,
@@ -2549,11 +2661,26 @@ def strategy_chat(request):
         )
     except LLMUnavailableError as e:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="nl_chat", user=user, provider="modal", messages=history,
+            success=False, error=str(e), latency_ms=(time.monotonic() - started) * 1000,
+        )
         logger.warning(f"LLM unavailable for strategy_chat: {e}")
         return JsonResponse({"success": False, "error": LLM_UNAVAILABLE_MESSAGE}, status=503)
-    except Exception:
+    except Exception as e:
         entitlements.refund_quota(user, "ai")
+        log_ai_interaction(
+            kind="nl_chat", user=user, provider="modal", messages=history,
+            success=False, error=str(e), latency_ms=(time.monotonic() - started) * 1000,
+        )
         raise
+
+    log_ai_interaction(
+        kind="nl_chat", user=user, provider="modal", messages=history,
+        response_text=json.dumps(strategy) if strategy else str(raw_output or ""),
+        response_meta={"errors": errors, "complete": strategy is not None},
+        success=True, latency_ms=(time.monotonic() - started) * 1000,
+    )
 
     # ---- Check for invalid timeframe in errors ----
     timeframe_errors = [e for e in errors if "Invalid timeframe" in e]
@@ -2999,6 +3126,11 @@ def serialize_backtest_run_full(run: BacktestRun):
             "cash": run.cash,
             "invested": run.invested,
             "equity_curve": run.equity_curve or [],
+            # Full input capture — what the backtest actually was.
+            "source": run.source,
+            "dsl_json": run.dsl_json,
+            "dsl_text": run.dsl_text,
+            "config": run.config or {},
         }
     )
     return payload
@@ -3100,11 +3232,35 @@ def _admin_counts(user) -> dict:
     return {
         "backtests": BacktestRun.objects.filter(user=user).count(),
         "ai_interactions": AIInteractionLog.objects.filter(user=user).count(),
+        "optimizations": OptimizationRun.objects.filter(user=user).count(),
         "strategies": Strategy.objects.filter(user=user).count(),
         "custom_indicators": CustomIndicator.objects.filter(user=user).count(),
-        "paper_saved": StrategyQueryLog.objects.filter(user=user).count(),
         "feedback": FeedbackLead.objects.filter(user=user).count(),
     }
+
+
+def _serialize_optimization(opt: OptimizationRun, *, full: bool = False) -> dict:
+    base = {
+        "id": opt.id,
+        "user_id": opt.user_id,
+        "method": opt.method,
+        "algorithm": opt.algorithm,
+        "strategy_name": opt.strategy_name,
+        "total_runs": opt.total_runs,
+        "best_result": opt.best_result,
+        "best_params": opt.best_params,
+        "created_at": opt.created_at.isoformat(),
+    }
+    if full:
+        base.update({
+            "input_dsl": opt.input_dsl,
+            "parameter_space": opt.parameter_space,
+            "config": opt.config,
+            "best_dsl": opt.best_dsl,
+            "top_results": opt.top_results,
+            "error": opt.error,
+        })
+    return base
 
 
 def _admin_user_summary(user) -> dict:
@@ -3183,11 +3339,21 @@ def admin_overview(request):
     latency = ai_qs.filter(latency_ms__isnull=False).aggregate(a=Avg("latency_ms"))["a"]
     tokens = ai_qs.filter(total_tokens__isnull=False).aggregate(a=Sum("total_tokens"))["a"]
 
+    bt_qs = BacktestRun.objects.all()
+    bt_total = bt_qs.count()
+    bt_agg = bt_qs.aggregate(avg=Avg("pct_change"), avg_win=Avg("win_rate"))
+    bt_profitable = bt_qs.filter(pct_change__gt=0).count()
+    bt_by_source = {row["source"] or "unknown": row["n"] for row in bt_qs.values("source").annotate(n=Count("id"))}
+
+    opt_qs = OptimizationRun.objects.all()
+    opt_by_method = {row["method"]: row["n"] for row in opt_qs.values("method").annotate(n=Count("id"))}
+
     return no_store(JsonResponse({
         "users": {
             "total": User.objects.count(),
             "by_plan": users_by_plan,
             "superusers": User.objects.filter(is_superuser=True).count(),
+            "active_7d": User.objects.filter(last_login__gte=timezone.now() - timedelta(days=7)).count(),
         },
         "ai": {
             "total": ai_total,
@@ -3198,7 +3364,15 @@ def admin_overview(request):
             "avg_latency_ms": round(latency, 1) if latency is not None else None,
             "total_tokens": int(tokens) if tokens else 0,
         },
-        "backtests": {"total": BacktestRun.objects.count()},
+        "backtests": {
+            "total": bt_total,
+            "profitable": bt_profitable,
+            "profitable_rate": round(bt_profitable / bt_total, 4) if bt_total else None,
+            "avg_return_pct": round(bt_agg["avg"], 2) if bt_agg["avg"] is not None else None,
+            "avg_win_rate": round(bt_agg["avg_win"], 4) if bt_agg["avg_win"] is not None else None,
+            "by_source": bt_by_source,
+        },
+        "optimizations": {"total": opt_qs.count(), "by_method": opt_by_method},
         "custom_indicators": {"total": CustomIndicator.objects.count()},
         "strategies": {"total": Strategy.objects.count()},
         "feedback_leads": {"total": FeedbackLead.objects.count()},
@@ -3247,13 +3421,15 @@ def admin_user_detail(request, user_id: int):
 
     ai_logs = AIInteractionLog.objects.filter(user=target).order_by("-created_at")[:200]
     backtests = BacktestRun.objects.filter(user=target).order_by("-created_at")[:100]
+    optimizations = OptimizationRun.objects.filter(user=target).order_by("-created_at")[:100]
     indicators = CustomIndicator.objects.filter(user=target).order_by("-updated_at")
     feedback = FeedbackLead.objects.filter(user=target).order_by("-created_at")
 
     return no_store(JsonResponse({
         "user": _admin_user_summary(target),
         "ai_interactions": [_serialize_ai_interaction(x, full=True) for x in ai_logs],
-        "backtests": [serialize_backtest_run(x) for x in backtests],
+        "backtests": [serialize_backtest_run_full(x) for x in backtests],
+        "optimizations": [_serialize_optimization(x, full=True) for x in optimizations],
         "custom_indicators": [serialize_custom_indicator(x) for x in indicators],
         "feedback": [
             {"id": f.id, "email": f.email, "message": f.message, "source": f.source,
@@ -3296,3 +3472,97 @@ def admin_ai_interactions(request):
     total = qs.count()
     rows = [_serialize_ai_interaction(x, full=False) for x in qs[offset:offset + limit]]
     return no_store(JsonResponse({"total": total, "interactions": rows}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_backtest_detail(request, run_id: int):
+    """Everything about one backtest — the strategy DSL, run config, full metrics,
+    equity curve, and the complete engine result incl. trades (superuser-only)."""
+    user = get_authenticated_user(request)
+    require_admin(user)
+    run = BacktestRun.objects.filter(id=run_id).select_related("user").first()
+    if run is None:
+        raise APIError("No such backtest.", status_code=404)
+    payload = serialize_backtest_run_full(run)
+    payload["user_email"] = run.user.email if run.user else None
+    payload["result"] = run.result   # full engine payload (trades, per-ticker data)
+    return no_store(JsonResponse(payload))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_analytics(request):
+    """Time-series + distribution data for the admin charts (superuser-only).
+
+    Buckets the last ``days`` (default 30) by calendar day for signups, AI calls,
+    backtests, and optimizations, plus feature-usage and plan distributions.
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    from django.db.models import Count
+    from django.db.models.functions import TruncDate
+    from .models import UserProfile
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    def _daily(qs, field="created_at"):
+        rows = (
+            qs.filter(**{f"{field}__gte": since})
+            .annotate(d=TruncDate(field))
+            .values("d")
+            .annotate(n=Count("id"))
+            .order_by("d")
+        )
+        return {str(r["d"]): r["n"] for r in rows}
+
+    # Dense day axis so the frontend can plot a continuous line.
+    start_date = since.date()
+    axis = [str(start_date + timedelta(days=i)) for i in range(days + 1)]
+
+    signups = _daily(User.objects.all(), "date_joined")
+    ai = _daily(AIInteractionLog.objects.all())
+    backtests = _daily(BacktestRun.objects.all())
+    optimizations = _daily(OptimizationRun.objects.all())
+
+    def series(bucket):
+        return [{"date": d, "count": bucket.get(d, 0)} for d in axis]
+
+    # AI daily split by kind (for a stacked feature-usage chart).
+    ai_kind_rows = (
+        AIInteractionLog.objects.filter(created_at__gte=since)
+        .annotate(d=TruncDate("created_at"))
+        .values("d", "kind")
+        .annotate(n=Count("id"))
+        .order_by("d")
+    )
+    ai_by_kind_daily: dict[str, dict[str, int]] = {d: {} for d in axis}
+    for r in ai_kind_rows:
+        ai_by_kind_daily.setdefault(str(r["d"]), {})[r["kind"]] = r["n"]
+    ai_kind_series = [{"date": d, **ai_by_kind_daily.get(d, {})} for d in axis]
+
+    plan_rows = UserProfile.objects.values("plan").annotate(n=Count("id"))
+    plan_distribution = {r["plan"]: r["n"] for r in plan_rows}
+
+    return no_store(JsonResponse({
+        "days": days,
+        "timeseries": {
+            "signups": series(signups),
+            "ai": series(ai),
+            "backtests": series(backtests),
+            "optimizations": series(optimizations),
+        },
+        "ai_by_kind_daily": ai_kind_series,
+        "plan_distribution": plan_distribution,
+    }))

@@ -5,6 +5,7 @@ from .models import (
     BacktestRun,
     CustomIndicator,
     FeedbackLead,
+    OptimizationRun,
     Strategy,
     UsageCounter,
     UserProfile,
@@ -44,6 +45,14 @@ class AIInteractionLogAdmin(admin.ModelAdmin):
     )
     list_filter = ("kind", "provider", "success", "created_at")
     search_fields = ("user__email", "model", "response_text")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(OptimizationRun)
+class OptimizationRunAdmin(admin.ModelAdmin):
+    list_display = ("id", "method", "algorithm", "user", "total_runs", "created_at")
+    list_filter = ("method", "algorithm", "created_at")
+    search_fields = ("user__email", "strategy_name")
     readonly_fields = ("created_at",)
 
 

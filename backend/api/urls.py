@@ -52,7 +52,9 @@ urlpatterns = [
     path('strategy/chat/outcome/', views.strategy_chat_outcome),
     # Admin analytics (superuser-only)
     path("admin/overview/", views.admin_overview),
+    path("admin/analytics/", views.admin_analytics),
     path("admin/users/", views.admin_users),
     path("admin/users/<int:user_id>/", views.admin_user_detail),
     path("admin/ai-interactions/", views.admin_ai_interactions),
+    path("admin/backtests/<int:run_id>/", views.admin_backtest_detail),
 ]
