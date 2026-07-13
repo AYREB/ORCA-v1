@@ -64,7 +64,8 @@ PLANS = {
             "optimize": _q(5, WEEKLY),
         },
         "caps": {"strategies": 3, "paper_accounts": 1, "custom_indicators": 1},
-        "optimizer_methods": [GRID],
+        # All optimizer methods available on every plan (no method gating).
+        "optimizer_methods": [GRID, GENETIC, META],
         "optimize_intensity": 100,        # max backtests inside a single optimization
         "timeframes": ["1D", "1h"],       # allowed execution timeframes ([] / "*" = all)
     },
@@ -77,7 +78,7 @@ PLANS = {
             "optimize": _q(10, WEEKLY),
         },
         "caps": {"strategies": 30, "paper_accounts": 5, "custom_indicators": 15},
-        "optimizer_methods": [GRID, GENETIC],
+        "optimizer_methods": [GRID, GENETIC, META],
         "optimize_intensity": 300,
         "timeframes": "*",
     },
