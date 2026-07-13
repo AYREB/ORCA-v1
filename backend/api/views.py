@@ -57,7 +57,7 @@ from .indicator_sandbox import (
     run_indicator_test,
     validate_parameters,
 )
-from .models import BacktestRun, CustomIndicator, FeedbackLead, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from .models import AIInteractionLog, BacktestRun, CustomIndicator, FeedbackLead, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
 from .ai_logging import log_ai_interaction
 from . import entitlements
 from .entitlements import PlanLimitError
@@ -294,6 +294,10 @@ def user_payload(user) -> dict[str, Any]:
         # frontend uses this to swap password-confirmation flows (delete
         # account, change password) for SSO-appropriate ones.
         "has_password": user.has_usable_password(),
+        # Gates the admin analytics dashboard (superuser-only). Staff implies
+        # Django-admin access; is_superuser is the hard gate the frontend uses.
+        "is_staff": bool(user.is_staff),
+        "is_superuser": bool(user.is_superuser),
     }
 
 
@@ -3078,3 +3082,217 @@ def paper_accounts(request):
 
     PaperAccountState.objects.update_or_create(user=user, defaults={"accounts": accounts})
     return no_store(JsonResponse({"accounts": accounts}))
+
+
+# ==========================================================================
+# Admin analytics — superuser-ONLY. Highly sensitive: exposes every user's
+# activity, full AI prompts/responses, and quota usage. Gated by
+# ``require_admin`` (is_superuser) on every endpoint; there is no path to this
+# data for a non-superuser account.
+# ==========================================================================
+def require_admin(user) -> None:
+    """Raise 403 unless the caller is a superuser."""
+    if user is None or not getattr(user, "is_superuser", False):
+        raise APIError("Admin access required.", status_code=403)
+
+
+def _admin_counts(user) -> dict:
+    return {
+        "backtests": BacktestRun.objects.filter(user=user).count(),
+        "ai_interactions": AIInteractionLog.objects.filter(user=user).count(),
+        "strategies": Strategy.objects.filter(user=user).count(),
+        "custom_indicators": CustomIndicator.objects.filter(user=user).count(),
+        "paper_saved": StrategyQueryLog.objects.filter(user=user).count(),
+        "feedback": FeedbackLead.objects.filter(user=user).count(),
+    }
+
+
+def _admin_user_summary(user) -> dict:
+    """Plan + quota usage + activity counts for one user (list row)."""
+    summary = entitlements.plan_summary(user)
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.first_name or user.username,
+        "date_joined": user.date_joined.isoformat() if user.date_joined else None,
+        "last_login": user.last_login.isoformat() if user.last_login else None,
+        "is_superuser": bool(user.is_superuser),
+        "has_password": user.has_usable_password(),
+        "plan": summary["plan"],
+        "plan_label": summary["label"],
+        "quotas": summary["limits"]["quotas"],
+        "usage": summary["usage"],
+        "counts": _admin_counts(user),
+    }
+
+
+def _serialize_ai_interaction(log: AIInteractionLog, *, full: bool = False) -> dict:
+    base = {
+        "id": log.id,
+        "user_id": log.user_id,
+        "user_email": log.user.email if log.user else None,
+        "kind": log.kind,
+        "provider": log.provider,
+        "model": log.model,
+        "success": log.success,
+        "error": log.error,
+        "latency_ms": log.latency_ms,
+        "prompt_tokens": log.prompt_tokens,
+        "completion_tokens": log.completion_tokens,
+        "total_tokens": log.total_tokens,
+        "created_at": log.created_at.isoformat(),
+    }
+    if full:
+        base.update({
+            "system_prompt": log.system_prompt,
+            "context_text": log.context_text,
+            "messages": log.messages,
+            "request_meta": log.request_meta,
+            "response_text": log.response_text,
+            "response_meta": log.response_meta,
+        })
+    else:
+        # Compact preview for list views.
+        msgs = log.messages if isinstance(log.messages, list) else []
+        last_user = next((m.get("content", "") for m in reversed(msgs) if m.get("role") == "user"), "")
+        base["prompt_preview"] = (last_user or "")[:280]
+        base["response_preview"] = (log.response_text or "")[:280]
+    return base
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_overview(request):
+    """Top-line totals across the whole platform (superuser-only)."""
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    from django.db.models import Count, Avg
+    from .models import UserProfile
+
+    plan_rows = UserProfile.objects.values("plan").annotate(n=Count("id"))
+    users_by_plan = {row["plan"]: row["n"] for row in plan_rows}
+
+    ai_qs = AIInteractionLog.objects.all()
+    ai_total = ai_qs.count()
+    ai_ok = ai_qs.filter(success=True).count()
+    by_kind = {row["kind"]: row["n"] for row in ai_qs.values("kind").annotate(n=Count("id"))}
+    latency = ai_qs.filter(latency_ms__isnull=False).aggregate(a=Avg("latency_ms"))["a"]
+    tokens = ai_qs.filter(total_tokens__isnull=False).aggregate(a=Sum("total_tokens"))["a"]
+
+    return no_store(JsonResponse({
+        "users": {
+            "total": User.objects.count(),
+            "by_plan": users_by_plan,
+            "superusers": User.objects.filter(is_superuser=True).count(),
+        },
+        "ai": {
+            "total": ai_total,
+            "success": ai_ok,
+            "failed": ai_total - ai_ok,
+            "success_rate": round(ai_ok / ai_total, 4) if ai_total else None,
+            "by_kind": by_kind,
+            "avg_latency_ms": round(latency, 1) if latency is not None else None,
+            "total_tokens": int(tokens) if tokens else 0,
+        },
+        "backtests": {"total": BacktestRun.objects.count()},
+        "custom_indicators": {"total": CustomIndicator.objects.count()},
+        "strategies": {"total": Strategy.objects.count()},
+        "feedback_leads": {"total": FeedbackLead.objects.count()},
+    }))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_users(request):
+    """List every user with plan, quota usage, and activity counts (superuser-only)."""
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    q = str(request.GET.get("q") or "").strip()
+    try:
+        limit = min(int(request.GET.get("limit", 200)), 500)
+        offset = max(int(request.GET.get("offset", 0)), 0)
+    except (TypeError, ValueError):
+        limit, offset = 200, 0
+
+    qs = User.objects.all().order_by("-date_joined")
+    if q:
+        qs = qs.filter(email__icontains=q)
+    total = qs.count()
+    rows = [_admin_user_summary(u) for u in qs[offset:offset + limit]]
+    return no_store(JsonResponse({"total": total, "users": rows}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_user_detail(request, user_id: int):
+    """Full drill-down for one user: quota usage + every AI call + backtests +
+    indicators + feedback (superuser-only)."""
+    actor = get_authenticated_user(request)
+    require_admin(actor)
+
+    target = User.objects.filter(id=user_id).first()
+    if target is None:
+        raise APIError("No such user.", status_code=404)
+
+    ai_logs = AIInteractionLog.objects.filter(user=target).order_by("-created_at")[:200]
+    backtests = BacktestRun.objects.filter(user=target).order_by("-created_at")[:100]
+    indicators = CustomIndicator.objects.filter(user=target).order_by("-updated_at")
+    feedback = FeedbackLead.objects.filter(user=target).order_by("-created_at")
+
+    return no_store(JsonResponse({
+        "user": _admin_user_summary(target),
+        "ai_interactions": [_serialize_ai_interaction(x, full=True) for x in ai_logs],
+        "backtests": [serialize_backtest_run(x) for x in backtests],
+        "custom_indicators": [serialize_custom_indicator(x) for x in indicators],
+        "feedback": [
+            {"id": f.id, "email": f.email, "message": f.message, "source": f.source,
+             "created_at": f.created_at.isoformat()}
+            for f in feedback
+        ],
+    }))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_ai_interactions(request):
+    """Global, paginated feed of AI calls with filters (superuser-only).
+
+    Query: ?user_id= &kind= &success=true|false &limit= &offset=
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    qs = AIInteractionLog.objects.select_related("user").order_by("-created_at")
+    uid = request.GET.get("user_id")
+    if uid:
+        qs = qs.filter(user_id=uid)
+    kind = request.GET.get("kind")
+    if kind:
+        qs = qs.filter(kind=kind)
+    success = request.GET.get("success")
+    if success in ("true", "false"):
+        qs = qs.filter(success=(success == "true"))
+
+    try:
+        limit = min(int(request.GET.get("limit", 50)), 200)
+        offset = max(int(request.GET.get("offset", 0)), 0)
+    except (TypeError, ValueError):
+        limit, offset = 50, 0
+
+    total = qs.count()
+    rows = [_serialize_ai_interaction(x, full=False) for x in qs[offset:offset + limit]]
+    return no_store(JsonResponse({"total": total, "interactions": rows}))

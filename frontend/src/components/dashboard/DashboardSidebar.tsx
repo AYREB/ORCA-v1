@@ -11,7 +11,8 @@ import {
   Wallet,
   Sigma,
   CandlestickChart,
-  Sparkles
+  Sparkles,
+  Shield
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
@@ -116,6 +117,20 @@ const DashboardSidebar = ({ isCollapsed, onToggle }: DashboardSidebarProps) => {
                 <p className="truncate text-xs text-muted-foreground">{user.email}</p>
               </div>
             </div>
+          )}
+
+          {user?.is_superuser && (
+            <NavLink
+              to="/dashboard/admin"
+              title={isCollapsed ? "Admin" : undefined}
+              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-amber-500/90 transition-colors hover:bg-amber-500/10 hover:text-amber-500 ${
+                isCollapsed ? "justify-center" : ""
+              }`}
+              activeClassName="bg-amber-500/10 text-amber-500 border border-amber-500/20"
+            >
+              <Shield className="h-4 w-4 flex-shrink-0" />
+              {!isCollapsed && <span className="text-sm font-medium">Admin</span>}
+            </NavLink>
           )}
 
           {bottomItems.map((item) => (

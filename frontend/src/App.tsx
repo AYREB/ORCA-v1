@@ -17,6 +17,8 @@ import History from "./pages/History";
 import Charts from "./pages/Charts";
 import Legal from "./pages/Legal";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
+import AdminRoute from "./components/auth/AdminRoute";
+import AdminDashboard from "./pages/AdminDashboard";
 import Help from "./pages/Help"
 import { AuthProvider } from "./context/AuthContext";
 import { SettingsProvider } from "./hooks/useSettings";
@@ -146,6 +148,14 @@ const App = () => (
                       <ProtectedRoute>
                         <Plans />
                       </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/dashboard/admin"
+                    element={
+                      <AdminRoute>
+                        <AdminDashboard />
+                      </AdminRoute>
                     }
                   />
                   <Route path="*" element={<NotFound />} />
