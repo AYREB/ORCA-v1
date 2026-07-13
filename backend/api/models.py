@@ -335,6 +335,47 @@ class AIInteractionLog(models.Model):
         return f"AIInteractionLog({self.kind}, {who}, ok={self.success})"
 
 
+class OptimizationRun(models.Model):
+    """Durable record of an optimizer run: what was optimized, the winning
+    strategy, and the results — so the admin can inspect every optimization and
+    the data can be mined later.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="optimization_runs",
+    )
+    method = models.CharField(max_length=16)                       # grid | genetic | meta
+    algorithm = models.CharField(max_length=32, blank=True, default="")  # pso|annealing|differential|random
+    strategy_name = models.CharField(max_length=255, blank=True, default="")
+
+    input_dsl = models.JSONField(blank=True, null=True)            # base strategy that was optimized
+    parameter_space = models.JSONField(default=dict, blank=True)   # what was optimized (parameter_choice)
+    config = models.JSONField(default=dict, blank=True)            # initial_balance, tickers, etc.
+
+    best_params = models.JSONField(blank=True, null=True)          # winning parameter values
+    best_dsl = models.JSONField(blank=True, null=True)             # resulting optimized strategy
+    best_result = models.JSONField(blank=True, null=True)          # metrics of the winner
+    top_results = models.JSONField(default=list, blank=True)       # leaderboard (capped)
+
+    total_runs = models.IntegerField(default=0)
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["method", "created_at"]),
+        ]
+
+    def __str__(self):
+        who = self.user.email if self.user else "anon"
+        return f"OptimizationRun({self.method}, {who}, {self.created_at.date()})"
+
+
 class FeedbackLead(models.Model):
     """Email captured from the 'give feedback for discounts/giveaways' CTA on the
     Plans page, plus any message left. Stored server-side so the list can be

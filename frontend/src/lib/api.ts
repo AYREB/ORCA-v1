@@ -433,15 +433,51 @@ export interface AuthUser {
 
 // ---- Admin analytics (superuser-only) ------------------------------------
 export interface AdminOverview {
-  users: { total: number; by_plan: Record<string, number>; superusers: number };
+  users: { total: number; by_plan: Record<string, number>; superusers: number; active_7d: number };
   ai: {
     total: number; success: number; failed: number; success_rate: number | null;
     by_kind: Record<string, number>; avg_latency_ms: number | null; total_tokens: number;
   };
-  backtests: { total: number };
+  backtests: {
+    total: number; profitable: number; profitable_rate: number | null;
+    avg_return_pct: number | null; avg_win_rate: number | null; by_source: Record<string, number>;
+  };
+  optimizations: { total: number; by_method: Record<string, number> };
   custom_indicators: { total: number };
   strategies: { total: number };
   feedback_leads: { total: number };
+}
+
+export interface TimePoint { date: string; count: number }
+export interface AdminAnalytics {
+  days: number;
+  timeseries: {
+    signups: TimePoint[];
+    ai: TimePoint[];
+    backtests: TimePoint[];
+    optimizations: TimePoint[];
+  };
+  ai_by_kind_daily: Array<{ date: string; [kind: string]: string | number }>;
+  plan_distribution: Record<string, number>;
+}
+
+export interface AdminOptimization {
+  id: number;
+  user_id: number | null;
+  method: string;
+  algorithm: string;
+  strategy_name: string;
+  total_runs: number;
+  best_result: Record<string, number> | null;
+  best_params: Record<string, unknown> | null;
+  created_at: string;
+  // full (in user detail)
+  input_dsl?: Record<string, unknown> | null;
+  parameter_space?: Record<string, unknown>;
+  config?: Record<string, unknown>;
+  best_dsl?: Record<string, unknown> | null;
+  top_results?: Array<{ params: Record<string, unknown>; results: Record<string, number> }>;
+  error?: string;
 }
 
 export interface AdminUserSummary {
@@ -494,12 +530,23 @@ export interface AdminBacktestRow {
   trades: number;
   final_balance: number;
   created_at: string;
+  // full-serializer extras
+  source?: string;
+  winning_trades?: number;
+  losing_trades?: number;
+  cash?: number;
+  invested?: number;
+  equity_curve?: Array<{ timestamp: string; equity: number } | Record<string, unknown>>;
+  dsl_json?: Record<string, unknown> | null;
+  dsl_text?: string;
+  config?: Record<string, unknown>;
 }
 
 export interface AdminUserDetail {
   user: AdminUserSummary;
   ai_interactions: AdminAiInteraction[];
   backtests: AdminBacktestRow[];
+  optimizations: AdminOptimization[];
   custom_indicators: CustomIndicator[];
   feedback: { id: number; email: string; message: string; source: string; created_at: string }[];
 }
@@ -719,6 +766,10 @@ class DjangoAPI {
   // ---- Admin analytics (superuser-only; backend gates on is_superuser) ----
   async getAdminOverview(): Promise<AdminOverview> {
     return this.request<AdminOverview>('/admin/overview/');
+  }
+
+  async getAdminAnalytics(days = 30): Promise<AdminAnalytics> {
+    return this.request<AdminAnalytics>(`/admin/analytics/?days=${days}`);
   }
 
   async getAdminUsers(q = ''): Promise<{ total: number; users: AdminUserSummary[] }> {
