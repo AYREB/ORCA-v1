@@ -2380,13 +2380,19 @@ def _operand_to_text(node):
         args = node.get("arg", {}) or {}
         offset = args.get("offset") or 0
         suffix = f" ({int(offset)} bar{'s' if int(offset) != 1 else ''} ago)" if offset else ""
+        # Cross-ticker conditions read another symbol's data — say whose.
+        watch = args.get("ticker")
         if func.upper() == "PRICE":
-            return f"{args.get('OHLC', 'close')} price{suffix}"
+            base = f"{args.get('OHLC', 'close')} price{suffix}"
+            return f"{watch}'s {base}" if watch else base
         if func.upper() == "VOLUME":
-            return f"volume{suffix}"
+            base = f"volume{suffix}"
+            return f"{watch}'s {base}" if watch else base
         shown = [str(v) for k, v in args.items()
-                 if k not in ("timeframe", "offset") and v not in (None, "")]
+                 if k not in ("timeframe", "offset", "ticker") and v not in (None, "")]
         label = f"{func}({', '.join(shown)})" if shown else func
+        if watch:
+            label = f"{watch} {label}"
         tf = args.get("timeframe")
         if tf:
             label += f" on {tf}"
