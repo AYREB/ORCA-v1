@@ -1,4 +1,5 @@
 import { ReactNode, useState } from "react";
+import VerifyEmailBanner from "@/components/dashboard/VerifyEmailBanner";
 import { Helmet } from "react-helmet-async";
 import { motion } from "framer-motion";
 import type { LucideIcon } from "lucide-react";
@@ -60,7 +61,10 @@ const DashboardLayout = ({
         <main
           className={`relative transition-all duration-300 ${isCollapsed ? "ml-16" : "ml-64"}`}
         >
-          <div className={`${maxWidth} mx-auto space-y-6 p-6`}>{children}</div>
+          <div className={`${maxWidth} mx-auto space-y-6 p-6`}>
+            <VerifyEmailBanner />
+            {children}
+          </div>
         </main>
       </div>
     </>

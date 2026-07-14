@@ -26,6 +26,7 @@ import { RegistryProvider } from "@/context/RegistryContext";
 import Settings from "./pages/Settings";
 import Plans from "./pages/Plans";
 import ResetPassword from "./pages/ResetPassword";
+import VerifyEmail from "./pages/VerifyEmail";
 import PlanLimitDialog from "./components/plan/PlanLimitDialog";
 
 const queryClient = new QueryClient();
@@ -44,6 +45,7 @@ const App = () => (
                 <Routes>
                   <Route path="/" element={<Index />} />
                   <Route path="/reset-password" element={<ResetPassword />} />
+                  <Route path="/verify-email" element={<VerifyEmail />} />
                   <Route path="/legal/:doc" element={<Legal />} />
                   <Route
                     path="/dashboard"

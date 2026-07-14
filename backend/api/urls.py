@@ -22,6 +22,8 @@ urlpatterns = [
     path("delete-account/", views.delete_account),
     path("change-password/", views.change_password),
     path("forgot-password/", views.forgot_password),
+    path("verify-email/", views.verify_email),
+    path("resend-verification/", views.resend_verification),
     path("reset-password/", views.reset_password),
     path("strategies/", views.strategies),
     path("strategies/<int:strategy_id>/", views.strategy_detail),

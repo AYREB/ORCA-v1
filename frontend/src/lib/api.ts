@@ -428,6 +428,8 @@ export interface AuthUser {
   plan?: PlanSummary;
   /** False for Google-SSO accounts that never set a password. */
   has_password?: boolean;
+  /** Soft verification — drives the dashboard nudge, gates nothing. */
+  email_verified?: boolean;
   /** Superuser gate for the admin analytics dashboard. */
   is_staff?: boolean;
   is_superuser?: boolean;
@@ -848,6 +850,17 @@ class DjangoAPI {
       method: 'POST',
       body: JSON.stringify({ token, new_password: newPassword }),
     });
+  }
+
+  async verifyEmail(token: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/verify-email/', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  async resendVerification(): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/resend-verification/', { method: 'POST' });
   }
 
   // Health check
