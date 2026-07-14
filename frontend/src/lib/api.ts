@@ -553,6 +553,22 @@ export interface AdminUserDetail {
   feedback: { id: number; email: string; message: string; source: string; created_at: string }[];
 }
 
+export interface AdminFeedbackLead {
+  id: number;
+  email: string;
+  message: string;
+  source: string;
+  created_at: string;
+  user_id: number | null;
+  user_email: string | null;
+}
+export interface AdminFeedback {
+  total: number;
+  unique_emails: number;
+  emails: string[];
+  leads: AdminFeedbackLead[];
+}
+
 export interface AuthResponse {
   token: string;
   user: AuthUser;
@@ -792,6 +808,11 @@ class DjangoAPI {
     if (params.offset != null) sp.set('offset', String(params.offset));
     const qs = sp.toString();
     return this.request<{ total: number; interactions: AdminAiInteraction[] }>(`/admin/ai-interactions/${qs ? `?${qs}` : ''}`);
+  }
+
+  /** Every feedback lead + a de-duplicated email list for the CSV export. */
+  async getAdminFeedback(): Promise<AdminFeedback> {
+    return this.request<AdminFeedback>('/admin/feedback/');
   }
 
   /** Password-holders confirm with `password`; Google-SSO accounts (no

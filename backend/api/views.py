@@ -3479,6 +3479,50 @@ def admin_ai_interactions(request):
 @require_methods("GET")
 @token_required
 @rate_limit("general")
+def admin_feedback(request):
+    """Every feedback-lead ever captured, newest first, with the submitting
+    user's email (superuser-only). Powers the admin feedback table + the
+    "download all emails" export."""
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    qs = FeedbackLead.objects.select_related("user").order_by("-created_at")
+    leads = [
+        {
+            "id": f.id,
+            "email": f.email,
+            "message": f.message,
+            "source": f.source,
+            "created_at": f.created_at.isoformat(),
+            "user_id": f.user_id,
+            "user_email": f.user.email if f.user else None,
+        }
+        for f in qs
+    ]
+
+    # De-duplicated, order-preserving list of every distinct email — the
+    # comma-separated export the admin downloads.
+    seen: set[str] = set()
+    emails: list[str] = []
+    for lead in leads:
+        addr = (lead["email"] or "").strip().lower()
+        if addr and addr not in seen:
+            seen.add(addr)
+            emails.append(lead["email"].strip())
+
+    return no_store(JsonResponse({
+        "total": len(leads),
+        "unique_emails": len(emails),
+        "emails": emails,
+        "leads": leads,
+    }))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
 def admin_backtest_detail(request, run_id: int):
     """Everything about one backtest — the strategy DSL, run config, full metrics,
     equity curve, and the complete engine result incl. trades (superuser-only)."""

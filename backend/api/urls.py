@@ -56,5 +56,6 @@ urlpatterns = [
     path("admin/users/", views.admin_users),
     path("admin/users/<int:user_id>/", views.admin_user_detail),
     path("admin/ai-interactions/", views.admin_ai_interactions),
+    path("admin/feedback/", views.admin_feedback),
     path("admin/backtests/<int:run_id>/", views.admin_backtest_detail),
 ]
