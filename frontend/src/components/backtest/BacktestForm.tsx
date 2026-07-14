@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { checkCondition, snapDatesToTimeframe, earliestStartFor, todayISO } from "@/lib/inputSanity";
 import { useSettings } from "@/hooks/useSettings";
 import { motion, AnimatePresence } from "framer-motion";
 import {Play,
@@ -123,8 +124,13 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
   // (e.g. buy AAPL when SPX drops), but they are never traded.
   const [signalTickers, setSignalTickers] = useState<string[]>([]);
   const [executionTF, setExecutionTF] = useState(btDefaults.timeframe);
-  const [dateStart, setDateStart] = useState("2025-01-01");
-  const [dateEnd, setDateEnd] = useState("2026-01-01");
+  // Rolling defaults — last 12 months ending today (hardcoded dates go stale).
+  const [dateStart, setDateStart] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 365);
+    return d.toISOString().slice(0, 10);
+  });
+  const [dateEnd, setDateEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const [initialBalance, setInitialBalance] = useState(btDefaults.initialBalance);
   const [takeProfitPercent, setTakeProfitPercent] = useState(btDefaults.takeProfitPercent);
   const [stopLossPercent, setStopLossPercent] = useState(btDefaults.stopLossPercent);
@@ -182,6 +188,19 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
     fetchRegistry();
     fetchStrategies();
   }, [user]);
+
+  // Keep selected dates inside what the data provider stores for the chosen
+  // timeframe (e.g. 15m only goes back ~55 days).
+  useEffect(() => {
+    if (!executionTF || !dateStart || !dateEnd) return;
+    const snapped = snapDatesToTimeframe(dateStart, dateEnd, executionTF);
+    if (snapped) {
+      setDateStart(snapped.start);
+      setDateEnd(snapped.end);
+      toast.info(snapped.note);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [executionTF]);
 
   useEffect(() => {
     const valid = availableTimeframesFor(
@@ -584,6 +603,17 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Guard: conditions that can never fire — block with the reason
+    for (const groupName of ["OPEN", "CLOSE"] as const) {
+      for (const c of conditionGroups[groupName]?.conditions ?? []) {
+        const { verdict, message } = checkCondition(c.left, c.operator, c.right);
+        if (verdict === "impossible") {
+          toast.error(`${groupName === "OPEN" ? "Entry" : "Exit"} condition problem: ${message}`);
+          return;
+        }
+      }
+    }
 
     // Guard: risk-based sizing needs a real stop loss
     const currentOpenArgs = blocks[side]?.OPEN?.ARGUMENTS || {};
@@ -1289,6 +1319,8 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
                       <Label className="text-xs text-muted-foreground">Start Date</Label>
                       <Input
                         type="date"
+                        min={earliestStartFor(executionTF)}
+                        max={dateEnd || todayISO()}
                         value={dateStart}
                         onChange={(e) => setDateStart(e.target.value)}
                         className="bg-secondary/50 border-border/50 h-9"
@@ -1298,6 +1330,8 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
                       <Label className="text-xs text-muted-foreground">End Date</Label>
                       <Input
                         type="date"
+                        min={dateStart || earliestStartFor(executionTF)}
+                        max={todayISO()}
                         value={dateEnd}
                         onChange={(e) => setDateEnd(e.target.value)}
                         className="bg-secondary/50 border-border/50 h-9"

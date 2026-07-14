@@ -7,6 +7,7 @@ from .data_pulling import datapull
 from .parsing import parser, validateParsedDSL
 from .fetcher_calculators import indicatorEvaluator
 from .parsing.extractingTickers import extract_tickers, extract_signal_tickers, extract_execution_timeframe, extract_dateframe, collect_timeframes_from_dsl
+from .parsing.inputSanity import check_strategy, clamp_dateframe_for_timeframe, max_history_days
 from .backtesting.backtesterCore import backtester
 from .console_ui.PrintTradeSummary import print_trade_summary
 
@@ -313,6 +314,28 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
     # Validate DSL
     validateParsedDSL.validate_parsed_dsl(parsed_dsl, extra_indicators=CUSTOM_INDICATOR_DEFS)
 
+    # ---------------- Semantic sanity ----------------
+    # Impossible conditions (e.g. SMA < -12) would silently produce zero
+    # trades — block them with an explanation instead of wasting a run.
+    sanity_blockers, sanity_warnings = check_strategy(parsed_dsl)
+    if sanity_blockers:
+        raise BacktestError(
+            "This strategy can never trigger: " + " | ".join(sanity_blockers),
+            code="impossible_condition",
+        )
+
+    # Clamp the date range into what the data provider actually stores for
+    # the chosen timeframe (e.g. 15m only goes back ~55 days).
+    _direction = "LONG" if "LONG" in parsed_dsl else "SHORT"
+    _ctx = parsed_dsl.get(_direction, {}).get("context", {})
+    _df = _ctx.get("dateframe") or {}
+    _tf = _ctx.get("execution_timeframe", "1D")
+    if _df.get("start") and _df.get("end"):
+        _s, _e, _note = clamp_dateframe_for_timeframe(_df["start"], _df["end"], _tf)
+        if _note:
+            _ctx["dateframe"] = {"start": _s, "end": _e}
+            sanity_warnings.append(f"Date range adjusted: {_note}.")
+
     # ---------------- Pull data ----------------
     TICKERS = extract_tickers(parsed_dsl)
     # Signal tickers are watch-only: data loads so conditions can reference
@@ -361,6 +384,17 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
     fetch_start_date = get_fetch_date_bound(start_date, warmup_days=warmup_days)
     fetch_end_date = get_fetch_date_bound(end_date, is_end=True)
 
+    # The warmup extension must never push a fetch outside the provider's
+    # history window (e.g. 15m only exists for ~60 days) — Yahoo rejects the
+    # ENTIRE request if the start is out of range, killing an otherwise valid
+    # backtest. Floor is per timeframe: a 15m strategy watching a 1D SMA(200)
+    # still gets full daily history.
+    from datetime import datetime as _dt
+
+    def _fetch_start_for(tf: str) -> str:
+        floor = (_dt.now() - timedelta(days=max_history_days(tf))).date().isoformat()
+        return max(fetch_start_date, floor)
+
     # data_dict: full data including warmup bars (for indicator computation)
     # chart_dict: clipped to user's requested range (for chart response)
     data_dict = {}
@@ -374,7 +408,7 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
             try:
                 df = datapull.get_data_with_indicator(
                     ticker=t,
-                    start=fetch_start_date,
+                    start=_fetch_start_for(tf),
                     end=fetch_end_date,
                     interval=tf
                 )
@@ -423,12 +457,18 @@ def main(parsed_dsl, initial_balance=10000, custom_indicators=None):
         )
 
     # No trades is not an error but worth flagging
-    warnings = []
+    warnings = list(sanity_warnings)
     if not trade_log:
-        warnings.append(
-            "No trades were triggered. Your conditions may be too strict "
-            "for this date range - try adjusting your indicator thresholds."
-        )
+        if sanity_warnings:
+            warnings.append(
+                "No trades were triggered — see the notes above for the likely reason."
+            )
+        else:
+            warnings.append(
+                "No trades were triggered. Your conditions may be too strict "
+                "for this date range - try adjusting your indicator thresholds "
+                "or widening the dates."
+            )
 
     invested = sum(
         positions[ticker] * chart_dict[ticker][EXECUTION_TF].iloc[-1]["Close"]

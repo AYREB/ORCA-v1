@@ -33,6 +33,8 @@ export interface BacktestResult {
   total_portfolio: number;
   pct_change: number;
   json_dsl: Record<string, unknown>;
+  /** Sanity notes from the engine (date clamps, zero-trade explanations…). */
+  warnings?: string[];
   trades: TradeEntry[];
   data: {
     [ticker: string]: {

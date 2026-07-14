@@ -604,6 +604,8 @@ const ParameterOptimizer = ({ dslJson, onApplyParameters, onRunBacktest }: Param
               <span className="text-muted-foreground">$</span>
               <Input
                 type="number"
+                min={100}
+                step={100}
                 value={initialBalance}
                 onChange={(e) => setInitialBalance(Number(e.target.value))}
                 className="w-32 bg-secondary border-border font-mono text-right"

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { TickerCombobox, TimeframeSelect } from "./MarketSelectors";
 import { useRegistry, availableTimeframesFor } from "@/context/RegistryContext";
+import { earliestStartFor, todayISO } from "@/lib/inputSanity";
 
 interface Props {
   dsl: Record<string, unknown>;
@@ -466,6 +467,8 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [] }
           <Label className="text-xs text-muted-foreground">Start date</Label>
           <Input
             type="date"
+            min={earliestStartFor(timeframe)}
+            max={endDate || todayISO()}
             value={startDate}
             onChange={(e) => setStart(e.target.value)}
             className="h-8 text-xs bg-background/40"
@@ -475,6 +478,8 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [] }
           <Label className="text-xs text-muted-foreground">End date</Label>
           <Input
             type="date"
+            min={startDate || earliestStartFor(timeframe)}
+            max={todayISO()}
             value={endDate}
             onChange={(e) => setEnd(e.target.value)}
             className="h-8 text-xs bg-background/40"

@@ -568,6 +568,9 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
               <Label className="text-sm text-muted-foreground">Simulations</Label>
               <Input
                 type="number"
+                min={100}
+                max={10000}
+                step={100}
                 value={numSimulations}
                 onChange={(e) => setNumSimulations(Math.max(1000, Math.min(50000, parseInt(e.target.value) || 1000)))}
                 className="w-24 h-8 text-right font-mono"
@@ -592,6 +595,9 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
               <Label className="text-sm text-muted-foreground">Trades Forward</Label>
               <Input
                 type="number"
+                min={1}
+                max={500}
+                step={1}
                 value={numTradesForward}
                 onChange={(e) => setNumTradesForward(Math.max(25, Math.min(500, parseInt(e.target.value) || 25)))}
                 className="w-24 h-8 text-right font-mono"
@@ -628,6 +634,9 @@ const MonteCarloAnalysis = ({ trades }: MonteCarloAnalysisProps) => {
               </div>
               <Input
                 type="number"
+                min={0}
+                max={10}
+                step={1}
                 value={cooldownBuffer}
                 onChange={(e) => setCooldownBuffer(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
                 className="w-24 h-8 text-right font-mono"
