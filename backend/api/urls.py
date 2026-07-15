@@ -22,6 +22,8 @@ urlpatterns = [
     path("delete-account/", views.delete_account),
     path("change-password/", views.change_password),
     path("forgot-password/", views.forgot_password),
+    path("verify-email/", views.verify_email),
+    path("resend-verification/", views.resend_verification),
     path("reset-password/", views.reset_password),
     path("strategies/", views.strategies),
     path("strategies/<int:strategy_id>/", views.strategy_detail),
@@ -56,5 +58,6 @@ urlpatterns = [
     path("admin/users/", views.admin_users),
     path("admin/users/<int:user_id>/", views.admin_user_detail),
     path("admin/ai-interactions/", views.admin_ai_interactions),
+    path("admin/feedback/", views.admin_feedback),
     path("admin/backtests/<int:run_id>/", views.admin_backtest_detail),
 ]

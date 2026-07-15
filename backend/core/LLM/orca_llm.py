@@ -372,8 +372,12 @@ def apply_date_override(strategy: dict, user_input: str) -> dict:
     """Normalise the backtest window. Dates are a "now" concept the model
     cannot know: its training data froze "recent" at training time, so its
     default dateframes go stale. User date language always wins; otherwise
-    the window is the last 12 months ending today.
+    the window is the last 12 months ending today — capped to what the data
+    provider stores for the strategy's timeframe (15m only has ~55 days, so
+    a 12-month default there would return no data at all).
     """
+    from core.parsing.inputSanity import clamp_dateframe_for_timeframe
+
     date_range = extract_date_range(user_input)
     if date_range:
         start, end = date_range
@@ -382,6 +386,8 @@ def apply_date_override(strategy: dict, user_input: str) -> dict:
         start = (today - timedelta(days=365)).strftime("%Y-%m-%d")
         end = today.strftime("%Y-%m-%d")
     direction = "LONG" if "LONG" in strategy else "SHORT"
+    tf = strategy[direction]["context"].get("execution_timeframe", "1D")
+    start, end, _note = clamp_dateframe_for_timeframe(start, end, tf)
     strategy[direction]["context"]["dateframe"] = {"start": start, "end": end}
     return strategy
 
@@ -471,5 +477,11 @@ def parse_strategy_with_context(
     # clarification answers after) — scan the whole user side of the chat.
     all_user_text = " ".join(user_messages)
     strategy = apply_date_override(strategy, all_user_text)
+
+    # Semantic sanity (impossible/always-true conditions, scale mismatches)
+    # rides the errors list so it surfaces on the review card.
+    from core.parsing.inputSanity import check_strategy as _sanity
+    _blockers, _warns = _sanity(strategy)
+    errors.extend(_blockers + _warns)
 
     return strategy, errors, raw_output

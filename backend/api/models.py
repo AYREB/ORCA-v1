@@ -28,6 +28,10 @@ class UserProfile(models.Model):
     stripe_customer_id = models.CharField(max_length=255, blank=True, default="")
     stripe_subscription_id = models.CharField(max_length=255, blank=True, default="")
     plan_status = models.CharField(max_length=32, blank=True, default="")  # active / past_due / canceled
+    # Soft email verification: accounts work unverified; this only drives the
+    # dashboard nudge (and future recover-account trust). Google sign-ins are
+    # marked verified on arrival (Google already verified the address).
+    email_verified = models.BooleanField(default=False)
     current_period_end = models.DateTimeField(null=True, blank=True)
     # ---------------------------------------------------------------------
     created_at = models.DateTimeField(auto_now_add=True)
@@ -269,6 +273,24 @@ class PasswordResetToken(models.Model):
 
     def __str__(self):
         return f"PasswordResetToken({self.user.email}, used={self.used})"
+
+
+class EmailVerificationToken(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="email_verification_tokens",
+    )
+    token = models.UUIDField(default=_uuid.uuid4, unique=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    used = models.BooleanField(default=False)
+
+    def is_valid(self) -> bool:
+        age = (timezone.now() - self.created_at).total_seconds()
+        return not self.used and age < 86400  # 24-hour window
+
+    def __str__(self):
+        return f"EmailVerificationToken({self.user.email}, used={self.used})"
 
 
 class AIInteractionLog(models.Model):

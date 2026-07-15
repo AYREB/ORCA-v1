@@ -414,6 +414,7 @@ const MetaheuristicOptimizer = ({
               <Label className="text-sm text-muted-foreground">{field.label}</Label>
               <Input
                 type="number"
+                min={field.key.includes("rate") || field.key.includes("temp") ? 0 : 1}
                 step={field.step ?? 1}
                 value={optSettings[field.key] ?? ""}
                 onChange={(e) => setOptSettings((prev) => ({ ...prev, [field.key]: Number(e.target.value) }))}
@@ -428,6 +429,8 @@ const MetaheuristicOptimizer = ({
             <Label className="text-sm text-muted-foreground">Initial Balance</Label>
             <Input
               type="number"
+              min={100}
+              step={100}
               value={initialBalance}
               onChange={(e) => setInitialBalance(Number(e.target.value))}
               className="mt-1 bg-secondary border-border font-mono"
@@ -539,8 +542,8 @@ const MetaheuristicOptimizer = ({
             <div className="grid grid-cols-3 gap-4 mb-4">
               <div>
                 <p className="text-xs text-muted-foreground">Return</p>
-                <p className="text-xl font-bold font-mono text-success">
-                  {result.best_result.results.pct_change?.toFixed(2)}%
+                <p className={`text-xl font-bold font-mono ${(result.best_result.results.pct_change ?? 0) >= 0 ? "text-success" : "text-destructive"}`}>
+                  {(result.best_result.results.pct_change ?? 0) >= 0 ? "+" : ""}{result.best_result.results.pct_change?.toFixed(2)}%
                 </p>
               </div>
               <div>

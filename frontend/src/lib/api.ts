@@ -33,6 +33,8 @@ export interface BacktestResult {
   total_portfolio: number;
   pct_change: number;
   json_dsl: Record<string, unknown>;
+  /** Sanity notes from the engine (date clamps, zero-trade explanations…). */
+  warnings?: string[];
   trades: TradeEntry[];
   data: {
     [ticker: string]: {
@@ -426,6 +428,8 @@ export interface AuthUser {
   plan?: PlanSummary;
   /** False for Google-SSO accounts that never set a password. */
   has_password?: boolean;
+  /** Soft verification — drives the dashboard nudge, gates nothing. */
+  email_verified?: boolean;
   /** Superuser gate for the admin analytics dashboard. */
   is_staff?: boolean;
   is_superuser?: boolean;
@@ -549,6 +553,22 @@ export interface AdminUserDetail {
   optimizations: AdminOptimization[];
   custom_indicators: CustomIndicator[];
   feedback: { id: number; email: string; message: string; source: string; created_at: string }[];
+}
+
+export interface AdminFeedbackLead {
+  id: number;
+  email: string;
+  message: string;
+  source: string;
+  created_at: string;
+  user_id: number | null;
+  user_email: string | null;
+}
+export interface AdminFeedback {
+  total: number;
+  unique_emails: number;
+  emails: string[];
+  leads: AdminFeedbackLead[];
 }
 
 export interface AuthResponse {
@@ -792,6 +812,11 @@ class DjangoAPI {
     return this.request<{ total: number; interactions: AdminAiInteraction[] }>(`/admin/ai-interactions/${qs ? `?${qs}` : ''}`);
   }
 
+  /** Every feedback lead + a de-duplicated email list for the CSV export. */
+  async getAdminFeedback(): Promise<AdminFeedback> {
+    return this.request<AdminFeedback>('/admin/feedback/');
+  }
+
   /** Password-holders confirm with `password`; Google-SSO accounts (no
    * password) confirm by typing their account email (`confirmEmail`). */
   async deleteAccount(confirmation: { password?: string; confirmEmail?: string }): Promise<{ message: string }> {
@@ -825,6 +850,17 @@ class DjangoAPI {
       method: 'POST',
       body: JSON.stringify({ token, new_password: newPassword }),
     });
+  }
+
+  async verifyEmail(token: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/verify-email/', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  async resendVerification(): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/resend-verification/', { method: 'POST' });
   }
 
   // Health check

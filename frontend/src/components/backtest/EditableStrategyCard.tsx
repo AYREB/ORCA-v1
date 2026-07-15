@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { TickerCombobox, TimeframeSelect } from "./MarketSelectors";
 import { useRegistry, availableTimeframesFor } from "@/context/RegistryContext";
+import { earliestStartFor, todayISO } from "@/lib/inputSanity";
 
 interface Props {
   dsl: Record<string, unknown>;
@@ -41,10 +42,22 @@ const fmtSide = (side: any): string => {
   const func = pick(side, "func", "function", "name", "indicator");
   if (func) {
     const args = pick(side, "arg", "args", "params", "parameters") || {};
+    const watch = args.ticker; // cross-ticker: reading another symbol's data
+    const offset = Number(args.offset) || 0;
+    const suffix = offset ? ` (${offset} bar${offset !== 1 ? "s" : ""} ago)` : "";
+    const prefix = watch ? `${watch} ` : "";
+    if (String(func).toUpperCase() === "PRICE") {
+      return `${prefix}${args.OHLC ?? "close"}${suffix}`;
+    }
     const parts = Object.entries(args)
-      .filter(([k, v]) => v !== null && v !== undefined && v !== "" && k !== "timeframe" && k !== "offset")
+      .filter(([k, v]) => v !== null && v !== undefined && v !== "" && !["timeframe", "offset", "ticker", "OHLC"].includes(k))
       .map(([, v]) => `${v}`);
-    return parts.length ? `${func}(${parts.join(", ")})` : String(func);
+    return `${prefix}${parts.length ? `${func}(${parts.join(", ")})` : String(func)}${suffix}`;
+  }
+  // Arithmetic node, e.g. { op: "*", left: {...}, right: {...} }
+  const op = pick(side, "op");
+  if (op) {
+    return `${fmtSide(pick(side, "left"))} ${op} ${fmtSide(pick(side, "right"))}`;
   }
   const v = pick(side, "value", "val", "constant");
   if (v !== undefined) return String(v);
@@ -466,6 +479,8 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [] }
           <Label className="text-xs text-muted-foreground">Start date</Label>
           <Input
             type="date"
+            min={earliestStartFor(timeframe)}
+            max={endDate || todayISO()}
             value={startDate}
             onChange={(e) => setStart(e.target.value)}
             className="h-8 text-xs bg-background/40"
@@ -475,6 +490,8 @@ const EditableStrategyCard = ({ dsl, onChange, onRun, isRunning, warnings = [] }
           <Label className="text-xs text-muted-foreground">End date</Label>
           <Input
             type="date"
+            min={startDate || earliestStartFor(timeframe)}
+            max={todayISO()}
             value={endDate}
             onChange={(e) => setEnd(e.target.value)}
             className="h-8 text-xs bg-background/40"

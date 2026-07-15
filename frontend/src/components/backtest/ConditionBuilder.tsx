@@ -17,6 +17,7 @@ import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
 import { getParamDomain, clampToDomain } from "@/lib/paramDomains";
+import { checkCondition } from "@/lib/inputSanity";
 import IndicatorCommandPalette from "./IndicatorCommandPalette";
 import {
   ConditionSide,
@@ -645,6 +646,22 @@ function ConditionRow({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      {/* Live semantic check — flags conditions that can never (or always) fire */}
+      {(() => {
+        const { verdict, message } = checkCondition(condition.left, condition.operator, condition.right);
+        if (!verdict) return null;
+        return (
+          <p
+            className={`px-4 pb-1.5 text-[10px] leading-snug ${
+              verdict === "impossible" ? "text-destructive" : "text-yellow-500"
+            }`}
+          >
+            {verdict === "impossible" ? "⛔ " : "⚠ "}
+            {message}
+          </p>
+        );
+      })()}
 
       {/* Expanded args editor — slides below when indicator clicked */}
       <AnimatePresence>

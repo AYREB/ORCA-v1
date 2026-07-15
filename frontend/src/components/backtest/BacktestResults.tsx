@@ -248,6 +248,15 @@ const BacktestResults = ({ results }: BacktestResultsProps) => {
       transition={{ duration: 0.5, delay: 0.2 }}
       className="space-y-6"
     >
+      {/* Engine sanity notes — why results may look unexpected */}
+      {results.warnings && results.warnings.length > 0 && (
+        <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-xs space-y-1">
+          {results.warnings.map((w, i) => (
+            <p key={i} className="text-yellow-600 dark:text-yellow-400 leading-relaxed">⚠ {w}</p>
+          ))}
+        </div>
+      )}
+
       {/* Equity curve — chart left, key stats right */}
       {equitySeries && equitySeries.points.length > 1 && (
         <motion.div

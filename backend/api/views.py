@@ -290,6 +290,36 @@ def no_store(response: JsonResponse) -> JsonResponse:
     return response
 
 
+def send_verification_email(user) -> None:
+    """Create a fresh verification token and email the link. Never raises —
+    signup/resend must succeed even if the mail server hiccups."""
+    from django.core.mail import send_mail as _send_mail
+
+    from .models import EmailVerificationToken
+
+    try:
+        EmailVerificationToken.objects.filter(user=user, used=False).update(used=True)
+        token = EmailVerificationToken.objects.create(user=user)
+        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
+        verify_url = f"{frontend_url}/verify-email?token={token.token}"
+        name = user.first_name or "there"
+        _send_mail(
+            subject="Verify your Orca email",
+            message=(
+                f"Hi {name},\n\n"
+                f"Confirm this is your email so you can recover your Orca account "
+                f"if you ever forget your password:\n\n{verify_url}\n\n"
+                f"The link expires in 24 hours. If you didn't create an Orca "
+                f"account, you can ignore this email."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception("Failed to send verification email to %s", getattr(user, "email", "?"))
+
+
 def user_payload(user) -> dict[str, Any]:
     return {
         "id": user.id,
@@ -300,6 +330,8 @@ def user_payload(user) -> dict[str, Any]:
         # frontend uses this to swap password-confirmation flows (delete
         # account, change password) for SSO-appropriate ones.
         "has_password": user.has_usable_password(),
+        # Soft verification: drives the dashboard nudge only, gates nothing.
+        "email_verified": entitlements.get_profile(user).email_verified,
         # Gates the admin analytics dashboard (superuser-only). Staff implies
         # Django-admin access; is_superuser is the hard gate the frontend uses.
         "is_staff": bool(user.is_staff),
@@ -941,6 +973,51 @@ def strategy_assistant_market_data(request):
 @api_error_boundary
 @require_methods("POST")
 @rate_limit("auth")
+def verify_email(request):
+    """Confirm an email verification token (no auth — link is clicked from mail)."""
+    from .models import EmailVerificationToken
+
+    body = parse_body(request)
+    token_str = str(body.get("token") or "").strip()
+    if not token_str:
+        raise APIError("token is required")
+    try:
+        token_uuid = uuid.UUID(token_str)
+    except ValueError:
+        raise APIError("Invalid verification token.", status_code=400)
+
+    token = EmailVerificationToken.objects.select_related("user").filter(token=token_uuid).first()
+    if not token or not token.is_valid():
+        raise APIError("This verification link is invalid or has expired.", status_code=400)
+
+    profile = entitlements.get_profile(token.user)
+    if not profile.email_verified:
+        profile.email_verified = True
+        profile.save(update_fields=["email_verified"])
+    token.used = True
+    token.save(update_fields=["used"])
+    return no_store(JsonResponse({"message": "Email verified."}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@token_required
+@rate_limit("auth")
+def resend_verification(request):
+    """Re-send the verification email for the logged-in user."""
+    user = get_authenticated_user(request)
+    profile = entitlements.get_profile(user)
+    if profile.email_verified:
+        return no_store(JsonResponse({"message": "Email is already verified."}))
+    send_verification_email(user)
+    return no_store(JsonResponse({"message": "Verification email sent."}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@rate_limit("auth")
 def register(request):
     body = parse_body(request)
     email = (body.get("email") or "").strip().lower()
@@ -972,6 +1049,7 @@ def register(request):
         password=password,
         first_name=name,
     )
+    send_verification_email(user)
     token, _ = Token.objects.get_or_create(user=user)
 
     return no_store(JsonResponse({"token": token.key, "user": user_payload(user)}, status=201))
@@ -1062,6 +1140,11 @@ def google_login(request):
     user = User.objects.filter(email__iexact=email).first()
     if user is None:
         user = User.objects.create_user(username=email, email=email, password=None, first_name=name[:150])
+    # Google has already verified this address — no nudge needed.
+    _gp = entitlements.get_profile(user)
+    if not _gp.email_verified:
+        _gp.email_verified = True
+        _gp.save(update_fields=["email_verified"])
     else:
         update_fields = []
         if name and not user.first_name:
@@ -2380,13 +2463,19 @@ def _operand_to_text(node):
         args = node.get("arg", {}) or {}
         offset = args.get("offset") or 0
         suffix = f" ({int(offset)} bar{'s' if int(offset) != 1 else ''} ago)" if offset else ""
+        # Cross-ticker conditions read another symbol's data — say whose.
+        watch = args.get("ticker")
         if func.upper() == "PRICE":
-            return f"{args.get('OHLC', 'close')} price{suffix}"
+            base = f"{args.get('OHLC', 'close')} price{suffix}"
+            return f"{watch}'s {base}" if watch else base
         if func.upper() == "VOLUME":
-            return f"volume{suffix}"
+            base = f"volume{suffix}"
+            return f"{watch}'s {base}" if watch else base
         shown = [str(v) for k, v in args.items()
-                 if k not in ("timeframe", "offset") and v not in (None, "")]
+                 if k not in ("timeframe", "offset", "ticker") and v not in (None, "")]
         label = f"{func}({', '.join(shown)})" if shown else func
+        if watch:
+            label = f"{watch} {label}"
         tf = args.get("timeframe")
         if tf:
             label += f" on {tf}"
@@ -3472,6 +3561,50 @@ def admin_ai_interactions(request):
     total = qs.count()
     rows = [_serialize_ai_interaction(x, full=False) for x in qs[offset:offset + limit]]
     return no_store(JsonResponse({"total": total, "interactions": rows}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_feedback(request):
+    """Every feedback-lead ever captured, newest first, with the submitting
+    user's email (superuser-only). Powers the admin feedback table + the
+    "download all emails" export."""
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    qs = FeedbackLead.objects.select_related("user").order_by("-created_at")
+    leads = [
+        {
+            "id": f.id,
+            "email": f.email,
+            "message": f.message,
+            "source": f.source,
+            "created_at": f.created_at.isoformat(),
+            "user_id": f.user_id,
+            "user_email": f.user.email if f.user else None,
+        }
+        for f in qs
+    ]
+
+    # De-duplicated, order-preserving list of every distinct email — the
+    # comma-separated export the admin downloads.
+    seen: set[str] = set()
+    emails: list[str] = []
+    for lead in leads:
+        addr = (lead["email"] or "").strip().lower()
+        if addr and addr not in seen:
+            seen.add(addr)
+            emails.append(lead["email"].strip())
+
+    return no_store(JsonResponse({
+        "total": len(leads),
+        "unique_emails": len(emails),
+        "emails": emails,
+        "leads": leads,
+    }))
 
 
 @csrf_exempt

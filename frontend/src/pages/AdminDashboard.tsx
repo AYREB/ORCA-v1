@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Shield, Users, Bot, FlaskConical, Sigma, MessageSquare, Search, Loader2,
   ChevronRight, Clock, CheckCircle2, XCircle, Sliders, TrendingUp, TrendingDown,
+  Download, Copy,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis,
@@ -18,7 +19,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   api, AdminOverview, AdminAnalytics, AdminUserSummary, AdminUserDetail,
-  AdminAiInteraction, AdminBacktestRow, AdminOptimization, TimePoint,
+  AdminAiInteraction, AdminBacktestRow, AdminOptimization, TimePoint, AdminFeedback,
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -342,14 +343,17 @@ const AdminDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<AdminUserDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [feedback, setFeedback] = useState<AdminFeedback | null>(null);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const [ov, us] = await Promise.all([api.getAdminOverview(), api.getAdminUsers()]);
+        const [ov, us, fb] = await Promise.all([
+          api.getAdminOverview(), api.getAdminUsers(), api.getAdminFeedback(),
+        ]);
         if (!alive) return;
-        setOverview(ov); setUsers(us.users); setTotal(us.total);
+        setOverview(ov); setUsers(us.users); setTotal(us.total); setFeedback(fb);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to load admin data.");
       } finally { if (alive) setLoading(false); }
@@ -378,6 +382,34 @@ const AdminDashboard = () => {
     try { setDetail(await api.getAdminUserDetail(id)); }
     catch (err) { toast.error(err instanceof Error ? err.message : "Failed to load user."); }
     finally { setDetailLoading(false); }
+  };
+
+  const downloadEmails = () => {
+    const emails = feedback?.emails ?? [];
+    if (emails.length === 0) { toast.error("No feedback emails to export yet."); return; }
+    const csv = emails.join(", ");
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `feedback-emails-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast.success(`Downloaded ${emails.length} email${emails.length === 1 ? "" : "s"}.`);
+  };
+
+  const copyEmails = async () => {
+    const emails = feedback?.emails ?? [];
+    if (emails.length === 0) { toast.error("No feedback emails to copy yet."); return; }
+    try {
+      await navigator.clipboard.writeText(emails.join(", "));
+      toast.success(`Copied ${emails.length} email${emails.length === 1 ? "" : "s"}.`);
+    } catch {
+      toast.error("Couldn't copy to clipboard.");
+    }
   };
 
   const aiSuccessPct = useMemo(
@@ -490,6 +522,64 @@ const AdminDashboard = () => {
                     </tr>
                   ))}
                   {users.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">No users.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Feedback leads */}
+          <div className="mb-3 mt-8 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <MessageSquare className="h-4 w-4" /> Feedback
+              <span className="text-muted-foreground">
+                ({feedback?.total ?? 0}{feedback ? ` · ${feedback.unique_emails} unique email${feedback.unique_emails === 1 ? "" : "s"}` : ""})
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={copyEmails} disabled={!feedback?.emails.length}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-card/55 px-3 py-1.5 text-xs font-medium backdrop-blur-xl transition-colors hover:bg-secondary/60 disabled:cursor-not-allowed disabled:opacity-50">
+                <Copy className="h-3.5 w-3.5" /> Copy emails
+              </button>
+              <button onClick={downloadEmails} disabled={!feedback?.emails.length}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50">
+                <Download className="h-3.5 w-3.5" /> Download emails (CSV)
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-border/50 bg-card/55 backdrop-blur-xl">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                    <th className="px-4 py-2.5 font-medium">Email</th>
+                    <th className="px-4 py-2.5 font-medium">Account</th>
+                    <th className="px-4 py-2.5 font-medium">Feedback</th>
+                    <th className="px-4 py-2.5 font-medium">Source</th>
+                    <th className="px-4 py-2.5 font-medium">Submitted</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(feedback?.leads ?? []).map((f) => (
+                    <tr key={f.id} className="border-b border-border/30 align-top last:border-0">
+                      <td className="px-4 py-3 font-medium">{f.email}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                        {f.user_email
+                          ? (f.user_email === f.email ? "—" : f.user_email)
+                          : <span className="italic">deleted / anonymous</span>}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {f.message
+                          ? <span className="whitespace-pre-wrap">{f.message}</span>
+                          : <span className="italic opacity-60">No message</span>}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{f.source || "—"}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{fmtDate(f.created_at)}</td>
+                    </tr>
+                  ))}
+                  {(!feedback || feedback.leads.length === 0) && (
+                    <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No feedback yet.</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>

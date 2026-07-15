@@ -594,6 +594,9 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             <Label className="text-sm text-muted-foreground">Population Size</Label>
             <Input
               type="number"
+              min={4}
+              max={100}
+              step={1}
               value={gaSettings.population}
               onChange={(e) => setGaSettings({ ...gaSettings, population: Number(e.target.value) })}
               className="mt-1 bg-secondary border-border font-mono"
@@ -607,6 +610,9 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             <Label className="text-sm text-muted-foreground">Generations</Label>
             <Input
               type="number"
+              min={1}
+              max={50}
+              step={1}
               value={gaSettings.generations}
               onChange={(e) => setGaSettings({ ...gaSettings, generations: Number(e.target.value) })}
               className="mt-1 bg-secondary border-border font-mono"
@@ -619,6 +625,9 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             <Label className="text-sm text-muted-foreground">Mutation Rate</Label>
             <Input
               type="number"
+              min={0}
+              max={1}
+              step={0.05}
               step="0.01"
               value={gaSettings.mutation_rate}
               onChange={(e) => setGaSettings({ ...gaSettings, mutation_rate: Number(e.target.value) })}
@@ -633,6 +642,9 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             <Label className="text-sm text-muted-foreground">Crossover Rate</Label>
             <Input
               type="number"
+              min={0}
+              max={1}
+              step={0.05}
               step="0.01"
               value={gaSettings.crossover_rate}
               onChange={(e) => setGaSettings({ ...gaSettings, crossover_rate: Number(e.target.value) })}
@@ -647,6 +659,9 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             <Label className="text-sm text-muted-foreground">Elite Size</Label>
             <Input
               type="number"
+              min={0}
+              max={20}
+              step={1}
               value={gaSettings.elite_size}
               onChange={(e) => setGaSettings({ ...gaSettings, elite_size: Number(e.target.value) })}
               className="mt-1 bg-secondary border-border font-mono"
@@ -660,6 +675,8 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             <Label className="text-sm text-muted-foreground">Initial Balance</Label>
             <Input
               type="number"
+              min={100}
+              step={100}
               value={initialBalance}
               onChange={(e) => setInitialBalance(Number(e.target.value))}
               className="mt-1 bg-secondary border-border font-mono"
@@ -802,8 +819,8 @@ const GeneticOptimizer = ({ dslJson, strategyId, strategyName, onBestApplied }: 
             <div className="grid grid-cols-3 gap-4 mb-4">
               <div>
                 <p className="text-xs text-muted-foreground">Return</p>
-                <p className="text-xl font-bold font-mono text-success">
-                  {result.best_result.results.pct_change?.toFixed(2)}%
+                <p className={`text-xl font-bold font-mono ${(result.best_result.results.pct_change ?? 0) >= 0 ? "text-success" : "text-destructive"}`}>
+                  {(result.best_result.results.pct_change ?? 0) >= 0 ? "+" : ""}{result.best_result.results.pct_change?.toFixed(2)}%
                 </p>
               </div>
               <div>
