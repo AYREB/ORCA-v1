@@ -559,6 +559,52 @@ def validate_strategy_name(name: Any) -> str:
     return parsed
 
 
+def validate_nl_message(value: Any, field_name: str = "message") -> str:
+    """Validate a natural-language prompt bound for the LLM parser.
+
+    The parser endpoints feed this straight to the Modal GPU, so an unbounded
+    message is wasted paid compute (and blows past the model's context window).
+    A real strategy description fits in a few hundred chars; the cap is generous.
+    We reject (not truncate) — a truncated strategy would parse into garbage, so
+    it's better to tell the user than to silently mangle their input.
+    """
+    parsed = str(value or "").strip()
+    if not parsed:
+        raise APIError(f"{field_name} is required")
+    max_len = int(getattr(settings, "MAX_NL_MESSAGE_CHARS", 4000))
+    if len(parsed) > max_len:
+        raise APIError(
+            f"{field_name} is too long ({len(parsed)} chars). "
+            f"Please keep it under {max_len} characters."
+        )
+    return parsed
+
+
+def trim_history_to_budget(history: list[dict], max_chars: int | None = None) -> list[dict]:
+    """Cap the total size of conversation history sent to the LLM parser.
+
+    Turn count is already bounded (MAX_TURNS), but each user turn can be up to
+    MAX_NL_MESSAGE_CHARS, so unbounded history can still blow the model's context
+    window and waste paid GPU tokens. We keep the most recent turns that fit in a
+    character budget, always preserving at least the latest turn.
+    """
+    if max_chars is None:
+        max_chars = int(getattr(settings, "MAX_NL_HISTORY_CHARS", 6000))
+    if not history:
+        return history
+
+    kept: list[dict] = []
+    running = 0
+    for turn in reversed(history):
+        size = len(str(turn.get("content", "")))
+        if kept and running + size > max_chars:
+            break
+        kept.append(turn)
+        running += size
+    kept.reverse()
+    return kept
+
+
 def validate_dsl_text(value: Any, field_name: str = "dsl_text") -> str:
     if value is None:
         return ""
@@ -2352,10 +2398,7 @@ def strategy_to_dsl(request):
     user = get_authenticated_user(request)
 
     body = parse_body(request)
-    message = (body.get("message") or "").strip()
-
-    if not message:
-        raise APIError("message is required")
+    message = validate_nl_message(body.get("message"))
 
     entitlements.consume_quota(user, "ai")
 
@@ -2615,11 +2658,8 @@ def strategy_chat_outcome(request):
 def strategy_chat(request):
     user = get_authenticated_user(request)
     body = parse_body(request)
-    message = (body.get("message") or "").strip()
+    message = validate_nl_message(body.get("message"))
     session_id = body.get("session_id")
-
-    if not message:
-        raise APIError("message is required")
 
     # ---- Non-strategy input ----
     if not session_id and is_non_strategy_input(message):
@@ -2741,10 +2781,13 @@ def strategy_chat(request):
     entitlements.consume_quota(user, "ai")
 
     # ---- Try to parse with full context ----
+    # Trim history to a character budget so a long chat can't overflow the
+    # model's context window and burn tokens (turn count is capped separately).
+    model_history = trim_history_to_budget(history)
     started = time.monotonic()
     try:
         strategy, errors, raw_output = parse_strategy_with_context(
-            history,
+            model_history,
             allowed_tickers=constraints["allowed_tickers"],
             allowed_timeframes=constraints["allowed_timeframes"]
         )

@@ -402,6 +402,14 @@ ORCA_ASSISTANT_MAX_OUTPUT_TOKENS = env_int("ORCA_ASSISTANT_MAX_OUTPUT_TOKENS", 9
 ORCA_ASSISTANT_MAX_MESSAGE_CHARS = env_int("ORCA_ASSISTANT_MAX_MESSAGE_CHARS", 4000, minimum=200)
 ORCA_ASSISTANT_MAX_CONTEXT_CHARS = env_int("ORCA_ASSISTANT_MAX_CONTEXT_CHARS", 20000, minimum=1000)
 ORCA_ASSISTANT_MAX_HISTORY_MESSAGES = env_int("ORCA_ASSISTANT_MAX_HISTORY_MESSAGES", 16, minimum=1)
+# Max length of a natural-language prompt sent to the LLM strategy parser
+# (strategy_to_dsl / strategy_chat). Bounds paid GPU compute per call; a real
+# strategy description fits well under this.
+MAX_NL_MESSAGE_CHARS = env_int("MAX_NL_MESSAGE_CHARS", 2000, minimum=200)
+# Total characters of multi-turn chat history sent to the parser in one call.
+# Keeps a long conversation from overflowing the model context and wasting
+# tokens (per-message cap above bounds a single turn; this bounds the sum).
+MAX_NL_HISTORY_CHARS = env_int("MAX_NL_HISTORY_CHARS", 6000, minimum=500)
 ORCA_ASSISTANT_STORE_RESPONSES = env_bool("ORCA_ASSISTANT_STORE_RESPONSES", False)
 ORCA_ASSISTANT_MARKET_DATA_DIR = os.getenv(
     "ORCA_ASSISTANT_MARKET_DATA_DIR",
