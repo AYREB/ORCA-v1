@@ -571,6 +571,34 @@ export interface AdminFeedback {
   leads: AdminFeedbackLead[];
 }
 
+export interface AdminVisitorRow {
+  anon_id: string;
+  email: string | null;
+  first_seen: string;
+  last_seen: string;
+  views: number;
+  sessions: number;
+  days_active: number;
+  returning: boolean;
+  total_seconds: number;
+}
+export interface AdminVisitors {
+  days: number;
+  totals: {
+    views: number;
+    unique_visitors: number;
+    signed_in_visitors: number;
+    returning_visitors: number;
+    sessions: number;
+    avg_session_seconds: number | null;
+    views_per_session: number | null;
+    total_time_seconds: number;
+  };
+  daily: { date: string; views: number; visitors: number }[];
+  pages: { path: string; views: number; visitors: number; avg_seconds: number }[];
+  visitors: AdminVisitorRow[];
+}
+
 export interface AuthResponse {
   token: string;
   user: AuthUser;
@@ -815,6 +843,10 @@ class DjangoAPI {
   /** Every feedback lead + a de-duplicated email list for the CSV export. */
   async getAdminFeedback(): Promise<AdminFeedback> {
     return this.request<AdminFeedback>('/admin/feedback/');
+  }
+
+  async getAdminVisitors(days = 30): Promise<AdminVisitors> {
+    return this.request<AdminVisitors>(`/admin/visitors/?days=${days}`);
   }
 
   /** Password-holders confirm with `password`; Google-SSO accounts (no

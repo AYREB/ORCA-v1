@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Shield, Users, Bot, FlaskConical, Sigma, MessageSquare, Search, Loader2,
   ChevronRight, Clock, CheckCircle2, XCircle, Sliders, TrendingUp, TrendingDown,
-  Download, Copy,
+  Download, Copy, Eye, Repeat,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis,
@@ -20,6 +20,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   api, AdminOverview, AdminAnalytics, AdminUserSummary, AdminUserDetail,
   AdminAiInteraction, AdminBacktestRow, AdminOptimization, TimePoint, AdminFeedback,
+  AdminVisitors,
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -42,6 +43,13 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 const fmtNum = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString());
+const fmtDuration = (secs: number | null | undefined) => {
+  if (secs == null) return "—";
+  const s = Math.round(secs);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+};
 const fmtPct = (n: number | null | undefined, mult = 100) => (n == null ? "—" : `${(n * mult).toFixed(mult === 100 ? 1 : 2)}%`);
 const fmtDate = (s: string | null | undefined) =>
   s ? new Date(s).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
@@ -344,6 +352,7 @@ const AdminDashboard = () => {
   const [detail, setDetail] = useState<AdminUserDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [feedback, setFeedback] = useState<AdminFeedback | null>(null);
+  const [visitors, setVisitors] = useState<AdminVisitors | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -364,6 +373,7 @@ const AdminDashboard = () => {
   useEffect(() => {
     let alive = true;
     api.getAdminAnalytics(days).then((a) => { if (alive) setAnalytics(a); }).catch(() => {});
+    api.getAdminVisitors(days).then((v) => { if (alive) setVisitors(v); }).catch(() => {});
     return () => { alive = false; };
   }, [days]);
 
@@ -467,6 +477,106 @@ const AdminDashboard = () => {
               <CategoryBars title="Users by plan" data={analytics.plan_distribution} />
               <CategoryBars title="AI calls by feature" data={overview.ai.by_kind} labelMap={KIND_LABEL} />
               <CategoryBars title="Backtests by source" data={overview.backtests.by_source} />
+            </div>
+          )}
+
+          {/* Visitors & view time */}
+          <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+            <Eye className="h-4 w-4" /> Visitors
+            <span className="text-xs font-normal text-muted-foreground">(page views incl. logged-out traffic · last {days}d · your own admin browsing excluded)</span>
+          </div>
+          {visitors ? (
+            <>
+              <div className="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <StatTile icon={Eye} label="Unique visitors" value={fmtNum(visitors.totals.unique_visitors)}
+                  sub={`${fmtNum(visitors.totals.signed_in_visitors)} signed in · ${fmtNum(visitors.totals.views)} page views`} />
+                <StatTile icon={Repeat} label="Returning visitors" value={fmtNum(visitors.totals.returning_visitors)}
+                  sub={visitors.totals.unique_visitors > 0
+                    ? `${Math.round((visitors.totals.returning_visitors / visitors.totals.unique_visitors) * 100)}% came back on another day`
+                    : "seen on 2+ days"} />
+                <StatTile icon={Clock} label="Avg session time" value={fmtDuration(visitors.totals.avg_session_seconds)}
+                  sub={`${visitors.totals.views_per_session ?? "—"} pages/session · ${fmtNum(visitors.totals.sessions)} sessions`} />
+                <StatTile icon={Clock} label="Total time on site" value={fmtDuration(visitors.totals.total_time_seconds)}
+                  sub={`across all visitors (${days}d)`} />
+              </div>
+
+              <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <ActivityChart title="Unique visitors / day"
+                  total={visitors.totals.unique_visitors}
+                  data={visitors.daily.map((d) => ({ date: d.date, count: d.visitors }))} />
+                <ActivityChart title="Page views / day"
+                  total={visitors.totals.views}
+                  data={visitors.daily.map((d) => ({ date: d.date, count: d.views }))} />
+              </div>
+
+              <div className="mb-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <CategoryBars title="Top pages (views)"
+                  data={Object.fromEntries(visitors.pages.map((p) => [p.path, p.views]))} />
+                <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                  <span className="mb-2 block text-sm font-medium">Time on page (avg)</span>
+                  {visitors.pages.length === 0 ? (
+                    <p className="py-8 text-center text-xs text-muted-foreground">No data yet.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {[...visitors.pages].sort((a, b) => b.avg_seconds - a.avg_seconds).map((p) => (
+                        <div key={p.path} className="flex items-center justify-between gap-3 text-xs">
+                          <span className="truncate font-mono">{p.path}</span>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {fmtDuration(p.avg_seconds)} · {fmtNum(p.visitors)} visitor{p.visitors === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mb-8 overflow-hidden rounded-xl border border-border/50 bg-card/55 backdrop-blur-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                        <th className="px-4 py-2.5 font-medium">Viewer</th>
+                        <th className="px-4 py-2.5 font-medium text-right">Sessions</th>
+                        <th className="px-4 py-2.5 font-medium text-right">Views</th>
+                        <th className="px-4 py-2.5 font-medium text-right">Days active</th>
+                        <th className="px-4 py-2.5 font-medium text-right">Time on site</th>
+                        <th className="px-4 py-2.5 font-medium">First seen</th>
+                        <th className="px-4 py-2.5 font-medium">Last seen</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visitors.visitors.map((v) => (
+                        <tr key={v.anon_id} className="border-b border-border/30 last:border-0">
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <span className={v.email ? "font-medium" : "font-mono text-xs text-muted-foreground"}>
+                                {v.email ?? `anon · ${v.anon_id.slice(0, 8)}`}
+                              </span>
+                              {v.returning && <Badge variant="secondary" className="text-[10px]">returning</Badge>}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{v.sessions}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{v.views}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{v.days_active}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{fmtDuration(v.total_seconds)}</td>
+                          <td className="px-4 py-2.5 text-xs text-muted-foreground">{fmtDate(v.first_seen)}</td>
+                          <td className="px-4 py-2.5 text-xs text-muted-foreground">{fmtDate(v.last_seen)}</td>
+                        </tr>
+                      ))}
+                      {visitors.visitors.length === 0 && (
+                        <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                          No visits recorded yet — tracking starts with this deploy.
+                        </td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="mb-8 rounded-xl border border-border/50 bg-card/55 py-10 text-center text-sm text-muted-foreground backdrop-blur-xl">
+              <Loader2 className="mx-auto h-4 w-4 animate-spin" />
             </div>
           )}
 

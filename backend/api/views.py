@@ -57,7 +57,7 @@ from .indicator_sandbox import (
     run_indicator_test,
     validate_parameters,
 )
-from .models import AIInteractionLog, BacktestRun, CustomIndicator, FeedbackLead, OptimizationRun, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from .models import AIInteractionLog, BacktestRun, CustomIndicator, FeedbackLead, OptimizationRun, PageView, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
 from .ai_logging import log_ai_interaction
 from . import entitlements
 from .entitlements import PlanLimitError
@@ -271,6 +271,8 @@ DEFAULT_RATE_LIMITS = {
     "status": {"max_requests": 120, "window_seconds": 60},
     "assistant": {"max_requests": 30, "window_seconds": 60},
     "general": {"max_requests": 180, "window_seconds": 60},
+    # Page-view beacons: one view per navigation + a 20s heartbeat per open tab.
+    "track": {"max_requests": 240, "window_seconds": 60},
 }
 
 
@@ -3741,4 +3743,210 @@ def admin_analytics(request):
         },
         "ai_by_kind_daily": ai_kind_series,
         "plan_distribution": plan_distribution,
+    }))
+
+
+# ---------------- Page-view tracking ---------------- #
+
+_TRACK_ID_RE = re.compile(r"^[0-9a-fA-F-]{8,36}$")
+# A ping can only stretch a view this far; anything longer is a stale row from
+# a tab that came back hours later (the client will have rotated the session).
+MAX_VIEW_STRETCH = timedelta(hours=6)
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@rate_limit("track")
+def track_event(request):
+    """First-party page-view beacon. Public — anonymous visitors count too.
+
+    Body: {event: "view"|"ping", anon_id, session_id, path, referrer?}
+    "view" inserts a row; "ping" bumps last_seen_at on the session's newest row
+    (engaged time). Parsed leniently (no Content-Type requirement) because the
+    tab-hidden ping arrives via navigator.sendBeacon, which sends text/plain.
+    Malformed input returns {ok: false} rather than an error — analytics must
+    never produce user-visible failures or client retry loops.
+    """
+    try:
+        data = json.loads((request.body or b"")[:2048].decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return JsonResponse({"ok": False})
+    if not isinstance(data, dict):
+        return JsonResponse({"ok": False})
+
+    event = str(data.get("event") or "view")
+    anon_id = str(data.get("anon_id") or "")
+    session_id = str(data.get("session_id") or "")
+    path = str(data.get("path") or "")
+    referrer = str(data.get("referrer") or "")[:500]
+
+    if event not in ("view", "ping"):
+        return JsonResponse({"ok": False})
+    if not (_TRACK_ID_RE.match(anon_id) and _TRACK_ID_RE.match(session_id)):
+        return JsonResponse({"ok": False})
+    if not path.startswith("/") or len(path) > 200:
+        return JsonResponse({"ok": False})
+
+    # Beacons carry no Authorization header; regular fetches do.
+    user = get_user_from_request(request)
+
+    if event == "view":
+        PageView.objects.create(
+            user=user, anon_id=anon_id, session_id=session_id,
+            path=path, referrer=referrer,
+        )
+        return JsonResponse({"ok": True})
+
+    # ping — extend engaged time on the newest row of this session.
+    row = (
+        PageView.objects.filter(anon_id=anon_id, session_id=session_id)
+        .order_by("-created_at")
+        .first()
+    )
+    now = timezone.now()
+    if row is None or now - row.created_at > MAX_VIEW_STRETCH:
+        return JsonResponse({"ok": True})
+    row.last_seen_at = now
+    update_fields = ["last_seen_at"]
+    if user is not None and row.user_id is None:
+        # Visitor logged in mid-session — retroactively identify the view.
+        row.user = user
+        update_fields.append("user")
+    row.save(update_fields=update_fields)
+    return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_visitors(request):
+    """Visitor analytics for the admin page (superuser-only). ?days=30
+
+    Unique/returning visitors, session view time, daily series, top pages,
+    and the per-visitor list. Superusers' own logged-in browsing is excluded
+    so the team doesn't inflate its own numbers (their pre-login anonymous
+    views are indistinguishable and still count).
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    from django.db.models import Count, F, Max, Min, Q
+    from django.db.models.functions import TruncDate
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    qs = PageView.objects.filter(created_at__gte=since).exclude(user__is_superuser=True)
+
+    total_views = qs.count()
+    unique_visitors = qs.values("anon_id").distinct().count()
+    signed_in_visitors = qs.filter(user__isnull=False).values("user_id").distinct().count()
+
+    # Returning = active on 2+ distinct calendar days in the window.
+    returning = (
+        qs.annotate(d=TruncDate("created_at"))
+        .values("anon_id")
+        .annotate(days_active=Count("d", distinct=True))
+        .filter(days_active__gte=2)
+        .count()
+    )
+
+    # Sessions: duration = newest last_seen - earliest created per session.
+    sessions = list(
+        qs.values("session_id")
+        .annotate(start=Min("created_at"), end=Max("last_seen_at"), views=Count("id"))
+    )
+    durations = [max(0.0, (s["end"] - s["start"]).total_seconds()) for s in sessions]
+    total_sessions = len(sessions)
+    avg_session_seconds = round(sum(durations) / total_sessions) if total_sessions else None
+    total_time_seconds = round(sum(durations))
+    views_per_session = round(total_views / total_sessions, 1) if total_sessions else None
+
+    # Daily series (dense axis, like admin_analytics).
+    start_date = since.date()
+    axis = [str(start_date + timedelta(days=i)) for i in range(days + 1)]
+    daily_rows = (
+        qs.annotate(d=TruncDate("created_at"))
+        .values("d")
+        .annotate(views=Count("id"), visitors=Count("anon_id", distinct=True))
+        .order_by("d")
+    )
+    by_day = {str(r["d"]): r for r in daily_rows}
+    daily = [
+        {"date": d, "views": by_day.get(d, {}).get("views", 0),
+         "visitors": by_day.get(d, {}).get("visitors", 0)}
+        for d in axis
+    ]
+
+    # Top pages by views, with per-page engaged time.
+    page_rows = list(
+        qs.values("path")
+        .annotate(views=Count("id"), visitors=Count("anon_id", distinct=True))
+        .order_by("-views")[:12]
+    )
+    # Engaged seconds per path (separate pass; duration expressions vary by DB).
+    top_paths = [r["path"] for r in page_rows]
+    time_by_path: dict[str, float] = {p: 0.0 for p in top_paths}
+    for pv in qs.filter(path__in=top_paths).values("path", "created_at", "last_seen_at"):
+        time_by_path[pv["path"]] += max(0.0, (pv["last_seen_at"] - pv["created_at"]).total_seconds())
+    pages = [
+        {**r, "avg_seconds": round(time_by_path[r["path"]] / r["views"]) if r["views"] else 0}
+        for r in page_rows
+    ]
+
+    # Per-visitor list, newest activity first. Max("user__email") picks the
+    # identified email if any row in the group has one (aggregates skip NULLs).
+    visitor_rows = list(
+        qs.values("anon_id")
+        .annotate(
+            email=Max("user__email"),
+            first_seen=Min("created_at"),
+            last_seen=Max("last_seen_at"),
+            views=Count("id"),
+            sessions=Count("session_id", distinct=True),
+            days_active=Count(TruncDate("created_at"), distinct=True),
+        )
+        .order_by("-last_seen")[:200]
+    )
+    # Total engaged time per visitor (only for the rows we're returning).
+    ids = [v["anon_id"] for v in visitor_rows]
+    time_by_anon: dict[str, float] = {a: 0.0 for a in ids}
+    for pv in qs.filter(anon_id__in=ids).values("anon_id", "created_at", "last_seen_at"):
+        time_by_anon[pv["anon_id"]] += max(0.0, (pv["last_seen_at"] - pv["created_at"]).total_seconds())
+    visitors = [
+        {
+            "anon_id": v["anon_id"],
+            "email": v["email"],
+            "first_seen": v["first_seen"].isoformat(),
+            "last_seen": v["last_seen"].isoformat(),
+            "views": v["views"],
+            "sessions": v["sessions"],
+            "days_active": v["days_active"],
+            "returning": v["days_active"] >= 2,
+            "total_seconds": round(time_by_anon[v["anon_id"]]),
+        }
+        for v in visitor_rows
+    ]
+
+    return no_store(JsonResponse({
+        "days": days,
+        "totals": {
+            "views": total_views,
+            "unique_visitors": unique_visitors,
+            "signed_in_visitors": signed_in_visitors,
+            "returning_visitors": returning,
+            "sessions": total_sessions,
+            "avg_session_seconds": avg_session_seconds,
+            "views_per_session": views_per_session,
+            "total_time_seconds": total_time_seconds,
+        },
+        "daily": daily,
+        "pages": pages,
+        "visitors": visitors,
     }))
