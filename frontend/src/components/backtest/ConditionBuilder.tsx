@@ -949,6 +949,25 @@ function ExpandedArgsEditor({
               );
             }
 
+            if (param === "band") {
+              return (
+                <div key={param} className="flex items-center gap-1" title="Which Bollinger Band this condition compares against">
+                  <span className="text-[10px] text-muted-foreground font-medium">{param}:</span>
+                  <select
+                    value={String(val ?? "upper")}
+                    onChange={(e) =>
+                      onChange({ ...side, args: { ...side.args, [param]: e.target.value } })
+                    }
+                    className="h-6 px-1.5 rounded border border-border/50 bg-background text-[11px] font-mono text-foreground outline-none focus:border-primary/50 transition-colors cursor-pointer"
+                  >
+                    {["upper", "middle", "lower"].map((b) => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            }
+
             const domain = getParamDomain(param);
             return (
               <div key={param} className="flex items-center gap-1">

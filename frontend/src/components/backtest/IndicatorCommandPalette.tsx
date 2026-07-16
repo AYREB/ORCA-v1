@@ -197,6 +197,16 @@ export default function IndicatorCommandPalette({
                       <option key={tf} value={tf}>{tf}</option>
                     ))}
                   </select>
+                ) : param === "band" ? (
+                  <select
+                    value={String(val ?? "upper")}
+                    onChange={(e) => setConfigArgs({ ...configArgs, [param]: e.target.value })}
+                    className="bg-transparent text-[11px] font-mono outline-none w-16 text-foreground"
+                  >
+                    {["upper", "middle", "lower"].map((b) => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
                 ) : (
                   <input
                     ref={i === 0 ? firstArgRef : undefined}
