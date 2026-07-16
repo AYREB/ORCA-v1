@@ -599,6 +599,37 @@ export interface AdminVisitors {
   visitors: AdminVisitorRow[];
 }
 
+export interface AdminAiCosts {
+  days: number;
+  totals: {
+    cost: number;
+    calls: number;
+    tokens: number;
+    cost_per_call: number | null;
+    daily_avg_cost: number;
+  };
+  by_provider: Record<string, { calls: number; tokens: number; cost: number }>;
+  by_kind: Record<string, number>;
+  daily: { date: string; cost: number }[];
+  top_users: { email: string; calls: number; tokens: number; cost: number }[];
+  rates: Record<string, number>;
+}
+
+export interface AdminStrategyInsights {
+  days: number;
+  total_runs: number;
+  tickers: Record<string, number>;
+  indicators: Record<string, number>;
+  timeframes: Record<string, number>;
+  directions: Record<string, number>;
+  ticker_performance: {
+    ticker: string;
+    runs: number;
+    profitable_rate: number | null;
+    avg_return_pct: number | null;
+  }[];
+}
+
 export interface AdminOnlineVisitor {
   anon_id: string;
   email: string | null;
@@ -908,6 +939,14 @@ class DjangoAPI {
 
   async getAdminOnline(): Promise<AdminOnline> {
     return this.request<AdminOnline>('/admin/online/');
+  }
+
+  async getAdminAiCosts(days = 30): Promise<AdminAiCosts> {
+    return this.request<AdminAiCosts>(`/admin/ai-costs/?days=${days}`);
+  }
+
+  async getAdminStrategyInsights(days = 30): Promise<AdminStrategyInsights> {
+    return this.request<AdminStrategyInsights>(`/admin/strategy-insights/?days=${days}`);
   }
 
   async getAdminFunnel(days = 30): Promise<AdminFunnel> {

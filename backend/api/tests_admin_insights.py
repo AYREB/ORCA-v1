@@ -112,3 +112,84 @@ class AdminAiQualityTests(AdminInsightsTestBase):
         self.assertIsNone(data["totals"]["parse_success_rate"])
         self.assertIsNone(data["totals"]["clean_run_rate"])
         self.assertEqual(data["problems"], [])
+
+
+class AdminAiCostsTests(AdminInsightsTestBase):
+    def test_cost_model_per_provider(self):
+        from .models import AIInteractionLog
+        u = User.objects.create_user(username="c1", email="c1@x.com", password="pw12345!")
+        # Modal: 10 GPU-seconds at the default rate.
+        AIInteractionLog.objects.create(
+            user=u, kind="nl_parse", provider="modal", latency_ms=10_000, success=True)
+        # OpenAI: 1M input + 1M output tokens at default rates -> 0.15 + 0.60.
+        AIInteractionLog.objects.create(
+            user=u, kind="indicator_assistant", provider="openai", success=True,
+            prompt_tokens=1_000_000, completion_tokens=1_000_000, total_tokens=2_000_000)
+        # Ollama: free.
+        AIInteractionLog.objects.create(
+            user=u, kind="indicator_assistant", provider="ollama", success=True,
+            total_tokens=500, latency_ms=2000)
+
+        data = json.loads(self.get("/api/admin/ai-costs/?days=30").content)
+        self.assertEqual(data["totals"]["calls"], 3)
+        self.assertEqual(data["totals"]["tokens"], 2_000_500)
+        self.assertAlmostEqual(data["by_provider"]["modal"]["cost"], 10 * 0.000306, places=4)
+        self.assertAlmostEqual(data["by_provider"]["openai"]["cost"], 0.75, places=4)
+        self.assertEqual(data["by_provider"]["ollama"]["cost"], 0)
+        self.assertAlmostEqual(
+            data["totals"]["cost"], 10 * 0.000306 + 0.75, places=4)
+        self.assertEqual(data["top_users"][0]["email"], "c1@x.com")
+        self.assertIn("modal_gpu_per_second", data["rates"])
+
+    def test_requires_superuser(self):
+        pleb = User.objects.create_user(username="c2", email="c2@x.com", password="pw12345!")
+        token = Token.objects.create(user=pleb)
+        resp = self.client.get("/api/admin/ai-costs/", HTTP_AUTHORIZATION=f"Token {token.key}")
+        self.assertEqual(resp.status_code, 403)
+
+
+class AdminStrategyInsightsTests(AdminInsightsTestBase):
+    def test_mines_dsl_for_usage_and_performance(self):
+        u = User.objects.create_user(username="s1", email="s1@x.com", password="pw12345!")
+        dsl = {
+            "LONG": {
+                "context": {"tickers": ["AAPL", "MSFT"], "execution_timeframe": "1h"},
+                "OPEN": {"CONDITIONS": {
+                    "left": {"func": "RSI", "arg": {"period": 14, "timeframe": "1h"}},
+                    "operator": "<", "right": {"value": 30}}},
+                # Same indicator twice in one run must still count once.
+                "CLOSE": {"CONDITIONS": {
+                    "left": {"func": "RSI", "arg": {"period": 14, "timeframe": "4h"}},
+                    "operator": ">", "right": {"value": 70}}},
+            }
+        }
+        BacktestRun.objects.create(
+            user=u, pct_change=5.0, final_balance=10500, cash=10500, invested=0,
+            dsl_json=dsl, config={"tickers": ["AAPL", "MSFT"]})
+        short_dsl = {
+            "SHORT": {
+                "context": {"tickers": ["SPY"], "execution_timeframe": "1D"},
+                "OPEN": {"CONDITIONS": {
+                    "left": {"func": "SMA", "arg": {"period": 50, "timeframe": "1D"}},
+                    "operator": "<", "right": {"value": 400}}},
+            }
+        }
+        BacktestRun.objects.create(
+            user=u, pct_change=-2.0, final_balance=9800, cash=9800, invested=0,
+            dsl_json=short_dsl, config={"tickers": ["SPY"]})
+
+        data = json.loads(self.get("/api/admin/strategy-insights/?days=30").content)
+        self.assertEqual(data["total_runs"], 2)
+        self.assertEqual(data["tickers"], {"AAPL": 1, "MSFT": 1, "SPY": 1})
+        self.assertEqual(data["indicators"], {"RSI": 1, "SMA": 1})
+        # Counted once per run: run 1 uses 1h+4h, run 2 uses 1D (in context and
+        # indicator args, still one run).
+        self.assertEqual(data["timeframes"], {"1h": 1, "4h": 1, "1D": 1})
+        self.assertEqual(data["directions"], {"LONG": 1, "SHORT": 1})
+
+        perf = {t["ticker"]: t for t in data["ticker_performance"]}
+        self.assertEqual(perf["AAPL"]["runs"], 1)
+        self.assertEqual(perf["AAPL"]["profitable_rate"], 1.0)
+        self.assertEqual(perf["AAPL"]["avg_return_pct"], 5.0)
+        self.assertEqual(perf["SPY"]["profitable_rate"], 0.0)
+        self.assertEqual(perf["SPY"]["avg_return_pct"], -2.0)

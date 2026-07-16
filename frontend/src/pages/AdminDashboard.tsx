@@ -3,7 +3,7 @@ import {
   Shield, Users, Bot, FlaskConical, Sigma, MessageSquare, Search, Loader2,
   ChevronRight, Clock, CheckCircle2, XCircle, Sliders, TrendingUp, TrendingDown,
   Download, Copy, Eye, Repeat, Filter, BrainCircuit, AlertTriangle,
-  ArrowUp, ArrowDown, ArrowUpDown, Gauge,
+  ArrowUp, ArrowDown, ArrowUpDown, Gauge, DollarSign, Hammer,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis,
@@ -22,6 +22,7 @@ import {
   api, AdminOverview, AdminAnalytics, AdminUserSummary, AdminUserDetail,
   AdminAiInteraction, AdminBacktestRow, AdminOptimization, TimePoint, AdminFeedback,
   AdminVisitors, AdminFunnel, AdminAiQuality, AdminAiProblem, AdminOnline,
+  AdminAiCosts, AdminStrategyInsights,
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -44,6 +45,11 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 const fmtNum = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString());
+const fmtMoney = (v: number | null | undefined) => {
+  if (v == null) return "—";
+  if (v > 0 && v < 0.01) return "<$0.01";
+  return `$${v.toFixed(2)}`;
+};
 const fmtDuration = (secs: number | null | undefined) => {
   if (secs == null) return "—";
   const s = Math.round(secs);
@@ -464,6 +470,8 @@ const AdminDashboard = () => {
   const [funnel, setFunnel] = useState<AdminFunnel | null>(null);
   const [aiQuality, setAiQuality] = useState<AdminAiQuality | null>(null);
   const [online, setOnline] = useState<AdminOnline | null>(null);
+  const [aiCosts, setAiCosts] = useState<AdminAiCosts | null>(null);
+  const [insights, setInsights] = useState<AdminStrategyInsights | null>(null);
   const [userSort, setUserSort] = useState<{ key: UserSortKey; dir: "asc" | "desc" }>({ key: "joined", dir: "desc" });
   const [nearLimitOnly, setNearLimitOnly] = useState(false);
 
@@ -489,6 +497,8 @@ const AdminDashboard = () => {
     api.getAdminVisitors(days).then((v) => { if (alive) setVisitors(v); }).catch(() => {});
     api.getAdminFunnel(days).then((f) => { if (alive) setFunnel(f); }).catch(() => {});
     api.getAdminAiQuality(days).then((q) => { if (alive) setAiQuality(q); }).catch(() => {});
+    api.getAdminAiCosts(days).then((c) => { if (alive) setAiCosts(c); }).catch(() => {});
+    api.getAdminStrategyInsights(days).then((s) => { if (alive) setInsights(s); }).catch(() => {});
     return () => { alive = false; };
   }, [days]);
 
@@ -694,6 +704,120 @@ const AdminDashboard = () => {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* AI costs + what people build */}
+          <div className="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <div>
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                <DollarSign className="h-4 w-4" /> AI costs
+                <span className="text-xs font-normal text-muted-foreground">(estimated · last {days}d)</span>
+              </div>
+              {aiCosts ? (
+                <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Metric label="Total est." value={fmtMoney(aiCosts.totals.cost)} />
+                    <Metric label="Per day" value={fmtMoney(aiCosts.totals.daily_avg_cost)} />
+                    <Metric label="Calls" value={fmtNum(aiCosts.totals.calls)} />
+                    <Metric label="Tokens" value={fmtNum(aiCosts.totals.tokens)} />
+                  </div>
+                  <div className="mt-3 space-y-1.5">
+                    {Object.entries(aiCosts.by_provider).map(([p, v]) => (
+                      <div key={p} className="flex items-center justify-between text-xs">
+                        <span className="font-medium capitalize">{p}</span>
+                        <span className="tabular-nums text-muted-foreground">
+                          {fmtNum(v.calls)} calls · {fmtNum(v.tokens)} tok · {fmtMoney(v.cost)}
+                        </span>
+                      </div>
+                    ))}
+                    {Object.keys(aiCosts.by_kind).length > 0 && <div className="border-t border-border/40 pt-1.5" />}
+                    {Object.entries(aiCosts.by_kind).map(([k, v]) => (
+                      <div key={k} className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">{KIND_LABEL[k] ?? k}</span>
+                        <span className="tabular-nums text-muted-foreground">{fmtMoney(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {aiCosts.top_users.length > 0 && (
+                    <details className="mt-3">
+                      <summary className="cursor-pointer text-xs text-muted-foreground">
+                        Top users by cost ({aiCosts.top_users.length})
+                      </summary>
+                      <div className="mt-1.5 space-y-1">
+                        {aiCosts.top_users.map((u) => (
+                          <div key={u.email} className="flex items-center justify-between text-xs">
+                            <span className="truncate">{u.email}</span>
+                            <span className="shrink-0 tabular-nums text-muted-foreground">
+                              {fmtNum(u.calls)} calls · {fmtMoney(u.cost)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  <p className="mt-3 text-[11px] text-muted-foreground">
+                    Estimates: Modal billed as GPU-seconds ({`$${aiCosts.rates.modal_gpu_per_second}/s`}),
+                    OpenAI by tokens, self-hosted (Ollama) as $0. Adjust rates via
+                    <span className="font-mono"> ADMIN_AI_COST_RATES</span> in settings.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border/50 bg-card/55 py-10 text-center backdrop-blur-xl">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                <Hammer className="h-4 w-4" /> What people build
+                <span className="text-xs font-normal text-muted-foreground">
+                  ({insights ? fmtNum(insights.total_runs) : "…"} backtests · last {days}d)
+                </span>
+              </div>
+              {insights ? (
+                <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Metric label="Long strategies" value={fmtNum(insights.directions.LONG ?? 0)} />
+                    <Metric label="Short strategies" value={fmtNum(insights.directions.SHORT ?? 0)} />
+                  </div>
+                  {insights.ticker_performance.length === 0 ? (
+                    <p className="py-8 text-center text-xs text-muted-foreground">No backtests in this window.</p>
+                  ) : (
+                    <div className="mt-3">
+                      <div className="mb-1 grid grid-cols-4 gap-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <span>Ticker</span><span className="text-right">Runs</span>
+                        <span className="text-right">Profitable</span><span className="text-right">Avg return</span>
+                      </div>
+                      <div className="space-y-1">
+                        {insights.ticker_performance.map((t) => (
+                          <div key={t.ticker} className="grid grid-cols-4 gap-2 text-xs">
+                            <span className="font-mono font-medium">{t.ticker}</span>
+                            <span className="text-right tabular-nums">{fmtNum(t.runs)}</span>
+                            <span className="text-right tabular-nums text-muted-foreground">{fmtPct(t.profitable_rate)}</span>
+                            <span className={`text-right tabular-nums ${t.avg_return_pct != null && t.avg_return_pct >= 0 ? "text-emerald-500" : "text-destructive"}`}>
+                              {t.avg_return_pct != null ? `${t.avg_return_pct}%` : "—"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border/50 bg-card/55 py-10 text-center backdrop-blur-xl">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {insights && insights.total_runs > 0 && (
+            <div className="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-3">
+              <CategoryBars title="Most-tested tickers" data={insights.tickers} />
+              <CategoryBars title="Most-used indicators" data={insights.indicators} />
+              <CategoryBars title="Most-used timeframes" data={insights.timeframes} />
             </div>
           )}
 

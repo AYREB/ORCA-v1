@@ -4164,3 +4164,231 @@ def admin_ai_quality(request):
         "daily": daily,
         "problems": problems,
     }))
+
+
+# Estimated AI spend rates. Override any key via settings.ADMIN_AI_COST_RATES.
+# Modal bills GPU-time, not tokens — latency is the best available proxy.
+DEFAULT_AI_COST_RATES = {
+    "modal_gpu_per_second": 0.000306,   # A10G on-demand ≈ $1.10/hr
+    "openai_per_1m_input": 0.15,        # gpt-4o-mini class defaults
+    "openai_per_1m_output": 0.60,
+}
+
+
+def _ai_call_cost(provider: str, latency_ms, prompt_tokens, completion_tokens, rates) -> float:
+    provider = (provider or "").lower()
+    if provider == "modal":
+        return max(0.0, float(latency_ms or 0)) / 1000.0 * rates["modal_gpu_per_second"]
+    if provider == "openai":
+        return (
+            max(0, int(prompt_tokens or 0)) / 1e6 * rates["openai_per_1m_input"]
+            + max(0, int(completion_tokens or 0)) / 1e6 * rates["openai_per_1m_output"]
+        )
+    return 0.0  # ollama / unknown: self-hosted, no marginal cost
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_ai_costs(request):
+    """Estimated AI spend (superuser-only). ?days=30
+
+    Modal calls are costed by GPU-seconds (latency x rate), OpenAI calls by
+    tokens, Ollama/self-hosted as zero marginal cost. Rates are configurable
+    via settings.ADMIN_AI_COST_RATES and echoed in the response so the admin
+    page can label the numbers as the estimates they are.
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    rates = {**DEFAULT_AI_COST_RATES, **getattr(settings, "ADMIN_AI_COST_RATES", {})}
+
+    logs = AIInteractionLog.objects.filter(created_at__gte=since).values(
+        "user__email", "provider", "kind", "latency_ms",
+        "prompt_tokens", "completion_tokens", "total_tokens", "created_at",
+    )
+
+    total_cost = 0.0
+    total_tokens = 0
+    calls = 0
+    by_provider: dict[str, dict] = {}
+    by_kind: dict[str, float] = {}
+    by_user: dict[str, dict] = {}
+    by_day: dict[str, float] = {}
+
+    for log in logs:
+        cost = _ai_call_cost(
+            log["provider"], log["latency_ms"], log["prompt_tokens"], log["completion_tokens"], rates)
+        tokens = int(log["total_tokens"] or 0)
+        provider = (log["provider"] or "unknown").lower()
+        kind = log["kind"] or "other"
+        email = log["user__email"] or "deleted user"
+        day = str(log["created_at"].date())
+
+        calls += 1
+        total_cost += cost
+        total_tokens += tokens
+        p = by_provider.setdefault(provider, {"calls": 0, "cost": 0.0, "tokens": 0})
+        p["calls"] += 1
+        p["cost"] += cost
+        p["tokens"] += tokens
+        by_kind[kind] = by_kind.get(kind, 0.0) + cost
+        u = by_user.setdefault(email, {"calls": 0, "cost": 0.0, "tokens": 0})
+        u["calls"] += 1
+        u["cost"] += cost
+        u["tokens"] += tokens
+        by_day[day] = by_day.get(day, 0.0) + cost
+
+    start_date = since.date()
+    axis = [str(start_date + timedelta(days=i)) for i in range(days + 1)]
+    daily = [{"date": d, "cost": round(by_day.get(d, 0.0), 4)} for d in axis]
+
+    top_users = sorted(
+        ({"email": e, **v, "cost": round(v["cost"], 4)} for e, v in by_user.items()),
+        key=lambda r: r["cost"], reverse=True,
+    )[:15]
+
+    return no_store(JsonResponse({
+        "days": days,
+        "totals": {
+            "cost": round(total_cost, 4),
+            "calls": calls,
+            "tokens": total_tokens,
+            "cost_per_call": round(total_cost / calls, 5) if calls else None,
+            "daily_avg_cost": round(total_cost / days, 4),
+        },
+        "by_provider": {
+            k: {"calls": v["calls"], "tokens": v["tokens"], "cost": round(v["cost"], 4)}
+            for k, v in by_provider.items()
+        },
+        "by_kind": {k: round(v, 4) for k, v in sorted(by_kind.items(), key=lambda kv: -kv[1])},
+        "daily": daily,
+        "top_users": top_users,
+        "rates": rates,
+    }))
+
+
+def _collect_dsl_usage(dsl_json) -> tuple[set, set, set, str | None]:
+    """(tickers, indicator names, timeframes, direction) referenced by one
+    strategy's DSL — each counted once per run, however often it appears."""
+    tickers: set = set()
+    indicators: set = set()
+    timeframes: set = set()
+    direction = None
+    if not isinstance(dsl_json, dict):
+        return tickers, indicators, timeframes, direction
+
+    for side in ("LONG", "SHORT"):
+        if side not in dsl_json:
+            continue
+        direction = side if direction is None else direction
+        ctx = dsl_json[side].get("context") if isinstance(dsl_json[side], dict) else None
+        if isinstance(ctx, dict):
+            tickers.update(str(t).upper() for t in (ctx.get("tickers") or []) if t)
+            tf = ctx.get("execution_timeframe")
+            if isinstance(tf, list):
+                tf = tf[0] if tf else None
+            if tf:
+                timeframes.add(str(tf))
+
+    def walk(node):
+        if isinstance(node, dict):
+            f = node.get("func")
+            if isinstance(f, str) and f:
+                indicators.add(f.upper())
+            arg = node.get("arg")
+            if isinstance(arg, dict):
+                tf = arg.get("timeframe")
+                if tf:
+                    timeframes.add(str(tf))
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for x in node:
+                walk(x)
+
+    walk(dsl_json)
+    return tickers, indicators, timeframes, direction
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_strategy_insights(request):
+    """What users actually build (superuser-only). ?days=30
+
+    Mines every backtest's captured DSL for the tickers, indicators, and
+    timeframes used (each counted once per run), long/short split, and
+    per-ticker outcomes.
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    runs = BacktestRun.objects.filter(created_at__gte=since).values(
+        "dsl_json", "config", "pct_change")[:5000]
+
+    from collections import Counter
+
+    ticker_counts: Counter = Counter()
+    indicator_counts: Counter = Counter()
+    timeframe_counts: Counter = Counter()
+    directions: Counter = Counter()
+    ticker_outcomes: dict[str, dict] = {}
+    total_runs = 0
+
+    for run in runs:
+        total_runs += 1
+        tickers, indicators, timeframes, direction = _collect_dsl_usage(run["dsl_json"])
+        # config.tickers is what the engine actually loaded — most reliable.
+        cfg = run["config"] if isinstance(run["config"], dict) else {}
+        tickers.update(str(t).upper() for t in (cfg.get("tickers") or []) if t)
+
+        ticker_counts.update(tickers)
+        indicator_counts.update(indicators)
+        timeframe_counts.update(timeframes)
+        if direction:
+            directions[direction] += 1
+
+        pct = float(run["pct_change"] or 0)
+        for t in tickers:
+            o = ticker_outcomes.setdefault(t, {"runs": 0, "profitable": 0, "sum_pct": 0.0})
+            o["runs"] += 1
+            o["sum_pct"] += pct
+            if pct > 0:
+                o["profitable"] += 1
+
+    ticker_performance = [
+        {
+            "ticker": t,
+            "runs": o["runs"],
+            "profitable_rate": round(o["profitable"] / o["runs"], 4) if o["runs"] else None,
+            "avg_return_pct": round(o["sum_pct"] / o["runs"], 2) if o["runs"] else None,
+        }
+        for t, o in sorted(ticker_outcomes.items(), key=lambda kv: -kv[1]["runs"])[:12]
+    ]
+
+    return no_store(JsonResponse({
+        "days": days,
+        "total_runs": total_runs,
+        "tickers": dict(ticker_counts.most_common(12)),
+        "indicators": dict(indicator_counts.most_common(12)),
+        "timeframes": dict(timeframe_counts.most_common(8)),
+        "directions": dict(directions),
+        "ticker_performance": ticker_performance,
+    }))
