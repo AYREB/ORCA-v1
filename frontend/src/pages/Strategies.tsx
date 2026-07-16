@@ -389,7 +389,7 @@ const Strategies = () => {
           </DialogHeader>
           {selectedStrategy?.lastResult ? (
             <Tabs defaultValue="numerical" className="w-full">
-              <TabsList className="mb-4 bg-card/50 border border-border">
+              <TabsList className="flex w-full justify-start overflow-x-auto md:inline-flex md:w-auto mb-4 bg-card/50 border border-border">
                 <TabsTrigger value="numerical">
                   <BarChart3 className="h-4 w-4 mr-2" />
                   Numerical

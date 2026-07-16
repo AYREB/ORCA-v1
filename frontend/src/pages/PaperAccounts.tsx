@@ -1735,7 +1735,7 @@ const PaperAccounts = () => {
                   </Card>
 
                   <Tabs value={activeAccountTab} onValueChange={setActiveAccountTab} className="w-full" key={selectedAccount.id}>
-                    <TabsList className="mb-4 border border-border bg-card/50 p-1">
+                    <TabsList className="flex w-full justify-start overflow-x-auto md:inline-flex md:w-auto mb-4 border border-border bg-card/50 p-1">
                       <TabsTrigger value="overview" className="data-[state=active]:bg-primary/20">
                         Overview
                       </TabsTrigger>
@@ -2248,7 +2248,7 @@ const PaperAccounts = () => {
 
                             {latestRun.result ? (
                               <Tabs defaultValue="numerical" className="w-full" key={latestRun.id}>
-                                <TabsList className="border border-border bg-card/50 p-1">
+                                <TabsList className="flex w-full justify-start overflow-x-auto md:inline-flex md:w-auto border border-border bg-card/50 p-1">
                                   <TabsTrigger value="numerical" className="data-[state=active]:bg-primary/20">
                                     Trades & Stats
                                   </TabsTrigger>

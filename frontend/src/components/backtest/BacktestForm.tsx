@@ -1031,7 +1031,7 @@ const BacktestForm = ({ onRunBacktest, onDslChange, showActions = true, initialD
                           ))}
                         </div>
                         {/* Fee values: percentage + optional flat fee per order */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <Input
                             type="number"
                             min="0"

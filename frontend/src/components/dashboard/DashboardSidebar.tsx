@@ -12,7 +12,8 @@ import {
   Sigma,
   CandlestickChart,
   Sparkles,
-  Shield
+  Shield,
+  X
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,9 @@ import { useAuth } from "@/context/AuthContext";
 interface DashboardSidebarProps {
   isCollapsed: boolean;
   onToggle: () => void;
+  /** Mobile: drawer visibility (sidebar is off-canvas below md). */
+  mobileOpen: boolean;
+  onMobileClose: () => void;
 }
 
 const navItems = [
@@ -42,7 +46,7 @@ const bottomItems = [
   { icon: HelpCircle, label: "Help", path: "/dashboard/help" },
 ];
 
-const DashboardSidebar = ({ isCollapsed, onToggle }: DashboardSidebarProps) => {
+const DashboardSidebar = ({ isCollapsed, onToggle, mobileOpen, onMobileClose }: DashboardSidebarProps) => {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
 
@@ -51,31 +55,36 @@ const DashboardSidebar = ({ isCollapsed, onToggle }: DashboardSidebarProps) => {
     navigate("/");
   };
 
+  // Below md the sidebar is an off-canvas drawer: always full width with
+  // labels (collapse is a desktop concept), closed by default, slides in
+  // over a backdrop. md+ is exactly the previous fixed sidebar.
+
   return (
     <aside
-      className={`fixed left-0 top-0 z-40 h-screen border-r border-border/60 bg-card/55 backdrop-blur-xl transition-all duration-300 ${
-        isCollapsed ? "w-16" : "w-64"
-      }`}
+      className={`fixed left-0 top-0 z-40 h-screen border-r border-border/60 bg-card/95 backdrop-blur-xl transition-all duration-300 md:bg-card/55 ${
+        mobileOpen ? "translate-x-0" : "-translate-x-full"
+      } md:translate-x-0 w-64 ${isCollapsed ? "md:w-16" : "md:w-64"}`}
     >
       <div className="flex h-full flex-col">
         {/* Logo */}
         <div className="flex h-16 items-center justify-between border-b border-border/60 px-4">
-          {!isCollapsed && (
-            <div className="flex items-center gap-2.5">
-              <div className="relative">
-                <div className="absolute inset-0 rounded-lg bg-primary/20 blur-md" />
-                <img src={orcaLogo} alt="Orca Logo" className="relative h-8 w-8 rounded-lg" />
-              </div>
-              <span className="text-lg font-bold tracking-tight">Orca</span>
+          <div className={`flex items-center gap-2.5 ${isCollapsed ? "md:hidden" : ""}`}>
+            <div className="relative">
+              <div className="absolute inset-0 rounded-lg bg-primary/20 blur-md" />
+              <img src={orcaLogo} alt="Orca Logo" className="relative h-8 w-8 rounded-lg" />
             </div>
-          )}
+            <span className="text-lg font-bold tracking-tight">Orca</span>
+          </div>
           <Button
             variant="ghost"
             size="icon"
             onClick={onToggle}
-            className={`h-8 w-8 ${isCollapsed ? "mx-auto" : ""}`}
+            className={`hidden h-8 w-8 md:flex ${isCollapsed ? "md:mx-auto" : ""}`}
           >
             <ChevronLeft className={`h-4 w-4 transition-transform ${isCollapsed ? "rotate-180" : ""}`} />
+          </Button>
+          <Button variant="ghost" size="icon" onClick={onMobileClose} className="h-8 w-8 md:hidden">
+            <X className="h-4 w-4" />
           </Button>
         </div>
 
@@ -87,21 +96,22 @@ const DashboardSidebar = ({ isCollapsed, onToggle }: DashboardSidebarProps) => {
               to={item.path}
               end={item.path === "/dashboard"}
               title={isCollapsed ? item.label : undefined}
+              onClick={onMobileClose}
               className={`group flex items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all duration-200 hover:bg-secondary/80 hover:text-foreground ${
-                isCollapsed ? "justify-center" : ""
+                isCollapsed ? "md:justify-center" : ""
               }`}
               activeClassName="bg-primary/10 text-primary border border-primary/20 shadow-[0_0_16px_-6px_hsl(var(--primary)/0.45)]"
             >
               <item.icon className="h-4 w-4 flex-shrink-0 transition-transform duration-200 group-hover:scale-110" />
-              {!isCollapsed && <span className="text-sm font-medium">{item.label}</span>}
+              <span className={`text-sm font-medium ${isCollapsed ? "md:hidden" : ""}`}>{item.label}</span>
             </NavLink>
           ))}
         </nav>
 
         {/* Bottom items */}
         <div className="space-y-1 border-t border-border/60 px-2 py-4">
-          {!isCollapsed && user && (
-            <div className="mb-2 flex items-center gap-3 rounded-lg border border-border/60 bg-background/40 px-3 py-2.5">
+          {user && (
+            <div className={`mb-2 flex items-center gap-3 rounded-lg border border-border/60 bg-background/40 px-3 py-2.5 ${isCollapsed ? "md:hidden" : ""}`}>
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-primary">
                 {(user.name || user.email || "?").charAt(0).toUpperCase()}
               </div>
@@ -123,13 +133,14 @@ const DashboardSidebar = ({ isCollapsed, onToggle }: DashboardSidebarProps) => {
             <NavLink
               to="/dashboard/admin"
               title={isCollapsed ? "Admin" : undefined}
+              onClick={onMobileClose}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 text-amber-500/90 transition-colors hover:bg-amber-500/10 hover:text-amber-500 ${
-                isCollapsed ? "justify-center" : ""
+                isCollapsed ? "md:justify-center" : ""
               }`}
               activeClassName="bg-amber-500/10 text-amber-500 border border-amber-500/20"
             >
               <Shield className="h-4 w-4 flex-shrink-0" />
-              {!isCollapsed && <span className="text-sm font-medium">Admin</span>}
+              <span className={`text-sm font-medium ${isCollapsed ? "md:hidden" : ""}`}>Admin</span>
             </NavLink>
           )}
 
@@ -138,13 +149,14 @@ const DashboardSidebar = ({ isCollapsed, onToggle }: DashboardSidebarProps) => {
               key={item.path}
               to={item.path}
               title={isCollapsed ? item.label : undefined}
+              onClick={onMobileClose}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground ${
-                isCollapsed ? "justify-center" : ""
+                isCollapsed ? "md:justify-center" : ""
               }`}
               activeClassName="bg-primary/10 text-primary border border-primary/20"
             >
               <item.icon className="h-4 w-4 flex-shrink-0" />
-              {!isCollapsed && <span className="text-sm font-medium">{item.label}</span>}
+              <span className={`text-sm font-medium ${isCollapsed ? "md:hidden" : ""}`}>{item.label}</span>
             </NavLink>
           ))}
 
@@ -152,11 +164,11 @@ const DashboardSidebar = ({ isCollapsed, onToggle }: DashboardSidebarProps) => {
             onClick={handleLogout}
             title={isCollapsed ? "Logout" : undefined}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive ${
-              isCollapsed ? "justify-center" : ""
+              isCollapsed ? "md:justify-center" : ""
             }`}
           >
             <LogOut className="h-4 w-4 flex-shrink-0" />
-            {!isCollapsed && <span className="text-sm font-medium">Logout</span>}
+            <span className={`text-sm font-medium ${isCollapsed ? "md:hidden" : ""}`}>Logout</span>
           </button>
         </div>
       </div>
