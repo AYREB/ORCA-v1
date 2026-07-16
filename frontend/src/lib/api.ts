@@ -599,6 +599,17 @@ export interface AdminVisitors {
   visitors: AdminVisitorRow[];
 }
 
+export interface AdminOnlineVisitor {
+  anon_id: string;
+  email: string | null;
+  path: string;
+  last_seen: string;
+}
+export interface AdminOnline {
+  count: number;
+  visitors: AdminOnlineVisitor[];
+}
+
 export interface AdminFunnelStage {
   key: string;
   label: string;
@@ -893,6 +904,10 @@ class DjangoAPI {
 
   async getAdminVisitors(days = 30): Promise<AdminVisitors> {
     return this.request<AdminVisitors>(`/admin/visitors/?days=${days}`);
+  }
+
+  async getAdminOnline(): Promise<AdminOnline> {
+    return this.request<AdminOnline>('/admin/online/');
   }
 
   async getAdminFunnel(days = 30): Promise<AdminFunnel> {

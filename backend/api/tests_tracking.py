@@ -132,3 +132,33 @@ class AdminVisitorsTests(TestCase):
         self.assertEqual(visitors["a" * 8]["email"], "u3@x.com")
         self.assertFalse(visitors["b" * 8]["returning"])
         self.assertGreaterEqual(visitors["a" * 8]["total_seconds"], 90)
+
+
+class AdminOnlineTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.admin = User.objects.create_user(
+            username="admin2", email="admin2@orca.com", password="pw12345!", is_superuser=True)
+        self.token = Token.objects.create(user=self.admin)
+
+    def test_online_counts_recent_heartbeats_only(self):
+        user = User.objects.create_user(username="u9", email="u9@x.com", password="pw12345!")
+        # Fresh heartbeat (online), stale visitor (offline), superuser (excluded).
+        PageView.objects.create(anon_id="live1234", session_id="s1", path="/dashboard", user=user)
+        stale = PageView.objects.create(anon_id="old12345", session_id="s2", path="/")
+        PageView.objects.filter(id=stale.id).update(
+            last_seen_at=timezone.now() - timedelta(minutes=10))
+        PageView.objects.create(anon_id="boss1234", session_id="s3", path="/dashboard/admin", user=self.admin)
+
+        resp = self.client.get("/api/admin/online/", HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        data = json.loads(resp.content)
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["visitors"][0]["anon_id"], "live1234")
+        self.assertEqual(data["visitors"][0]["email"], "u9@x.com")
+        self.assertEqual(data["visitors"][0]["path"], "/dashboard")
+
+    def test_requires_superuser(self):
+        pleb = User.objects.create_user(username="p9", email="p9@x.com", password="pw12345!")
+        token = Token.objects.create(user=pleb)
+        resp = self.client.get("/api/admin/online/", HTTP_AUTHORIZATION=f"Token {token.key}")
+        self.assertEqual(resp.status_code, 403)

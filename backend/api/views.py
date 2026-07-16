@@ -3957,6 +3957,43 @@ def admin_visitors(request):
 @require_methods("GET")
 @token_required
 @rate_limit("general")
+def admin_online(request):
+    """Who is on the site right now (superuser-only). Lightweight — the admin
+    page polls this every 30s. "Online" = a page view or heartbeat in the last
+    2 minutes (heartbeats fire every 20s while a tab is visible)."""
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    cutoff = timezone.now() - timedelta(minutes=2)
+    rows = (
+        PageView.objects.filter(last_seen_at__gte=cutoff)
+        .exclude(user__is_superuser=True)
+        .select_related("user")
+        .order_by("-last_seen_at")[:200]
+    )
+    # Newest row per visitor = where they are right now.
+    seen: set[str] = set()
+    online = []
+    for pv in rows:
+        if pv.anon_id in seen:
+            continue
+        seen.add(pv.anon_id)
+        if len(online) < 50:
+            online.append({
+                "anon_id": pv.anon_id,
+                "email": pv.user.email if pv.user else None,
+                "path": pv.path,
+                "last_seen": pv.last_seen_at.isoformat(),
+            })
+
+    return no_store(JsonResponse({"count": len(seen), "visitors": online}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
 def admin_funnel(request):
     """Conversion funnel (superuser-only). ?days=30
 
