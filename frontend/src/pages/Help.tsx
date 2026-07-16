@@ -291,38 +291,37 @@ const Help = () => {
                       Here's what a complete strategy looks like in DSL format. You can paste this directly into the DSL editor:
                     </p>
                     <pre className="text-xs font-mono bg-muted/50 rounded-md p-3 overflow-x-auto text-foreground leading-relaxed">
-{`:TICKER
-BTCUSDT
+{`:TICKER(BTC-USD)
 
-:DATEFRAME
-2024-01-01 -> 2024-06-01
+:EXECUTION_TIMEFRAME(1h)
 
-:TIMEFRAME
-1h
+:DATEFRAME(2025-06-01, 2026-06-01)
 
-:LONG
-OPEN{
-  CONDITIONS{
-    RSI(period=14, timeframe=1h) < 30
-  }|ARGUMENTS{
-    initialOpenPositionInvestType=percentCashBalance
-    initialOpenPositionInvestAmount=0.1
-    stopLossPercent=6
-    takeProfitPercent=10
-  }
-}
-CLOSE{
-  CONDITIONS{
-    RSI(period=14, timeframe=1h) > 70
-  }
-}`}
+:LONG(
+    OPEN{
+        CONDITIONS{
+            RSI(period=14) < 30
+        }
+        |ARGUMENTS{
+            initialOpenPositionInvestType = percentCashBalance
+            |initialOpenPositionInvestAmount = 0.1
+            |stopLossPercent = 6
+            |takeProfitPercent = 10
+        }
+    }
+    |CLOSE{
+        CONDITIONS{
+            RSI(period=14) > 70
+        }
+    }
+)`}
                     </pre>
                     <div className="mt-3 space-y-1.5 text-xs text-muted-foreground">
-                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">:TICKER</code> — The trading pair to backtest</p>
-                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">:DATEFRAME</code> — Start and end dates separated by <code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">-&gt;</code></p>
-                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">:TIMEFRAME</code> — Candle interval (1m, 5m, 1h, 4h, 1d, etc.)</p>
-                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">:LONG / :SHORT</code> — Direction of the trade</p>
-                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">OPEN / CLOSE</code> — Entry and exit blocks with CONDITIONS and optional ARGUMENTS</p>
+                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">:TICKER(...)</code> — Symbols to trade, comma-separated (e.g. AAPL,MSFT)</p>
+                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">:EXECUTION_TIMEFRAME(...)</code> — Candle interval trades execute on (1m, 5m, 15m, 1h, 4h, 1D)</p>
+                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">:DATEFRAME(start, end)</code> — Backtest date range, comma-separated (YYYY-MM-DD)</p>
+                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">:LONG(...) / :SHORT(...)</code> — Direction of the trade</p>
+                      <p><code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">OPEN / CLOSE</code> — Entry and exit blocks with CONDITIONS and optional ARGUMENTS, separated by <code className="px-1 py-0.5 rounded bg-muted text-foreground font-mono">|</code></p>
                     </div>
                   </CardContent>
                 </Card>
