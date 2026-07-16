@@ -599,6 +599,52 @@ export interface AdminVisitors {
   visitors: AdminVisitorRow[];
 }
 
+export interface AdminFunnelStage {
+  key: string;
+  label: string;
+  count: number;
+  rate_from_prev: number | null;
+}
+export interface AdminFunnel {
+  days: number;
+  stages: AdminFunnelStage[];
+  visitor_to_signup: number | null;
+  signup_to_activated: number | null;
+  activated_to_retained: number | null;
+}
+
+export interface AdminAiProblem {
+  id: number;
+  status: string;
+  prompt: string;
+  errors: string[];
+  missing_field: string | null;
+  user_email: string | null;
+  created_at: string;
+}
+export interface AdminAiQuality {
+  days: number;
+  totals: {
+    attempts: number;
+    complete: number;
+    clarify: number;
+    failed: number;
+    non_strategy: number;
+    parse_success_rate: number | null;
+    ran: number;
+    ran_clean: number;
+    edited_then_ran: number;
+    abandoned: number;
+    clean_run_rate: number | null;
+    run_rate: number | null;
+    avg_turns: number | null;
+  };
+  corrected_fields: Record<string, number>;
+  missing_fields: Record<string, number>;
+  daily: { date: string; complete: number; clarify: number; failed: number }[];
+  problems: AdminAiProblem[];
+}
+
 export interface AuthResponse {
   token: string;
   user: AuthUser;
@@ -847,6 +893,14 @@ class DjangoAPI {
 
   async getAdminVisitors(days = 30): Promise<AdminVisitors> {
     return this.request<AdminVisitors>(`/admin/visitors/?days=${days}`);
+  }
+
+  async getAdminFunnel(days = 30): Promise<AdminFunnel> {
+    return this.request<AdminFunnel>(`/admin/funnel/?days=${days}`);
+  }
+
+  async getAdminAiQuality(days = 30): Promise<AdminAiQuality> {
+    return this.request<AdminAiQuality>(`/admin/ai-quality/?days=${days}`);
   }
 
   /** Password-holders confirm with `password`; Google-SSO accounts (no

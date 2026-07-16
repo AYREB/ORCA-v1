@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Shield, Users, Bot, FlaskConical, Sigma, MessageSquare, Search, Loader2,
   ChevronRight, Clock, CheckCircle2, XCircle, Sliders, TrendingUp, TrendingDown,
-  Download, Copy, Eye, Repeat,
+  Download, Copy, Eye, Repeat, Filter, BrainCircuit, AlertTriangle,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis,
@@ -20,7 +20,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   api, AdminOverview, AdminAnalytics, AdminUserSummary, AdminUserDetail,
   AdminAiInteraction, AdminBacktestRow, AdminOptimization, TimePoint, AdminFeedback,
-  AdminVisitors,
+  AdminVisitors, AdminFunnel, AdminAiQuality, AdminAiProblem,
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -128,6 +128,76 @@ function CategoryBars({ title, data, labelMap }: { title: string; data: Record<s
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Conversion funnel — bars scale to the widest stage; each stage shows the
+ * conversion from the previous one. */
+function FunnelChart({ funnel }: { funnel: AdminFunnel }) {
+  const max = Math.max(1, ...funnel.stages.map((s) => s.count));
+  return (
+    <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+      <div className="space-y-2.5">
+        {funnel.stages.map((s, i) => (
+          <div key={s.key}>
+            <div className="mb-1 flex items-baseline justify-between text-xs">
+              <span className="font-medium">{s.label}</span>
+              <span className="tabular-nums text-muted-foreground">
+                {fmtNum(s.count)}
+                {s.rate_from_prev != null && (
+                  <span className="ml-2 opacity-70">{fmtPct(s.rate_from_prev)} of prev.</span>
+                )}
+              </span>
+            </div>
+            <div className="h-5 overflow-hidden rounded bg-secondary/40">
+              <div
+                className="h-full rounded transition-all"
+                style={{
+                  width: `${Math.max(1.5, (s.count / max) * 100)}%`,
+                  background: TEAL,
+                  opacity: 1 - i * 0.16,
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-[11px] text-muted-foreground">
+        Signup → retention stages follow users who signed up in this window. Visitor counts
+        start with tracking, so early on signups can exceed visitors.
+      </p>
+    </div>
+  );
+}
+
+const PROBLEM_STATUS_STYLE: Record<string, string> = {
+  failed: "bg-destructive/15 text-destructive",
+  clarify: "bg-amber-500/15 text-amber-500",
+};
+
+function ProblemPromptRow({ p }: { p: AdminAiProblem }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border border-border/50 bg-background/40">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-secondary/40">
+        <Badge className={`shrink-0 text-[10px] capitalize ${PROBLEM_STATUS_STYLE[p.status] ?? ""}`}>{p.status}</Badge>
+        <span className="min-w-0 flex-1 truncate text-xs">{p.prompt}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">{fmtDate(p.created_at)}</span>
+        <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-border/50 px-3 py-2.5 text-xs">
+          <p className="whitespace-pre-wrap">{p.prompt}</p>
+          {p.missing_field && <p className="text-muted-foreground">Asked for: <span className="font-mono">{p.missing_field}</span></p>}
+          {p.errors.length > 0 && (
+            <div className="rounded bg-destructive/10 px-2 py-1.5 text-destructive">
+              {p.errors.map((e, i) => <div key={i}>{String(e)}</div>)}
+            </div>
+          )}
+          <p className="text-muted-foreground">{p.user_email ?? "unknown user"}</p>
         </div>
       )}
     </div>
@@ -353,6 +423,8 @@ const AdminDashboard = () => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [feedback, setFeedback] = useState<AdminFeedback | null>(null);
   const [visitors, setVisitors] = useState<AdminVisitors | null>(null);
+  const [funnel, setFunnel] = useState<AdminFunnel | null>(null);
+  const [aiQuality, setAiQuality] = useState<AdminAiQuality | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -374,6 +446,8 @@ const AdminDashboard = () => {
     let alive = true;
     api.getAdminAnalytics(days).then((a) => { if (alive) setAnalytics(a); }).catch(() => {});
     api.getAdminVisitors(days).then((v) => { if (alive) setVisitors(v); }).catch(() => {});
+    api.getAdminFunnel(days).then((f) => { if (alive) setFunnel(f); }).catch(() => {});
+    api.getAdminAiQuality(days).then((q) => { if (alive) setAiQuality(q); }).catch(() => {});
     return () => { alive = false; };
   }, [days]);
 
@@ -477,6 +551,76 @@ const AdminDashboard = () => {
               <CategoryBars title="Users by plan" data={analytics.plan_distribution} />
               <CategoryBars title="AI calls by feature" data={overview.ai.by_kind} labelMap={KIND_LABEL} />
               <CategoryBars title="Backtests by source" data={overview.backtests.by_source} />
+            </div>
+          )}
+
+          {/* Conversion funnel + AI quality */}
+          <div className="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <div>
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                <Filter className="h-4 w-4" /> Conversion funnel
+                <span className="text-xs font-normal text-muted-foreground">(last {days}d)</span>
+              </div>
+              {funnel ? (
+                <FunnelChart funnel={funnel} />
+              ) : (
+                <div className="rounded-xl border border-border/50 bg-card/55 py-10 text-center backdrop-blur-xl">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                <BrainCircuit className="h-4 w-4" /> AI parser quality
+                <span className="text-xs font-normal text-muted-foreground">(NL → strategy · last {days}d)</span>
+              </div>
+              {aiQuality ? (
+                <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Metric label="Parse success" value={fmtPct(aiQuality.totals.parse_success_rate)}
+                      tone={aiQuality.totals.parse_success_rate != null && aiQuality.totals.parse_success_rate >= 0.8 ? "up" : undefined} />
+                    <Metric label="Ran w/o edits" value={fmtPct(aiQuality.totals.clean_run_rate)}
+                      tone={aiQuality.totals.clean_run_rate != null && aiQuality.totals.clean_run_rate >= 0.7 ? "up" : undefined} />
+                    <Metric label="Prompts" value={fmtNum(aiQuality.totals.attempts)} />
+                    <Metric label="Avg turns" value={aiQuality.totals.avg_turns != null ? String(aiQuality.totals.avg_turns) : "—"} />
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Metric label="Parsed" value={fmtNum(aiQuality.totals.complete)} />
+                    <Metric label="Needed clarify" value={fmtNum(aiQuality.totals.clarify)} />
+                    <Metric label="Failed" value={fmtNum(aiQuality.totals.failed)} tone={aiQuality.totals.failed > 0 ? "down" : undefined} />
+                    <Metric label="Parsed, not run" value={fmtNum(aiQuality.totals.abandoned)} />
+                  </div>
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    “Ran w/o edits” = user ran the parsed strategy without correcting a single field — the
+                    strongest signal the model got it right. Corrections below show what to fix in training.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border/50 bg-card/55 py-10 text-center backdrop-blur-xl">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {aiQuality && (aiQuality.totals.attempts > 0 || aiQuality.problems.length > 0) && (
+            <div className="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-3">
+              <CategoryBars title="Fields users corrected before running" data={aiQuality.corrected_fields} />
+              <CategoryBars title="Fields the model had to ask for" data={aiQuality.missing_fields} />
+              <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                <span className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Problem prompts
+                  <span className="text-xs font-normal text-muted-foreground">(failed / clarify — free training data)</span>
+                </span>
+                {aiQuality.problems.length === 0 ? (
+                  <p className="py-8 text-center text-xs text-muted-foreground">None in this window. 🎉</p>
+                ) : (
+                  <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                    {aiQuality.problems.map((p) => <ProblemPromptRow key={p.id} p={p} />)}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

@@ -3950,3 +3950,180 @@ def admin_visitors(request):
         "pages": pages,
         "visitors": visitors,
     }))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_funnel(request):
+    """Conversion funnel (superuser-only). ?days=30
+
+    Cohort semantics: stages 2-4 follow the users who SIGNED UP in the window
+    (visitor counts are tracking-era only, so early on signups can exceed
+    visitors — the frontend labels this).
+
+      visitors -> signups -> activated (ran >=1 backtest) -> retained
+      (ran backtests on 2+ distinct days)
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    from django.db.models import Count
+    from django.db.models.functions import TruncDate
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    visitors = (
+        PageView.objects.filter(created_at__gte=since)
+        .exclude(user__is_superuser=True)
+        .values("anon_id").distinct().count()
+    )
+    cohort = User.objects.filter(date_joined__gte=since, is_superuser=False)
+    signups = cohort.count()
+    cohort_runs = BacktestRun.objects.filter(user__in=cohort)
+    activated = cohort_runs.values("user_id").distinct().count()
+    retained = (
+        cohort_runs.annotate(d=TruncDate("created_at"))
+        .values("user_id")
+        .annotate(days_n=Count("d", distinct=True))
+        .filter(days_n__gte=2)
+        .count()
+    )
+
+    def rate(part: int, whole: int):
+        return round(part / whole, 4) if whole else None
+
+    stages = [
+        {"key": "visitors", "label": "Visitors", "count": visitors, "rate_from_prev": None},
+        {"key": "signups", "label": "Signed up", "count": signups, "rate_from_prev": rate(signups, visitors)},
+        {"key": "activated", "label": "Ran a backtest", "count": activated, "rate_from_prev": rate(activated, signups)},
+        {"key": "retained", "label": "Came back (2+ days)", "count": retained, "rate_from_prev": rate(retained, activated)},
+    ]
+    return no_store(JsonResponse({
+        "days": days,
+        "stages": stages,
+        "visitor_to_signup": rate(signups, visitors),
+        "signup_to_activated": rate(activated, signups),
+        "activated_to_retained": rate(retained, activated),
+    }))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_ai_quality(request):
+    """NL-parser model quality (superuser-only). ?days=30
+
+    Built from StrategyQueryLog: parse status per prompt, plus the post-parse
+    ground truth stamped by strategy_chat_outcome — did the user run the
+    parsed strategy, and which fields did they correct first? "Ran with zero
+    edits" is the strongest available signal that a parse was actually right.
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    from collections import Counter
+
+    from django.db.models import Avg, Count
+    from django.db.models.functions import TruncDate
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    qs = StrategyQueryLog.objects.filter(created_at__gte=since)
+
+    by_status = {r["status"]: r["n"] for r in qs.values("status").annotate(n=Count("id"))}
+    complete = by_status.get("complete", 0)
+    clarify = by_status.get("clarify", 0)
+    failed = by_status.get("failed", 0)
+    # non_strategy prompts aren't parse attempts — excluded from the rate.
+    attempts = complete + clarify + failed
+
+    # Ground-truth outcomes on completed parses.
+    done = qs.filter(status="complete")
+    ran = done.filter(ran_backtest=True).count()
+    ran_clean = done.filter(ran_backtest=True, edited_fields=[]).count()
+    abandoned = complete - ran
+    avg_turns = done.aggregate(a=Avg("turns_taken"))["a"]
+
+    # Which fields users corrected most (flattened across edited_fields lists),
+    # and which fields the model most often had to ask for.
+    edit_counter: Counter = Counter()
+    for fields in done.exclude(edited_fields=[]).values_list("edited_fields", flat=True):
+        if isinstance(fields, list):
+            edit_counter.update(str(f) for f in fields)
+    missing_counter: Counter = Counter(
+        m for m in qs.filter(status="clarify").values_list("missing_field", flat=True) if m
+    )
+
+    # Daily series per status (dense axis).
+    start_date = since.date()
+    axis = [str(start_date + timedelta(days=i)) for i in range(days + 1)]
+    daily_rows = (
+        qs.annotate(d=TruncDate("created_at"))
+        .values("d", "status")
+        .annotate(n=Count("id"))
+        .order_by("d")
+    )
+    per_day: dict[str, dict[str, int]] = {d: {} for d in axis}
+    for r in daily_rows:
+        per_day.setdefault(str(r["d"]), {})[r["status"]] = r["n"]
+    daily = [
+        {"date": d,
+         "complete": per_day.get(d, {}).get("complete", 0),
+         "clarify": per_day.get(d, {}).get("clarify", 0),
+         "failed": per_day.get(d, {}).get("failed", 0)}
+        for d in axis
+    ]
+
+    # Recent problem prompts — failed parses are free training data.
+    problems = [
+        {
+            "id": q.id,
+            "status": q.status,
+            "prompt": (q.raw_input or "")[:300],
+            "errors": q.errors if isinstance(q.errors, list) else [],
+            "missing_field": q.missing_field,
+            "user_email": q.user.email if q.user else None,
+            "created_at": q.created_at.isoformat(),
+        }
+        for q in qs.filter(status__in=["failed", "clarify"])
+        .select_related("user").order_by("-created_at")[:30]
+    ]
+
+    def rate(part: int, whole: int):
+        return round(part / whole, 4) if whole else None
+
+    return no_store(JsonResponse({
+        "days": days,
+        "totals": {
+            "attempts": attempts,
+            "complete": complete,
+            "clarify": clarify,
+            "failed": failed,
+            "non_strategy": by_status.get("non_strategy", 0),
+            "parse_success_rate": rate(complete, attempts),
+            "ran": ran,
+            "ran_clean": ran_clean,
+            "edited_then_ran": ran - ran_clean,
+            "abandoned": abandoned,
+            "clean_run_rate": rate(ran_clean, ran),
+            "run_rate": rate(ran, complete),
+            "avg_turns": round(avg_turns, 2) if avg_turns is not None else None,
+        },
+        "corrected_fields": dict(edit_counter.most_common(12)),
+        "missing_fields": dict(missing_counter.most_common(12)),
+        "daily": daily,
+        "problems": problems,
+    }))
