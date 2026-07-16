@@ -20,6 +20,9 @@ interface ChatMessage extends StrategyAssistantMessage {
   examples?: string[];
 }
 
+// Keep in sync with the backend cap (settings.MAX_NL_MESSAGE_CHARS).
+const MAX_MESSAGE_CHARS = 2000;
+
 const EXAMPLE_PROMPTS = [
   "Buy AAPL when RSI drops below 30 and sell when it goes above 70. On the Daily timeframe and Use 10% stop loss.",
   "Long TSLA when the 50 EMA crosses above the 200 EMA on the 4h timeframe.",
@@ -396,8 +399,9 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
             ref={inputRef}
             autoFocus
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => setInput(e.target.value.slice(0, MAX_MESSAGE_CHARS))}
             onKeyDown={handleKeyDown}
+            maxLength={MAX_MESSAGE_CHARS}
             placeholder={
               messages.length === 0
                 ? "Describe your strategy in plain English — typos welcome…"
@@ -415,7 +419,21 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
             {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </Button>
         </div>
-        <p className="text-[10px] text-muted-foreground mt-1.5">Press Enter to send · Shift+Enter for new line</p>
+        <div className="flex items-center justify-between mt-1.5">
+          <p className="text-[10px] text-muted-foreground">Press Enter to send · Shift+Enter for new line</p>
+          <span
+            className={
+              "text-[10px] tabular-nums " +
+              (input.length >= MAX_MESSAGE_CHARS
+                ? "text-destructive font-medium"
+                : input.length >= MAX_MESSAGE_CHARS * 0.9
+                ? "text-amber-500"
+                : "text-muted-foreground")
+            }
+          >
+            {input.length.toLocaleString()} / {MAX_MESSAGE_CHARS.toLocaleString()}
+          </span>
+        </div>
       </Card>
 
       {error && (
