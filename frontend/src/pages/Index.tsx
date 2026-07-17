@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/landing/Navbar";
 import HeroSection from "@/components/landing/HeroSection";
+import LandingDemo from "@/components/landing/LandingDemo";
 import FeaturesSection from "@/components/landing/FeaturesSection";
 import HowItWorksSection from "@/components/landing/HowItWorksSection";
 import CTASection from "@/components/landing/CTASection";
@@ -39,6 +40,7 @@ const Index = () => {
       <div className="min-h-screen bg-background">
         <Navbar onLoginClick={handleLoginClick} onSignupClick={handleSignupClick} />
         <HeroSection onSignupClick={handleSignupClick} />
+        <LandingDemo onSignupClick={handleSignupClick} />
         <FeaturesSection />
         <HowItWorksSection />
         <CTASection onSignupClick={handleSignupClick} />
