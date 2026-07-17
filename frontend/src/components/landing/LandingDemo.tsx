@@ -7,8 +7,16 @@ import { DEMO_FIXTURES, DEMO_ORDER, DemoFixture } from "./demo-fixtures";
 import { trackDemoEvent } from "@/lib/tracker";
 
 interface LandingDemoProps {
-  onSignupClick: () => void;
+  onSignupClick: (context?: string) => void;
 }
+
+// Signup-modal copy tailored to whatever the visitor just tried to do.
+const GATE_COPY: Record<string, string> = {
+  "own-idea": "Create a free account to backtest your own strategy idea.",
+  "another-idea": "Create a free account to run unlimited backtests.",
+  cta: "You just ran a real backtest — create a free account to test your own idea.",
+  trades: "Create a free account to see every trade and the full analytics.",
+};
 
 // One free run, then every interaction routes to signup — anonymous visitors
 // never touch the backtest engine or the GPU; results are real, pre-computed.
@@ -43,7 +51,7 @@ const LandingDemo = ({ onSignupClick }: LandingDemoProps) => {
 
   const gate = (from: string) => {
     trackDemoEvent(`/demo/gated-${from}`);
-    onSignupClick();
+    onSignupClick(GATE_COPY[from]);
   };
 
   const pickPrompt = (key: string) => {

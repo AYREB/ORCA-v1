@@ -49,11 +49,13 @@ interface AuthModalProps {
   onClose: () => void;
   mode: "login" | "signup";
   onToggleMode: () => void;
+  /** Optional signup subheading tailored to what the visitor just did. */
+  signupContext?: string | null;
 }
 
 type AuthView = "form" | "forgot" | "forgot-sent";
 
-const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
+const AuthModal = ({ isOpen, onClose, mode, onToggleMode, signupContext }: AuthModalProps) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -272,7 +274,7 @@ const AuthModal = ({ isOpen, onClose, mode, onToggleMode }: AuthModalProps) => {
                     ? `A reset link has been sent to ${forgotEmail} if that account exists.`
                     : mode === "login"
                     ? "Enter your credentials to access your dashboard"
-                    : "Create your free account to get started"}
+                    : signupContext || "Create your free account to get started"}
                 </p>
               </div>
 
