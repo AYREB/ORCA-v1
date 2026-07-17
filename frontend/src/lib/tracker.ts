@@ -75,6 +75,12 @@ const send = (event: "view" | "ping", path: string) => {
 let currentPath = "";
 let heartbeat: ReturnType<typeof setInterval> | null = null;
 
+/** Log a one-off interaction (e.g. landing-demo steps) as a pseudo page view
+ * without retargeting the heartbeat away from the real current page. */
+export const trackDemoEvent = (pseudoPath: string) => {
+  send("view", pseudoPath);
+};
+
 export const trackPageView = (path: string) => {
   currentPath = path;
   send("view", path);
