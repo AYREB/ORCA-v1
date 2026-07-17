@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/landing/Navbar";
-import HeroSection from "@/components/landing/HeroSection";
+import HeroSection, { MobilePreviewCards } from "@/components/landing/HeroSection";
 import LandingDemo from "@/components/landing/LandingDemo";
 import FeaturesSection from "@/components/landing/FeaturesSection";
 import HowItWorksSection from "@/components/landing/HowItWorksSection";
@@ -41,6 +41,7 @@ const Index = () => {
         <Navbar onLoginClick={handleLoginClick} onSignupClick={handleSignupClick} />
         <HeroSection onSignupClick={handleSignupClick} />
         <LandingDemo onSignupClick={handleSignupClick} />
+        <MobilePreviewCards />
         <FeaturesSection />
         <HowItWorksSection />
         <CTASection onSignupClick={handleSignupClick} />
