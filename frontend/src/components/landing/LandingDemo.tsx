@@ -71,7 +71,7 @@ const LandingDemo = ({ onSignupClick }: LandingDemoProps) => {
   };
 
   return (
-    <section className="relative px-4 pb-20 sm:px-6">
+    <section className="relative -mt-6 px-4 pb-20 sm:px-6 md:mt-0">
       <div className="mx-auto max-w-3xl">
         <motion.div
           initial={{ opacity: 0, y: 24 }}

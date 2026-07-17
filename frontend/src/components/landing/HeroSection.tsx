@@ -9,7 +9,7 @@ interface HeroSectionProps {
 
 const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
   return (
-    <section className="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
+    <section className="relative flex min-h-[85svh] items-center justify-center overflow-hidden pt-16 md:min-h-screen">
       {/* Animated market background */}
       <div className="absolute inset-0">
         <FinanceBackground />
@@ -44,7 +44,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-primary/20 bg-primary/5 mb-8"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-primary/20 bg-primary/5 mb-5 md:mb-8"
           >
             <Zap className="h-4 w-4 text-primary" />
             <span className="text-sm font-medium text-primary">No Coding Required</span>
@@ -55,7 +55,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.1 }}
-            className="text-3xl md:text-5xl lg:text-6xl font-bold leading-tight mb-6"
+            className="text-3xl md:text-5xl lg:text-6xl font-bold leading-tight mb-4 md:mb-6"
           >
             Backtest Your
             <br />
@@ -69,7 +69,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.2 }}
-            className="text-base md:text-lg text-muted-foreground max-w-2xl mx-auto mb-8"
+            className="text-base md:text-lg text-muted-foreground max-w-2xl mx-auto mb-6 md:mb-8"
           >
             Institutional-grade backtesting without writing a single line of code. 
             Build, test, and optimize your strategies with our visual strategy builder.
@@ -80,7 +80,7 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.3 }}
-            className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12"
+            className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-8 md:mb-12"
           >
             <Button variant="hero" size="xl" onClick={onSignupClick}>
               Get Started Free
@@ -113,34 +113,49 @@ const HeroSection = ({ onSignupClick }: HeroSectionProps) => {
           initial={{ opacity: 0, y: 40 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7, delay: 0.5 }}
-          className="mt-20 relative"
+          className="relative mt-20 hidden md:block"
         >
           <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent z-10 pointer-events-none" />
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-5xl mx-auto">
-            <PreviewCard
-              icon={<BarChart3 className="h-5 w-5 text-primary" />}
-              title="Visual Strategy Builder"
-              description="Drag and drop indicators to build complex strategies"
-              delay={0.6}
-            />
-            <PreviewCard
-              icon={<Zap className="h-5 w-5 text-success" />}
-              title="Lightning Fast"
-              description="Run years of backtests in seconds"
-              delay={0.7}
-            />
-            <PreviewCard
-              icon={<Shield className="h-5 w-5 text-warning" />}
-              title="Risk Analysis"
-              description="Comprehensive metrics and drawdown analysis"
-              delay={0.8}
-            />
+            {PREVIEW_CARDS.map((card, index) => (
+              <PreviewCard key={card.title} {...card} delay={0.6 + index * 0.1} />
+            ))}
           </div>
         </motion.div>
       </div>
     </section>
   );
 };
+
+const PREVIEW_CARDS = [
+  {
+    icon: <BarChart3 className="h-5 w-5 text-primary" />,
+    title: "Visual Strategy Builder",
+    description: "Drag and drop indicators to build complex strategies",
+  },
+  {
+    icon: <Zap className="h-5 w-5 text-success" />,
+    title: "Lightning Fast",
+    description: "Run years of backtests in seconds",
+  },
+  {
+    icon: <Shield className="h-5 w-5 text-warning" />,
+    title: "Risk Analysis",
+    description: "Comprehensive metrics and drawdown analysis",
+  },
+];
+
+// Mobile-only: the hero hides its preview cards on small screens so the demo
+// sits above the fold — these render just below the demo instead.
+export const MobilePreviewCards = () => (
+  <div className="px-4 pb-16 md:hidden">
+    <div className="grid grid-cols-1 gap-4 max-w-md mx-auto">
+      {PREVIEW_CARDS.map((card, index) => (
+        <PreviewCard key={card.title} {...card} delay={index * 0.1} />
+      ))}
+    </div>
+  </div>
+);
 
 const PreviewCard = ({ icon, title, description, delay }: { icon: React.ReactNode; title: string; description: string; delay: number }) => (
   <motion.div
