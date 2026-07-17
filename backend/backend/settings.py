@@ -449,6 +449,10 @@ EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+# Resend HTTPS API key (api.resend_backend). Checked before EMAIL_HOST_PASSWORD,
+# which doubles as the key when using Resend over SMTP. Without this line the
+# RESEND_API_KEY env var was silently ignored (settings don't auto-read env).
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "noreply@orca.app")
 # Used to build the password-reset link inserted in the email.
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
