@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Shield, Users, Bot, FlaskConical, Sigma, MessageSquare, Search, Loader2,
   ChevronRight, Clock, CheckCircle2, XCircle, Sliders, TrendingUp, TrendingDown,
-  Download, Copy,
+  Download, Copy, Eye, Repeat, Filter, BrainCircuit, AlertTriangle,
+  ArrowUp, ArrowDown, ArrowUpDown, Gauge, DollarSign, Hammer,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis,
@@ -20,6 +21,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   api, AdminOverview, AdminAnalytics, AdminUserSummary, AdminUserDetail,
   AdminAiInteraction, AdminBacktestRow, AdminOptimization, TimePoint, AdminFeedback,
+  AdminVisitors, AdminFunnel, AdminAiQuality, AdminAiProblem, AdminOnline,
+  AdminAiCosts, AdminStrategyInsights,
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -42,6 +45,18 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 const fmtNum = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString());
+const fmtMoney = (v: number | null | undefined) => {
+  if (v == null) return "—";
+  if (v > 0 && v < 0.01) return "<$0.01";
+  return `$${v.toFixed(2)}`;
+};
+const fmtDuration = (secs: number | null | undefined) => {
+  if (secs == null) return "—";
+  const s = Math.round(secs);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+};
 const fmtPct = (n: number | null | undefined, mult = 100) => (n == null ? "—" : `${(n * mult).toFixed(mult === 100 ? 1 : 2)}%`);
 const fmtDate = (s: string | null | undefined) =>
   s ? new Date(s).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
@@ -123,6 +138,113 @@ function CategoryBars({ title, data, labelMap }: { title: string; data: Record<s
         </div>
       )}
     </div>
+  );
+}
+
+/** Conversion funnel — bars scale to the widest stage; each stage shows the
+ * conversion from the previous one. */
+function FunnelChart({ funnel }: { funnel: AdminFunnel }) {
+  const max = Math.max(1, ...funnel.stages.map((s) => s.count));
+  return (
+    <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+      <div className="space-y-2.5">
+        {funnel.stages.map((s, i) => (
+          <div key={s.key}>
+            <div className="mb-1 flex items-baseline justify-between text-xs">
+              <span className="font-medium">{s.label}</span>
+              <span className="tabular-nums text-muted-foreground">
+                {fmtNum(s.count)}
+                {s.rate_from_prev != null && (
+                  <span className="ml-2 opacity-70">{fmtPct(s.rate_from_prev)} of prev.</span>
+                )}
+              </span>
+            </div>
+            <div className="h-5 overflow-hidden rounded bg-secondary/40">
+              <div
+                className="h-full rounded transition-all"
+                style={{
+                  width: `${Math.max(1.5, (s.count / max) * 100)}%`,
+                  background: TEAL,
+                  opacity: 1 - i * 0.16,
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-[11px] text-muted-foreground">
+        Signup → retention stages follow users who signed up in this window. Visitor counts
+        start with tracking, so early on signups can exceed visitors.
+      </p>
+    </div>
+  );
+}
+
+const PROBLEM_STATUS_STYLE: Record<string, string> = {
+  failed: "bg-destructive/15 text-destructive",
+  clarify: "bg-amber-500/15 text-amber-500",
+};
+
+function ProblemPromptRow({ p }: { p: AdminAiProblem }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border border-border/50 bg-background/40">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-secondary/40">
+        <Badge className={`shrink-0 text-[10px] capitalize ${PROBLEM_STATUS_STYLE[p.status] ?? ""}`}>{p.status}</Badge>
+        <span className="min-w-0 flex-1 truncate text-xs">{p.prompt}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">{fmtDate(p.created_at)}</span>
+        <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-border/50 px-3 py-2.5 text-xs">
+          <p className="whitespace-pre-wrap">{p.prompt}</p>
+          {p.missing_field && <p className="text-muted-foreground">Asked for: <span className="font-mono">{p.missing_field}</span></p>}
+          {p.errors.length > 0 && (
+            <div className="rounded bg-destructive/10 px-2 py-1.5 text-destructive">
+              {p.errors.map((e, i) => <div key={i}>{String(e)}</div>)}
+            </div>
+          )}
+          <p className="text-muted-foreground">{p.user_email ?? "unknown user"}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Highest quota utilisation across a user's metered metrics — the upsell
+ * signal. Unlimited (null-limit) metrics can't create pressure. */
+const quotaPressure = (u: AdminUserSummary): { pct: number; metric: string | null } => {
+  let best = { pct: 0, metric: null as string | null };
+  for (const m of Object.keys(u.quotas)) {
+    const limit = u.quotas[m]?.limit;
+    if (limit == null || limit <= 0) continue;
+    const pct = (u.usage[m] ?? 0) / limit;
+    if (pct > best.pct) best = { pct, metric: m };
+  }
+  return best;
+};
+
+const pressureTone = (pct: number) =>
+  pct >= 1 ? "text-destructive" : pct >= 0.8 ? "text-amber-500" : "text-muted-foreground";
+
+type UserSortKey = "email" | "plan" | "pressure" | "backtests" | "ai" | "opt" | "joined";
+
+function SortTh({ label, k, sort, onSort, right }: {
+  label: string; k: UserSortKey;
+  sort: { key: UserSortKey; dir: "asc" | "desc" };
+  onSort: (k: UserSortKey) => void; right?: boolean;
+}) {
+  const active = sort.key === k;
+  const Icon = active ? (sort.dir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
+  return (
+    <th className={`px-4 py-2.5 font-medium ${right ? "text-right" : "text-left"}`}>
+      <button onClick={() => onSort(k)}
+        className={`inline-flex items-center gap-1 transition-colors hover:text-foreground ${active ? "text-foreground" : ""}`}>
+        {right && <Icon className={`h-3 w-3 ${active ? "" : "opacity-40"}`} />}
+        {label}
+        {!right && <Icon className={`h-3 w-3 ${active ? "" : "opacity-40"}`} />}
+      </button>
+    </th>
   );
 }
 
@@ -344,6 +466,14 @@ const AdminDashboard = () => {
   const [detail, setDetail] = useState<AdminUserDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [feedback, setFeedback] = useState<AdminFeedback | null>(null);
+  const [visitors, setVisitors] = useState<AdminVisitors | null>(null);
+  const [funnel, setFunnel] = useState<AdminFunnel | null>(null);
+  const [aiQuality, setAiQuality] = useState<AdminAiQuality | null>(null);
+  const [online, setOnline] = useState<AdminOnline | null>(null);
+  const [aiCosts, setAiCosts] = useState<AdminAiCosts | null>(null);
+  const [insights, setInsights] = useState<AdminStrategyInsights | null>(null);
+  const [userSort, setUserSort] = useState<{ key: UserSortKey; dir: "asc" | "desc" }>({ key: "joined", dir: "desc" });
+  const [nearLimitOnly, setNearLimitOnly] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -364,6 +494,11 @@ const AdminDashboard = () => {
   useEffect(() => {
     let alive = true;
     api.getAdminAnalytics(days).then((a) => { if (alive) setAnalytics(a); }).catch(() => {});
+    api.getAdminVisitors(days).then((v) => { if (alive) setVisitors(v); }).catch(() => {});
+    api.getAdminFunnel(days).then((f) => { if (alive) setFunnel(f); }).catch(() => {});
+    api.getAdminAiQuality(days).then((q) => { if (alive) setAiQuality(q); }).catch(() => {});
+    api.getAdminAiCosts(days).then((c) => { if (alive) setAiCosts(c); }).catch(() => {});
+    api.getAdminStrategyInsights(days).then((s) => { if (alive) setInsights(s); }).catch(() => {});
     return () => { alive = false; };
   }, [days]);
 
@@ -376,6 +511,38 @@ const AdminDashboard = () => {
     }, 300);
     return () => clearTimeout(t);
   }, [query]);
+
+  // Live "online now" — refreshes every 30s (heartbeats mark 2-min freshness).
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.getAdminOnline().then((o) => { if (alive) setOnline(o); }).catch(() => {});
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  const toggleUserSort = (key: UserSortKey) =>
+    setUserSort((s) => (s.key === key ? { key, dir: s.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
+
+  const sortedUsers = useMemo(() => {
+    const val = (u: AdminUserSummary): string | number => {
+      switch (userSort.key) {
+        case "email": return u.email.toLowerCase();
+        case "plan": return u.plan;
+        case "pressure": return quotaPressure(u).pct;
+        case "backtests": return u.counts.backtests ?? 0;
+        case "ai": return u.counts.ai_interactions ?? 0;
+        case "opt": return u.counts.optimizations ?? 0;
+        case "joined": return u.date_joined ?? "";
+      }
+    };
+    const rows = nearLimitOnly ? users.filter((u) => quotaPressure(u).pct >= 0.8) : [...users];
+    return rows.sort((a, b) => {
+      const av = val(a), bv = val(b);
+      const cmp = typeof av === "number" && typeof bv === "number" ? av - bv : String(av).localeCompare(String(bv));
+      return userSort.dir === "asc" ? cmp : -cmp;
+    });
+  }, [users, userSort, nearLimitOnly]);
 
   const openUser = async (id: number) => {
     setDetailLoading(true); setDetail(null);
@@ -470,14 +637,341 @@ const AdminDashboard = () => {
             </div>
           )}
 
-          {/* Users */}
-          <div className="mb-3 flex items-center justify-between gap-3">
+          {/* Conversion funnel + AI quality */}
+          <div className="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <div>
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                <Filter className="h-4 w-4" /> Conversion funnel
+                <span className="text-xs font-normal text-muted-foreground">(last {days}d)</span>
+              </div>
+              {funnel ? (
+                <FunnelChart funnel={funnel} />
+              ) : (
+                <div className="rounded-xl border border-border/50 bg-card/55 py-10 text-center backdrop-blur-xl">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                <BrainCircuit className="h-4 w-4" /> AI parser quality
+                <span className="text-xs font-normal text-muted-foreground">(NL → strategy · last {days}d)</span>
+              </div>
+              {aiQuality ? (
+                <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Metric label="Parse success" value={fmtPct(aiQuality.totals.parse_success_rate)}
+                      tone={aiQuality.totals.parse_success_rate != null && aiQuality.totals.parse_success_rate >= 0.8 ? "up" : undefined} />
+                    <Metric label="Ran w/o edits" value={fmtPct(aiQuality.totals.clean_run_rate)}
+                      tone={aiQuality.totals.clean_run_rate != null && aiQuality.totals.clean_run_rate >= 0.7 ? "up" : undefined} />
+                    <Metric label="Prompts" value={fmtNum(aiQuality.totals.attempts)} />
+                    <Metric label="Avg turns" value={aiQuality.totals.avg_turns != null ? String(aiQuality.totals.avg_turns) : "—"} />
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Metric label="Parsed" value={fmtNum(aiQuality.totals.complete)} />
+                    <Metric label="Needed clarify" value={fmtNum(aiQuality.totals.clarify)} />
+                    <Metric label="Failed" value={fmtNum(aiQuality.totals.failed)} tone={aiQuality.totals.failed > 0 ? "down" : undefined} />
+                    <Metric label="Parsed, not run" value={fmtNum(aiQuality.totals.abandoned)} />
+                  </div>
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    “Ran w/o edits” = user ran the parsed strategy without correcting a single field — the
+                    strongest signal the model got it right. Corrections below show what to fix in training.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border/50 bg-card/55 py-10 text-center backdrop-blur-xl">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {aiQuality && (aiQuality.totals.attempts > 0 || aiQuality.problems.length > 0) && (
+            <div className="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-3">
+              <CategoryBars title="Fields users corrected before running" data={aiQuality.corrected_fields} />
+              <CategoryBars title="Fields the model had to ask for" data={aiQuality.missing_fields} />
+              <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                <span className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Problem prompts
+                  <span className="text-xs font-normal text-muted-foreground">(failed / clarify — free training data)</span>
+                </span>
+                {aiQuality.problems.length === 0 ? (
+                  <p className="py-8 text-center text-xs text-muted-foreground">None in this window. 🎉</p>
+                ) : (
+                  <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                    {aiQuality.problems.map((p) => <ProblemPromptRow key={p.id} p={p} />)}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* AI costs + what people build */}
+          <div className="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <div>
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                <DollarSign className="h-4 w-4" /> AI costs
+                <span className="text-xs font-normal text-muted-foreground">(estimated · last {days}d)</span>
+              </div>
+              {aiCosts ? (
+                <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Metric label="Total est." value={fmtMoney(aiCosts.totals.cost)} />
+                    <Metric label="Per day" value={fmtMoney(aiCosts.totals.daily_avg_cost)} />
+                    <Metric label="Calls" value={fmtNum(aiCosts.totals.calls)} />
+                    <Metric label="Tokens" value={fmtNum(aiCosts.totals.tokens)} />
+                  </div>
+                  <div className="mt-3 space-y-1.5">
+                    {Object.entries(aiCosts.by_provider).map(([p, v]) => (
+                      <div key={p} className="flex items-center justify-between text-xs">
+                        <span className="font-medium capitalize">{p}</span>
+                        <span className="tabular-nums text-muted-foreground">
+                          {fmtNum(v.calls)} calls · {fmtNum(v.tokens)} tok · {fmtMoney(v.cost)}
+                        </span>
+                      </div>
+                    ))}
+                    {Object.keys(aiCosts.by_kind).length > 0 && <div className="border-t border-border/40 pt-1.5" />}
+                    {Object.entries(aiCosts.by_kind).map(([k, v]) => (
+                      <div key={k} className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">{KIND_LABEL[k] ?? k}</span>
+                        <span className="tabular-nums text-muted-foreground">{fmtMoney(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {aiCosts.top_users.length > 0 && (
+                    <details className="mt-3">
+                      <summary className="cursor-pointer text-xs text-muted-foreground">
+                        Top users by cost ({aiCosts.top_users.length})
+                      </summary>
+                      <div className="mt-1.5 space-y-1">
+                        {aiCosts.top_users.map((u) => (
+                          <div key={u.email} className="flex items-center justify-between text-xs">
+                            <span className="truncate">{u.email}</span>
+                            <span className="shrink-0 tabular-nums text-muted-foreground">
+                              {fmtNum(u.calls)} calls · {fmtMoney(u.cost)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  <p className="mt-3 text-[11px] text-muted-foreground">
+                    Estimates: Modal billed as GPU-seconds ({`$${aiCosts.rates.modal_gpu_per_second}/s`}),
+                    OpenAI by tokens, self-hosted (Ollama) as $0. Adjust rates via
+                    <span className="font-mono"> ADMIN_AI_COST_RATES</span> in settings.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border/50 bg-card/55 py-10 text-center backdrop-blur-xl">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                <Hammer className="h-4 w-4" /> What people build
+                <span className="text-xs font-normal text-muted-foreground">
+                  ({insights ? fmtNum(insights.total_runs) : "…"} backtests · last {days}d)
+                </span>
+              </div>
+              {insights ? (
+                <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Metric label="Long strategies" value={fmtNum(insights.directions.LONG ?? 0)} />
+                    <Metric label="Short strategies" value={fmtNum(insights.directions.SHORT ?? 0)} />
+                  </div>
+                  {insights.ticker_performance.length === 0 ? (
+                    <p className="py-8 text-center text-xs text-muted-foreground">No backtests in this window.</p>
+                  ) : (
+                    <div className="mt-3">
+                      <div className="mb-1 grid grid-cols-4 gap-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <span>Ticker</span><span className="text-right">Runs</span>
+                        <span className="text-right">Profitable</span><span className="text-right">Avg return</span>
+                      </div>
+                      <div className="space-y-1">
+                        {insights.ticker_performance.map((t) => (
+                          <div key={t.ticker} className="grid grid-cols-4 gap-2 text-xs">
+                            <span className="font-mono font-medium">{t.ticker}</span>
+                            <span className="text-right tabular-nums">{fmtNum(t.runs)}</span>
+                            <span className="text-right tabular-nums text-muted-foreground">{fmtPct(t.profitable_rate)}</span>
+                            <span className={`text-right tabular-nums ${t.avg_return_pct != null && t.avg_return_pct >= 0 ? "text-emerald-500" : "text-destructive"}`}>
+                              {t.avg_return_pct != null ? `${t.avg_return_pct}%` : "—"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border/50 bg-card/55 py-10 text-center backdrop-blur-xl">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {insights && insights.total_runs > 0 && (
+            <div className="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-3">
+              <CategoryBars title="Most-tested tickers" data={insights.tickers} />
+              <CategoryBars title="Most-used indicators" data={insights.indicators} />
+              <CategoryBars title="Most-used timeframes" data={insights.timeframes} />
+            </div>
+          )}
+
+          {/* Online now — polls every 30s */}
+          <div className="mb-6 rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+            <div className="flex items-center gap-2.5">
+              <span className="relative flex h-2.5 w-2.5">
+                {(online?.count ?? 0) > 0 && (
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
+                )}
+                <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${(online?.count ?? 0) > 0 ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
+              </span>
+              <span className="text-sm font-semibold tabular-nums">{online ? fmtNum(online.count) : "—"}</span>
+              <span className="text-sm text-muted-foreground">online now</span>
+              <span className="ml-auto text-[10px] text-muted-foreground/60">active in the last 2 min · refreshes every 30s</span>
+            </div>
+            {online && online.visitors.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {online.visitors.map((v) => (
+                  <span key={v.anon_id}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[11px]">
+                    <span className={v.email ? "font-medium" : "font-mono text-muted-foreground"}>
+                      {v.email ?? `anon · ${v.anon_id.slice(0, 8)}`}
+                    </span>
+                    <span className="font-mono text-muted-foreground">{v.path}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Visitors & view time */}
+          <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+            <Eye className="h-4 w-4" /> Visitors
+            <span className="text-xs font-normal text-muted-foreground">(page views incl. logged-out traffic · last {days}d · your own admin browsing excluded)</span>
+          </div>
+          {visitors ? (
+            <>
+              <div className="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <StatTile icon={Eye} label="Unique visitors" value={fmtNum(visitors.totals.unique_visitors)}
+                  sub={`${fmtNum(visitors.totals.signed_in_visitors)} signed in · ${fmtNum(visitors.totals.views)} page views`} />
+                <StatTile icon={Repeat} label="Returning visitors" value={fmtNum(visitors.totals.returning_visitors)}
+                  sub={visitors.totals.unique_visitors > 0
+                    ? `${Math.round((visitors.totals.returning_visitors / visitors.totals.unique_visitors) * 100)}% came back on another day`
+                    : "seen on 2+ days"} />
+                <StatTile icon={Clock} label="Avg session time" value={fmtDuration(visitors.totals.avg_session_seconds)}
+                  sub={`${visitors.totals.views_per_session ?? "—"} pages/session · ${fmtNum(visitors.totals.sessions)} sessions`} />
+                <StatTile icon={Clock} label="Total time on site" value={fmtDuration(visitors.totals.total_time_seconds)}
+                  sub={`across all visitors (${days}d)`} />
+              </div>
+
+              <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <ActivityChart title="Unique visitors / day"
+                  total={visitors.totals.unique_visitors}
+                  data={visitors.daily.map((d) => ({ date: d.date, count: d.visitors }))} />
+                <ActivityChart title="Page views / day"
+                  total={visitors.totals.views}
+                  data={visitors.daily.map((d) => ({ date: d.date, count: d.views }))} />
+              </div>
+
+              <div className="mb-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <CategoryBars title="Top pages (views)"
+                  data={Object.fromEntries(visitors.pages.map((p) => [p.path, p.views]))} />
+                <div className="rounded-xl border border-border/50 bg-card/55 p-4 backdrop-blur-xl">
+                  <span className="mb-2 block text-sm font-medium">Time on page (avg)</span>
+                  {visitors.pages.length === 0 ? (
+                    <p className="py-8 text-center text-xs text-muted-foreground">No data yet.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {[...visitors.pages].sort((a, b) => b.avg_seconds - a.avg_seconds).map((p) => (
+                        <div key={p.path} className="flex items-center justify-between gap-3 text-xs">
+                          <span className="truncate font-mono">{p.path}</span>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {fmtDuration(p.avg_seconds)} · {fmtNum(p.visitors)} visitor{p.visitors === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mb-8 overflow-hidden rounded-xl border border-border/50 bg-card/55 backdrop-blur-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                        <th className="px-4 py-2.5 font-medium">Viewer</th>
+                        <th className="px-4 py-2.5 font-medium text-right">Sessions</th>
+                        <th className="px-4 py-2.5 font-medium text-right">Views</th>
+                        <th className="px-4 py-2.5 font-medium text-right">Days active</th>
+                        <th className="px-4 py-2.5 font-medium text-right">Time on site</th>
+                        <th className="px-4 py-2.5 font-medium">First seen</th>
+                        <th className="px-4 py-2.5 font-medium">Last seen</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visitors.visitors.map((v) => (
+                        <tr key={v.anon_id} className="border-b border-border/30 last:border-0">
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <span className={v.email ? "font-medium" : "font-mono text-xs text-muted-foreground"}>
+                                {v.email ?? `anon · ${v.anon_id.slice(0, 8)}`}
+                              </span>
+                              {v.returning && <Badge variant="secondary" className="text-[10px]">returning</Badge>}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{v.sessions}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{v.views}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{v.days_active}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{fmtDuration(v.total_seconds)}</td>
+                          <td className="px-4 py-2.5 text-xs text-muted-foreground">{fmtDate(v.first_seen)}</td>
+                          <td className="px-4 py-2.5 text-xs text-muted-foreground">{fmtDate(v.last_seen)}</td>
+                        </tr>
+                      ))}
+                      {visitors.visitors.length === 0 && (
+                        <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                          No visits recorded yet — tracking starts with this deploy.
+                        </td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="mb-8 rounded-xl border border-border/50 bg-card/55 py-10 text-center text-sm text-muted-foreground backdrop-blur-xl">
+              <Loader2 className="mx-auto h-4 w-4 animate-spin" />
+            </div>
+          )}
+
+          {/* Users — sortable; sort by Usage for the upsell radar */}
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Users className="h-4 w-4" /> Users <span className="text-muted-foreground">({total})</span>
+              <span className="text-xs font-normal text-muted-foreground">— click a column to rank</span>
             </div>
-            <div className="relative w-64 max-w-full">
-              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search email…" className="pl-8" />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setNearLimitOnly((v) => !v);
+                  if (!nearLimitOnly) setUserSort({ key: "pressure", dir: "desc" });
+                }}
+                className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  nearLimitOnly
+                    ? "border-amber-500/40 bg-amber-500/15 text-amber-500"
+                    : "border-border/60 bg-card/55 text-muted-foreground hover:bg-secondary/60"
+                }`}>
+                <Gauge className="h-3.5 w-3.5" /> Near limit (≥80%)
+              </button>
+              <div className="relative w-64 max-w-full">
+                <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search email…" className="pl-8" />
+              </div>
             </div>
           </div>
 
@@ -486,42 +980,57 @@ const AdminDashboard = () => {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                    <th className="px-4 py-2.5 font-medium">User</th>
-                    <th className="px-4 py-2.5 font-medium">Plan</th>
-                    <th className="px-4 py-2.5 font-medium">Quota usage</th>
-                    <th className="px-4 py-2.5 font-medium text-right">Backtests</th>
-                    <th className="px-4 py-2.5 font-medium text-right">AI</th>
-                    <th className="px-4 py-2.5 font-medium text-right">Opt</th>
-                    <th className="px-4 py-2.5 font-medium">Joined</th>
+                    <SortTh label="User" k="email" sort={userSort} onSort={toggleUserSort} />
+                    <SortTh label="Plan" k="plan" sort={userSort} onSort={toggleUserSort} />
+                    <SortTh label="Usage" k="pressure" sort={userSort} onSort={toggleUserSort} />
+                    <SortTh label="Backtests" k="backtests" sort={userSort} onSort={toggleUserSort} right />
+                    <SortTh label="AI" k="ai" sort={userSort} onSort={toggleUserSort} right />
+                    <SortTh label="Opt" k="opt" sort={userSort} onSort={toggleUserSort} right />
+                    <SortTh label="Joined" k="joined" sort={userSort} onSort={toggleUserSort} />
                     <th className="px-4 py-2.5" />
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map((u) => (
-                    <tr key={u.id} onClick={() => openUser(u.id)}
-                      className="cursor-pointer border-b border-border/30 transition-colors last:border-0 hover:bg-secondary/40">
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5 font-medium">
-                          {u.email}{u.is_superuser && <Shield className="h-3.5 w-3.5 text-amber-500" />}
-                        </div>
-                        <div className="text-xs text-muted-foreground">{u.name}</div>
-                      </td>
-                      <td className="px-4 py-3"><Badge className={`capitalize ${PLAN_COLORS[u.plan] ?? ""}`}>{u.plan_label}</Badge></td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-                          {Object.keys(u.quotas).map((m) => (
-                            <span key={m} className="tabular-nums">{METRIC_LABEL[m] ?? m} {u.usage[m] ?? 0}/{u.quotas[m].limit ?? "∞"}</span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums">{u.counts.backtests ?? 0}</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{u.counts.ai_interactions ?? 0}</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{u.counts.optimizations ?? 0}</td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">{fmtDate(u.date_joined)}</td>
-                      <td className="px-4 py-3 text-right"><ChevronRight className="h-4 w-4 text-muted-foreground" /></td>
-                    </tr>
-                  ))}
-                  {users.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">No users.</td></tr>}
+                  {sortedUsers.map((u) => {
+                    const pressure = quotaPressure(u);
+                    return (
+                      <tr key={u.id} onClick={() => openUser(u.id)}
+                        className="cursor-pointer border-b border-border/30 transition-colors last:border-0 hover:bg-secondary/40">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5 font-medium">
+                            {u.email}{u.is_superuser && <Shield className="h-3.5 w-3.5 text-amber-500" />}
+                          </div>
+                          <div className="text-xs text-muted-foreground">{u.name}</div>
+                        </td>
+                        <td className="px-4 py-3"><Badge className={`capitalize ${PLAN_COLORS[u.plan] ?? ""}`}>{u.plan_label}</Badge></td>
+                        <td className="px-4 py-3">
+                          <div className={`flex items-center gap-2 text-xs font-semibold tabular-nums ${pressureTone(pressure.pct)}`}>
+                            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-secondary/60">
+                              <div className={`h-full rounded-full ${pressure.pct >= 1 ? "bg-destructive" : pressure.pct >= 0.8 ? "bg-amber-500" : "bg-primary/60"}`}
+                                style={{ width: `${Math.min(100, pressure.pct * 100)}%` }} />
+                            </div>
+                            {Math.round(pressure.pct * 100)}%
+                            {pressure.metric && <span className="font-normal opacity-70">{METRIC_LABEL[pressure.metric] ?? pressure.metric}</span>}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                            {Object.keys(u.quotas).map((m) => (
+                              <span key={m} className="tabular-nums">{METRIC_LABEL[m] ?? m} {u.usage[m] ?? 0}/{u.quotas[m].limit ?? "∞"}</span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">{u.counts.backtests ?? 0}</td>
+                        <td className="px-4 py-3 text-right tabular-nums">{u.counts.ai_interactions ?? 0}</td>
+                        <td className="px-4 py-3 text-right tabular-nums">{u.counts.optimizations ?? 0}</td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground">{fmtDate(u.date_joined)}</td>
+                        <td className="px-4 py-3 text-right"><ChevronRight className="h-4 w-4 text-muted-foreground" /></td>
+                      </tr>
+                    );
+                  })}
+                  {sortedUsers.length === 0 && (
+                    <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                      {nearLimitOnly ? "Nobody is near their quota limits right now." : "No users."}
+                    </td></tr>
+                  )}
                 </tbody>
               </table>
             </div>

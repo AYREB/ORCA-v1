@@ -24,9 +24,9 @@ interface ChatMessage extends StrategyAssistantMessage {
 const MAX_MESSAGE_CHARS = 2000;
 
 const EXAMPLE_PROMPTS = [
-  "Buy AAPL when RSI drops below 30 and sell when it goes above 70. On the Daily timeframe and Use 10% stop loss.",
-  "Long TSLA when the 50 EMA crosses above the 200 EMA on the 4h timeframe.",
-  "Short SPY when price breaks below the lower Bollinger Band with a 5% take profit.",
+  "Buy AAPL when RSI drops below 30 and sell when it goes above 70, on the daily timeframe with a 10% stop loss.",
+  "Long TSLA when the 50 SMA crosses above the 200 SMA on the 4h timeframe, with a 20% take profit and 10% stop loss.",
+  "Short SPY when price falls below the 100-period SMA on the 1h timeframe, with a 5% stop loss.",
 ];
 
 const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {

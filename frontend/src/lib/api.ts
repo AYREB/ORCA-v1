@@ -571,6 +571,122 @@ export interface AdminFeedback {
   leads: AdminFeedbackLead[];
 }
 
+export interface AdminVisitorRow {
+  anon_id: string;
+  email: string | null;
+  first_seen: string;
+  last_seen: string;
+  views: number;
+  sessions: number;
+  days_active: number;
+  returning: boolean;
+  total_seconds: number;
+}
+export interface AdminVisitors {
+  days: number;
+  totals: {
+    views: number;
+    unique_visitors: number;
+    signed_in_visitors: number;
+    returning_visitors: number;
+    sessions: number;
+    avg_session_seconds: number | null;
+    views_per_session: number | null;
+    total_time_seconds: number;
+  };
+  daily: { date: string; views: number; visitors: number }[];
+  pages: { path: string; views: number; visitors: number; avg_seconds: number }[];
+  visitors: AdminVisitorRow[];
+}
+
+export interface AdminAiCosts {
+  days: number;
+  totals: {
+    cost: number;
+    calls: number;
+    tokens: number;
+    cost_per_call: number | null;
+    daily_avg_cost: number;
+  };
+  by_provider: Record<string, { calls: number; tokens: number; cost: number }>;
+  by_kind: Record<string, number>;
+  daily: { date: string; cost: number }[];
+  top_users: { email: string; calls: number; tokens: number; cost: number }[];
+  rates: Record<string, number>;
+}
+
+export interface AdminStrategyInsights {
+  days: number;
+  total_runs: number;
+  tickers: Record<string, number>;
+  indicators: Record<string, number>;
+  timeframes: Record<string, number>;
+  directions: Record<string, number>;
+  ticker_performance: {
+    ticker: string;
+    runs: number;
+    profitable_rate: number | null;
+    avg_return_pct: number | null;
+  }[];
+}
+
+export interface AdminOnlineVisitor {
+  anon_id: string;
+  email: string | null;
+  path: string;
+  last_seen: string;
+}
+export interface AdminOnline {
+  count: number;
+  visitors: AdminOnlineVisitor[];
+}
+
+export interface AdminFunnelStage {
+  key: string;
+  label: string;
+  count: number;
+  rate_from_prev: number | null;
+}
+export interface AdminFunnel {
+  days: number;
+  stages: AdminFunnelStage[];
+  visitor_to_signup: number | null;
+  signup_to_activated: number | null;
+  activated_to_retained: number | null;
+}
+
+export interface AdminAiProblem {
+  id: number;
+  status: string;
+  prompt: string;
+  errors: string[];
+  missing_field: string | null;
+  user_email: string | null;
+  created_at: string;
+}
+export interface AdminAiQuality {
+  days: number;
+  totals: {
+    attempts: number;
+    complete: number;
+    clarify: number;
+    failed: number;
+    non_strategy: number;
+    parse_success_rate: number | null;
+    ran: number;
+    ran_clean: number;
+    edited_then_ran: number;
+    abandoned: number;
+    clean_run_rate: number | null;
+    run_rate: number | null;
+    avg_turns: number | null;
+  };
+  corrected_fields: Record<string, number>;
+  missing_fields: Record<string, number>;
+  daily: { date: string; complete: number; clarify: number; failed: number }[];
+  problems: AdminAiProblem[];
+}
+
 export interface AuthResponse {
   token: string;
   user: AuthUser;
@@ -815,6 +931,30 @@ class DjangoAPI {
   /** Every feedback lead + a de-duplicated email list for the CSV export. */
   async getAdminFeedback(): Promise<AdminFeedback> {
     return this.request<AdminFeedback>('/admin/feedback/');
+  }
+
+  async getAdminVisitors(days = 30): Promise<AdminVisitors> {
+    return this.request<AdminVisitors>(`/admin/visitors/?days=${days}`);
+  }
+
+  async getAdminOnline(): Promise<AdminOnline> {
+    return this.request<AdminOnline>('/admin/online/');
+  }
+
+  async getAdminAiCosts(days = 30): Promise<AdminAiCosts> {
+    return this.request<AdminAiCosts>(`/admin/ai-costs/?days=${days}`);
+  }
+
+  async getAdminStrategyInsights(days = 30): Promise<AdminStrategyInsights> {
+    return this.request<AdminStrategyInsights>(`/admin/strategy-insights/?days=${days}`);
+  }
+
+  async getAdminFunnel(days = 30): Promise<AdminFunnel> {
+    return this.request<AdminFunnel>(`/admin/funnel/?days=${days}`);
+  }
+
+  async getAdminAiQuality(days = 30): Promise<AdminAiQuality> {
+    return this.request<AdminAiQuality>(`/admin/ai-quality/?days=${days}`);
   }
 
   /** Password-holders confirm with `password`; Google-SSO accounts (no

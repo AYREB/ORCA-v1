@@ -53,15 +53,19 @@ def compute_macd(series, fast=12, slow=26, signal=9, timeframe=None):
     signal_line = macd_line.ewm(span=int(signal), adjust=False).mean()
     return macd_line - signal_line
 
-def compute_bbands(series, period=20, stddev=2, timeframe=None):
-    """Bollinger Bands - returns upper band for comparisons"""
+def compute_bbands(series, period=20, stddev=2, timeframe=None, band="upper"):
+    """Bollinger Bands - `band` selects upper (default), lower, or middle.
+
+    Unknown band values fall back to upper, the only band this ever returned
+    before the selector existed — old strategies keep their behavior."""
     sma = series.rolling(window=int(period)).mean()
     std = series.rolling(window=int(period)).std(ddof=0)  # population std matches TradingView
-    upper = sma + float(stddev) * std
-    lower = sma - float(stddev) * std
-    # Return upper band as default for condition comparisons
-    # e.g. price > BBANDS means price > upper band
-    return upper
+    band = str(band).strip().lower()
+    if band == "lower":
+        return sma - float(stddev) * std
+    if band in ("middle", "mid", "basis"):
+        return sma
+    return sma + float(stddev) * std
 
 def compute_atr(data, period=14, timeframe=None):
     """Wilder's ATR - matches TradingView standard"""

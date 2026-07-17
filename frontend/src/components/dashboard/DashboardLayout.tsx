@@ -4,6 +4,8 @@ import { Helmet } from "react-helmet-async";
 import { motion } from "framer-motion";
 import type { LucideIcon } from "lucide-react";
 import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import { Menu } from "lucide-react";
+import orcaLogo from "@/assets/orca-logo.png";
 import FinanceBackground from "@/components/effects/FinanceBackground";
 
 const SIDEBAR_STORAGE_KEY = "orca_sidebar_collapsed";
@@ -31,6 +33,8 @@ const DashboardLayout = ({
   const [isCollapsed, setIsCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1"
   );
+  // Mobile drawer — closed on every page load; opened via the hamburger.
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const toggleSidebar = () =>
     setIsCollapsed((previous) => {
@@ -56,12 +60,40 @@ const DashboardLayout = ({
           <div className="absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-accent/10 blur-3xl" />
         </div>
 
-        <DashboardSidebar isCollapsed={isCollapsed} onToggle={toggleSidebar} />
+        {/* Mobile top bar — hamburger + brand. md+ uses the fixed sidebar. */}
+        <header className="fixed inset-x-0 top-0 z-30 flex h-14 items-center gap-3 border-b border-border/60 bg-background/85 px-4 backdrop-blur-xl md:hidden">
+          <button
+            onClick={() => setMobileOpen(true)}
+            aria-label="Open menu"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-card/60 text-foreground"
+          >
+            <Menu className="h-4 w-4" />
+          </button>
+          <img src={orcaLogo} alt="Orca" className="h-7 w-7 rounded-md" />
+          <span className="text-base font-bold tracking-tight">Orca</span>
+          <span className="ml-auto truncate text-xs text-muted-foreground">{title}</span>
+        </header>
+
+        {/* Backdrop behind the mobile drawer */}
+        {mobileOpen && (
+          <div
+            className="fixed inset-0 z-30 bg-background/60 backdrop-blur-sm md:hidden"
+            onClick={() => setMobileOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+
+        <DashboardSidebar
+          isCollapsed={isCollapsed}
+          onToggle={toggleSidebar}
+          mobileOpen={mobileOpen}
+          onMobileClose={() => setMobileOpen(false)}
+        />
 
         <main
-          className={`relative transition-all duration-300 ${isCollapsed ? "ml-16" : "ml-64"}`}
+          className={`relative transition-all duration-300 ml-0 pt-14 md:pt-0 ${isCollapsed ? "md:ml-16" : "md:ml-64"}`}
         >
-          <div className={`${maxWidth} mx-auto space-y-6 p-6`}>
+          <div className={`${maxWidth} mx-auto space-y-6 p-4 sm:p-6`}>
             <VerifyEmailBanner />
             {children}
           </div>

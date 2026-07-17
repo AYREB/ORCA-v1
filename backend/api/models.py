@@ -421,3 +421,41 @@ class FeedbackLead(models.Model):
 
     def __str__(self):
         return f"FeedbackLead({self.email}, {self.source})"
+
+
+class PageView(models.Model):
+    """One page view by one browser, with engaged time.
+
+    ``anon_id`` is a UUID minted client-side and kept in localStorage — it
+    identifies a browser across visits whether or not anyone is logged in.
+    ``session_id`` rotates after 30 minutes of inactivity, so one row group
+    per session = one "visit". Heartbeat pings (sent while the tab is visible)
+    bump ``last_seen_at`` on the session's newest row, making
+    ``last_seen_at - created_at`` the engaged time on that page.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="page_views",
+    )
+    anon_id = models.CharField(max_length=36)
+    session_id = models.CharField(max_length=36)
+    path = models.CharField(max_length=200)
+    referrer = models.CharField(max_length=500, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["anon_id", "created_at"]),
+            models.Index(fields=["session_id", "created_at"]),
+        ]
+
+    def __str__(self):
+        who = self.user.email if self.user else self.anon_id[:8]
+        return f"PageView({who}, {self.path})"

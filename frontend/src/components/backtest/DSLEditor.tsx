@@ -31,97 +31,86 @@ interface DSLEditorProps {
 const DSL_EXAMPLES = [
   {
     name: "RSI Mean Reversion",
-    dsl: `:TICKER(AAPL,TSLA,MSFT)
+    dsl: `:TICKER(MSFT,GOOGL,NVDA)
 
-    :EXECUTION_TIMEFRAME(1h,4h)
-    
-    :DATA_TIMEFRAMES(1h)
-    
-    :DATEFRAME(2024-01-01, 2025-11-01)
-    
-    :LONG(
-       OPEN{
-           CONDITIONS{
-               RSI() < 30 AND SMA() < 20 AND PRICE() > 30
-           }
-           |ARGUMENTS{
-               initialOpenPositionInvestType = percentCashBalance
-               |initialOpenPositionInvestAmount = 0.1
-               |recurring=true
-               |stopLossPercent =6
-               |takeProfitPercent = 10
-           }
-       }
-       |CLOSE{
-            CONDITIONS{
-                RSI(offset=1) > 75
-            }
-       }
-    )`,
-      },
-      {
-        name: "SMA Crossover",
-        dsl: `:TICKER(AAPL,TSLA)
-    
-    :EXECUTION_TIMEFRAME(1h)
-    
-    :DATA_TIMEFRAMES(1h)
-    
-    :DATEFRAME(2024-01-01, 2025-01-01)
-    
-    :LONG(
-        OPEN{
-            CONDITIONS{
-                SMA(20) > SMA(50)
-            }
-            |ARGUMENTS{
-                initialOpenPositionInvestType = percentCashBalance
-                |initialOpenPositionInvestAmount = 0.1
-                |recurring = false
-                |stopLossPercent = 2
-                |takeProfitPercent = 5
-                |spread = 0.001
-            }
+:EXECUTION_TIMEFRAME(1h)
+
+:DATEFRAME(2025-06-01, 2026-06-01)
+
+:LONG(
+    OPEN{
+        CONDITIONS{
+            RSI(period=14) < 30
         }
-        |CLOSE{
-            CONDITIONS{
-                SMA(20) < SMA(50)
-            }
+        |ARGUMENTS{
+            initialOpenPositionInvestType = percentCashBalance
+            |initialOpenPositionInvestAmount = 0.1
+            |stopLossPercent = 6
+            |takeProfitPercent = 10
         }
-    )`,
-      },
-      {
-        name: "Price Below SMA",
-        dsl: `:TICKER(AAPL,MSFT)
-    
-    :EXECUTION_TIMEFRAME(4h)
-    
-    :DATA_TIMEFRAMES(1h,4h)
-    
-    :DATEFRAME(2024-01-01, 2025-01-01)
-    
-    :LONG(
-        OPEN{
-            CONDITIONS{
-                PRICE(close) < SMA(14) * 1.05
-            }
-            |ARGUMENTS{
-                initialOpenPositionInvestType = percentCashBalance
-                |initialOpenPositionInvestAmount = 0.2
-                |recurring = false
-                |stopLossPercent = 5
-                |takeProfitPercent = 10
-                |spread = 0.001
-            }
+    }
+    |CLOSE{
+        CONDITIONS{
+            RSI(period=14) > 70
         }
-        |CLOSE{
-            CONDITIONS{
-                PRICE(close) > SMA(14)
-            }
+    }
+)`,
+  },
+  {
+    name: "SMA Crossover",
+    dsl: `:TICKER(AAPL,TSLA)
+
+:EXECUTION_TIMEFRAME(4h)
+
+:DATEFRAME(2025-06-01, 2026-06-01)
+
+:LONG(
+    OPEN{
+        CONDITIONS{
+            SMA(period=20, timeframe=4h) > SMA(period=50, timeframe=4h)
         }
-    )`,
-      },
-    ];
+        |ARGUMENTS{
+            initialOpenPositionInvestType = percentCashBalance
+            |initialOpenPositionInvestAmount = 0.1
+            |stopLossPercent = 5
+            |takeProfitPercent = 10
+        }
+    }
+    |CLOSE{
+        CONDITIONS{
+            SMA(period=20, timeframe=4h) < SMA(period=50, timeframe=4h)
+        }
+    }
+)`,
+  },
+  {
+    name: "Price Below SMA",
+    dsl: `:TICKER(SPY,QQQ)
+
+:EXECUTION_TIMEFRAME(1D)
+
+:DATEFRAME(2023-01-01, 2026-06-01)
+
+:LONG(
+    OPEN{
+        CONDITIONS{
+            PRICE(close) < SMA(period=50, timeframe=1D) * 0.95
+        }
+        |ARGUMENTS{
+            initialOpenPositionInvestType = percentCashBalance
+            |initialOpenPositionInvestAmount = 0.2
+            |stopLossPercent = 5
+            |takeProfitPercent = 10
+        }
+    }
+    |CLOSE{
+        CONDITIONS{
+            PRICE(close) > SMA(period=50, timeframe=1D)
+        }
+    }
+)`,
+  },
+];
 
 const DSLEditor = ({ value, onChange, onRun, onSave }: DSLEditorProps) => {
   const [strategyName, setStrategyName] = useState("");
@@ -182,7 +171,7 @@ const DSLEditor = ({ value, onChange, onRun, onSave }: DSLEditorProps) => {
             <TooltipContent className="max-w-sm">
               <p className="text-sm">
                 Use our Domain Specific Language (DSL) to define entry/exit conditions.
-                Supports indicators like RSI, MACD, SMA, EMA, BB, ADX, and more.
+                Supports RSI, MACD, SMA, EMA, BBANDS, STOCH, CCI, ATR, OBV, PRICE and VOLUME.
               </p>
             </TooltipContent>
           </Tooltip>
@@ -210,33 +199,30 @@ const DSLEditor = ({ value, onChange, onRun, onSave }: DSLEditorProps) => {
         <Textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={`:TICKER(AAPL,TSLA,MSFT)
+          placeholder={`:TICKER(MSFT,GOOGL,NVDA)
 
-    :EXECUTION_TIMEFRAME(1h,4h)
-    
-    :DATA_TIMEFRAMES(1h)
-    
-    :DATEFRAME(2024-01-01, 2025-11-01)
-    
-    :LONG(
-       OPEN{
-           CONDITIONS{
-               RSI() < 30 AND SMA() < 20 AND PRICE() > 30
-           }
-           |ARGUMENTS{
-               initialOpenPositionInvestType = percentCashBalance
-               |initialOpenPositionInvestAmount = 0.1
-               |recurring=true
-               |stopLossPercent =6
-               |takeProfitPercent = 10
-           }
-       }
-       |CLOSE{
-            CONDITIONS{
-                RSI(offset=1) > 75
-            }
-       }
-    )`}
+:EXECUTION_TIMEFRAME(1h)
+
+:DATEFRAME(2025-06-01, 2026-06-01)
+
+:LONG(
+    OPEN{
+        CONDITIONS{
+            RSI(period=14) < 30
+        }
+        |ARGUMENTS{
+            initialOpenPositionInvestType = percentCashBalance
+            |initialOpenPositionInvestAmount = 0.1
+            |stopLossPercent = 6
+            |takeProfitPercent = 10
+        }
+    }
+    |CLOSE{
+        CONDITIONS{
+            RSI(period=14) > 70
+        }
+    }
+)`}
           className="min-h-[250px] font-mono text-sm bg-secondary/50 border-border resize-none"
         />
         <div className="absolute top-2 right-2 flex gap-1">

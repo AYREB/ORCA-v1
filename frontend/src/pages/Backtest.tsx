@@ -285,7 +285,7 @@ const Backtest = () => {
                 >
                   {/* Entry Mode Tabs */}
                   <Tabs value={entryMode} onValueChange={(v) => setEntryMode(v as EntryMode)} className="w-full">
-                    <TabsList className="mb-6 border border-border/70 bg-card/60 p-1 backdrop-blur-xl">
+                    <TabsList className="mb-6 flex w-full justify-start overflow-x-auto border border-border/70 bg-card/60 p-1 backdrop-blur-xl md:inline-flex md:w-auto">
                       <TabsTrigger value="form" className="gap-2 data-[state=active]:bg-primary/20">
                         <Settings2 className="h-4 w-4" />
                         Easy Mode
@@ -334,7 +334,7 @@ const Backtest = () => {
                 >
                   <RiskDisclaimer className="mb-6" />
                   <Tabs defaultValue="numerical" className="w-full" key={resultsKey}>
-                    <TabsList className="mb-6 border border-border/70 bg-card/60 p-1 backdrop-blur-xl">
+                    <TabsList className="mb-6 flex w-full justify-start overflow-x-auto border border-border/70 bg-card/60 p-1 backdrop-blur-xl md:inline-flex md:w-auto">
                       <TabsTrigger value="numerical" className="gap-2 data-[state=active]:bg-primary/20">
                         <BarChart3 className="h-4 w-4" />
                         Numerical

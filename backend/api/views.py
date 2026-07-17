@@ -57,7 +57,7 @@ from .indicator_sandbox import (
     run_indicator_test,
     validate_parameters,
 )
-from .models import AIInteractionLog, BacktestRun, CustomIndicator, FeedbackLead, OptimizationRun, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
+from .models import AIInteractionLog, BacktestRun, CustomIndicator, FeedbackLead, OptimizationRun, PageView, PaperAccountState, Strategy, StrategyConversation, StrategyQueryLog
 from .ai_logging import log_ai_interaction
 from . import entitlements
 from .entitlements import PlanLimitError
@@ -271,6 +271,8 @@ DEFAULT_RATE_LIMITS = {
     "status": {"max_requests": 120, "window_seconds": 60},
     "assistant": {"max_requests": 30, "window_seconds": 60},
     "general": {"max_requests": 180, "window_seconds": 60},
+    # Page-view beacons: one view per navigation + a 20s heartbeat per open tab.
+    "track": {"max_requests": 240, "window_seconds": 60},
 }
 
 
@@ -3741,4 +3743,652 @@ def admin_analytics(request):
         },
         "ai_by_kind_daily": ai_kind_series,
         "plan_distribution": plan_distribution,
+    }))
+
+
+# ---------------- Page-view tracking ---------------- #
+
+_TRACK_ID_RE = re.compile(r"^[0-9a-fA-F-]{8,36}$")
+# A ping can only stretch a view this far; anything longer is a stale row from
+# a tab that came back hours later (the client will have rotated the session).
+MAX_VIEW_STRETCH = timedelta(hours=6)
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("POST")
+@rate_limit("track")
+def track_event(request):
+    """First-party page-view beacon. Public — anonymous visitors count too.
+
+    Body: {event: "view"|"ping", anon_id, session_id, path, referrer?}
+    "view" inserts a row; "ping" bumps last_seen_at on the session's newest row
+    (engaged time). Parsed leniently (no Content-Type requirement) because the
+    tab-hidden ping arrives via navigator.sendBeacon, which sends text/plain.
+    Malformed input returns {ok: false} rather than an error — analytics must
+    never produce user-visible failures or client retry loops.
+    """
+    try:
+        data = json.loads((request.body or b"")[:2048].decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return JsonResponse({"ok": False})
+    if not isinstance(data, dict):
+        return JsonResponse({"ok": False})
+
+    event = str(data.get("event") or "view")
+    anon_id = str(data.get("anon_id") or "")
+    session_id = str(data.get("session_id") or "")
+    path = str(data.get("path") or "")
+    referrer = str(data.get("referrer") or "")[:500]
+
+    if event not in ("view", "ping"):
+        return JsonResponse({"ok": False})
+    if not (_TRACK_ID_RE.match(anon_id) and _TRACK_ID_RE.match(session_id)):
+        return JsonResponse({"ok": False})
+    if not path.startswith("/") or len(path) > 200:
+        return JsonResponse({"ok": False})
+
+    # Beacons carry no Authorization header; regular fetches do.
+    user = get_user_from_request(request)
+
+    if event == "view":
+        PageView.objects.create(
+            user=user, anon_id=anon_id, session_id=session_id,
+            path=path, referrer=referrer,
+        )
+        return JsonResponse({"ok": True})
+
+    # ping — extend engaged time on the newest row of this session.
+    row = (
+        PageView.objects.filter(anon_id=anon_id, session_id=session_id)
+        .order_by("-created_at")
+        .first()
+    )
+    now = timezone.now()
+    if row is None or now - row.created_at > MAX_VIEW_STRETCH:
+        return JsonResponse({"ok": True})
+    row.last_seen_at = now
+    update_fields = ["last_seen_at"]
+    if user is not None and row.user_id is None:
+        # Visitor logged in mid-session — retroactively identify the view.
+        row.user = user
+        update_fields.append("user")
+    row.save(update_fields=update_fields)
+    return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_visitors(request):
+    """Visitor analytics for the admin page (superuser-only). ?days=30
+
+    Unique/returning visitors, session view time, daily series, top pages,
+    and the per-visitor list. Superusers' own logged-in browsing is excluded
+    so the team doesn't inflate its own numbers (their pre-login anonymous
+    views are indistinguishable and still count).
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    from django.db.models import Count, F, Max, Min, Q
+    from django.db.models.functions import TruncDate
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    qs = PageView.objects.filter(created_at__gte=since).exclude(user__is_superuser=True)
+
+    total_views = qs.count()
+    unique_visitors = qs.values("anon_id").distinct().count()
+    signed_in_visitors = qs.filter(user__isnull=False).values("user_id").distinct().count()
+
+    # Returning = active on 2+ distinct calendar days in the window.
+    returning = (
+        qs.annotate(d=TruncDate("created_at"))
+        .values("anon_id")
+        .annotate(days_active=Count("d", distinct=True))
+        .filter(days_active__gte=2)
+        .count()
+    )
+
+    # Sessions: duration = newest last_seen - earliest created per session.
+    sessions = list(
+        qs.values("session_id")
+        .annotate(start=Min("created_at"), end=Max("last_seen_at"), views=Count("id"))
+    )
+    durations = [max(0.0, (s["end"] - s["start"]).total_seconds()) for s in sessions]
+    total_sessions = len(sessions)
+    avg_session_seconds = round(sum(durations) / total_sessions) if total_sessions else None
+    total_time_seconds = round(sum(durations))
+    views_per_session = round(total_views / total_sessions, 1) if total_sessions else None
+
+    # Daily series (dense axis, like admin_analytics).
+    start_date = since.date()
+    axis = [str(start_date + timedelta(days=i)) for i in range(days + 1)]
+    daily_rows = (
+        qs.annotate(d=TruncDate("created_at"))
+        .values("d")
+        .annotate(views=Count("id"), visitors=Count("anon_id", distinct=True))
+        .order_by("d")
+    )
+    by_day = {str(r["d"]): r for r in daily_rows}
+    daily = [
+        {"date": d, "views": by_day.get(d, {}).get("views", 0),
+         "visitors": by_day.get(d, {}).get("visitors", 0)}
+        for d in axis
+    ]
+
+    # Top pages by views, with per-page engaged time.
+    page_rows = list(
+        qs.values("path")
+        .annotate(views=Count("id"), visitors=Count("anon_id", distinct=True))
+        .order_by("-views")[:12]
+    )
+    # Engaged seconds per path (separate pass; duration expressions vary by DB).
+    top_paths = [r["path"] for r in page_rows]
+    time_by_path: dict[str, float] = {p: 0.0 for p in top_paths}
+    for pv in qs.filter(path__in=top_paths).values("path", "created_at", "last_seen_at"):
+        time_by_path[pv["path"]] += max(0.0, (pv["last_seen_at"] - pv["created_at"]).total_seconds())
+    pages = [
+        {**r, "avg_seconds": round(time_by_path[r["path"]] / r["views"]) if r["views"] else 0}
+        for r in page_rows
+    ]
+
+    # Per-visitor list, newest activity first. Max("user__email") picks the
+    # identified email if any row in the group has one (aggregates skip NULLs).
+    visitor_rows = list(
+        qs.values("anon_id")
+        .annotate(
+            email=Max("user__email"),
+            first_seen=Min("created_at"),
+            last_seen=Max("last_seen_at"),
+            views=Count("id"),
+            sessions=Count("session_id", distinct=True),
+            days_active=Count(TruncDate("created_at"), distinct=True),
+        )
+        .order_by("-last_seen")[:200]
+    )
+    # Total engaged time per visitor (only for the rows we're returning).
+    ids = [v["anon_id"] for v in visitor_rows]
+    time_by_anon: dict[str, float] = {a: 0.0 for a in ids}
+    for pv in qs.filter(anon_id__in=ids).values("anon_id", "created_at", "last_seen_at"):
+        time_by_anon[pv["anon_id"]] += max(0.0, (pv["last_seen_at"] - pv["created_at"]).total_seconds())
+    visitors = [
+        {
+            "anon_id": v["anon_id"],
+            "email": v["email"],
+            "first_seen": v["first_seen"].isoformat(),
+            "last_seen": v["last_seen"].isoformat(),
+            "views": v["views"],
+            "sessions": v["sessions"],
+            "days_active": v["days_active"],
+            "returning": v["days_active"] >= 2,
+            "total_seconds": round(time_by_anon[v["anon_id"]]),
+        }
+        for v in visitor_rows
+    ]
+
+    return no_store(JsonResponse({
+        "days": days,
+        "totals": {
+            "views": total_views,
+            "unique_visitors": unique_visitors,
+            "signed_in_visitors": signed_in_visitors,
+            "returning_visitors": returning,
+            "sessions": total_sessions,
+            "avg_session_seconds": avg_session_seconds,
+            "views_per_session": views_per_session,
+            "total_time_seconds": total_time_seconds,
+        },
+        "daily": daily,
+        "pages": pages,
+        "visitors": visitors,
+    }))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_online(request):
+    """Who is on the site right now (superuser-only). Lightweight — the admin
+    page polls this every 30s. "Online" = a page view or heartbeat in the last
+    2 minutes (heartbeats fire every 20s while a tab is visible)."""
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    cutoff = timezone.now() - timedelta(minutes=2)
+    rows = (
+        PageView.objects.filter(last_seen_at__gte=cutoff)
+        .exclude(user__is_superuser=True)
+        .select_related("user")
+        .order_by("-last_seen_at")[:200]
+    )
+    # Newest row per visitor = where they are right now.
+    seen: set[str] = set()
+    online = []
+    for pv in rows:
+        if pv.anon_id in seen:
+            continue
+        seen.add(pv.anon_id)
+        if len(online) < 50:
+            online.append({
+                "anon_id": pv.anon_id,
+                "email": pv.user.email if pv.user else None,
+                "path": pv.path,
+                "last_seen": pv.last_seen_at.isoformat(),
+            })
+
+    return no_store(JsonResponse({"count": len(seen), "visitors": online}))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_funnel(request):
+    """Conversion funnel (superuser-only). ?days=30
+
+    Cohort semantics: stages 2-4 follow the users who SIGNED UP in the window
+    (visitor counts are tracking-era only, so early on signups can exceed
+    visitors — the frontend labels this).
+
+      visitors -> signups -> activated (ran >=1 backtest) -> retained
+      (ran backtests on 2+ distinct days)
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    from django.db.models import Count
+    from django.db.models.functions import TruncDate
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    visitors = (
+        PageView.objects.filter(created_at__gte=since)
+        .exclude(user__is_superuser=True)
+        .values("anon_id").distinct().count()
+    )
+    cohort = User.objects.filter(date_joined__gte=since, is_superuser=False)
+    signups = cohort.count()
+    cohort_runs = BacktestRun.objects.filter(user__in=cohort)
+    activated = cohort_runs.values("user_id").distinct().count()
+    retained = (
+        cohort_runs.annotate(d=TruncDate("created_at"))
+        .values("user_id")
+        .annotate(days_n=Count("d", distinct=True))
+        .filter(days_n__gte=2)
+        .count()
+    )
+
+    def rate(part: int, whole: int):
+        return round(part / whole, 4) if whole else None
+
+    stages = [
+        {"key": "visitors", "label": "Visitors", "count": visitors, "rate_from_prev": None},
+        {"key": "signups", "label": "Signed up", "count": signups, "rate_from_prev": rate(signups, visitors)},
+        {"key": "activated", "label": "Ran a backtest", "count": activated, "rate_from_prev": rate(activated, signups)},
+        {"key": "retained", "label": "Came back (2+ days)", "count": retained, "rate_from_prev": rate(retained, activated)},
+    ]
+    return no_store(JsonResponse({
+        "days": days,
+        "stages": stages,
+        "visitor_to_signup": rate(signups, visitors),
+        "signup_to_activated": rate(activated, signups),
+        "activated_to_retained": rate(retained, activated),
+    }))
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_ai_quality(request):
+    """NL-parser model quality (superuser-only). ?days=30
+
+    Built from StrategyQueryLog: parse status per prompt, plus the post-parse
+    ground truth stamped by strategy_chat_outcome — did the user run the
+    parsed strategy, and which fields did they correct first? "Ran with zero
+    edits" is the strongest available signal that a parse was actually right.
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    from collections import Counter
+
+    from django.db.models import Avg, Count
+    from django.db.models.functions import TruncDate
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    qs = StrategyQueryLog.objects.filter(created_at__gte=since)
+
+    by_status = {r["status"]: r["n"] for r in qs.values("status").annotate(n=Count("id"))}
+    complete = by_status.get("complete", 0)
+    clarify = by_status.get("clarify", 0)
+    failed = by_status.get("failed", 0)
+    # non_strategy prompts aren't parse attempts — excluded from the rate.
+    attempts = complete + clarify + failed
+
+    # Ground-truth outcomes on completed parses.
+    done = qs.filter(status="complete")
+    ran = done.filter(ran_backtest=True).count()
+    ran_clean = done.filter(ran_backtest=True, edited_fields=[]).count()
+    abandoned = complete - ran
+    avg_turns = done.aggregate(a=Avg("turns_taken"))["a"]
+
+    # Which fields users corrected most (flattened across edited_fields lists),
+    # and which fields the model most often had to ask for.
+    edit_counter: Counter = Counter()
+    for fields in done.exclude(edited_fields=[]).values_list("edited_fields", flat=True):
+        if isinstance(fields, list):
+            edit_counter.update(str(f) for f in fields)
+    missing_counter: Counter = Counter(
+        m for m in qs.filter(status="clarify").values_list("missing_field", flat=True) if m
+    )
+
+    # Daily series per status (dense axis).
+    start_date = since.date()
+    axis = [str(start_date + timedelta(days=i)) for i in range(days + 1)]
+    daily_rows = (
+        qs.annotate(d=TruncDate("created_at"))
+        .values("d", "status")
+        .annotate(n=Count("id"))
+        .order_by("d")
+    )
+    per_day: dict[str, dict[str, int]] = {d: {} for d in axis}
+    for r in daily_rows:
+        per_day.setdefault(str(r["d"]), {})[r["status"]] = r["n"]
+    daily = [
+        {"date": d,
+         "complete": per_day.get(d, {}).get("complete", 0),
+         "clarify": per_day.get(d, {}).get("clarify", 0),
+         "failed": per_day.get(d, {}).get("failed", 0)}
+        for d in axis
+    ]
+
+    # Recent problem prompts — failed parses are free training data.
+    problems = [
+        {
+            "id": q.id,
+            "status": q.status,
+            "prompt": (q.raw_input or "")[:300],
+            "errors": q.errors if isinstance(q.errors, list) else [],
+            "missing_field": q.missing_field,
+            "user_email": q.user.email if q.user else None,
+            "created_at": q.created_at.isoformat(),
+        }
+        for q in qs.filter(status__in=["failed", "clarify"])
+        .select_related("user").order_by("-created_at")[:30]
+    ]
+
+    def rate(part: int, whole: int):
+        return round(part / whole, 4) if whole else None
+
+    return no_store(JsonResponse({
+        "days": days,
+        "totals": {
+            "attempts": attempts,
+            "complete": complete,
+            "clarify": clarify,
+            "failed": failed,
+            "non_strategy": by_status.get("non_strategy", 0),
+            "parse_success_rate": rate(complete, attempts),
+            "ran": ran,
+            "ran_clean": ran_clean,
+            "edited_then_ran": ran - ran_clean,
+            "abandoned": abandoned,
+            "clean_run_rate": rate(ran_clean, ran),
+            "run_rate": rate(ran, complete),
+            "avg_turns": round(avg_turns, 2) if avg_turns is not None else None,
+        },
+        "corrected_fields": dict(edit_counter.most_common(12)),
+        "missing_fields": dict(missing_counter.most_common(12)),
+        "daily": daily,
+        "problems": problems,
+    }))
+
+
+# Estimated AI spend rates. Override any key via settings.ADMIN_AI_COST_RATES.
+# Modal bills GPU-time, not tokens — latency is the best available proxy.
+DEFAULT_AI_COST_RATES = {
+    "modal_gpu_per_second": 0.000306,   # A10G on-demand ≈ $1.10/hr
+    "openai_per_1m_input": 0.15,        # gpt-4o-mini class defaults
+    "openai_per_1m_output": 0.60,
+}
+
+
+def _ai_call_cost(provider: str, latency_ms, prompt_tokens, completion_tokens, rates) -> float:
+    provider = (provider or "").lower()
+    if provider == "modal":
+        return max(0.0, float(latency_ms or 0)) / 1000.0 * rates["modal_gpu_per_second"]
+    if provider == "openai":
+        return (
+            max(0, int(prompt_tokens or 0)) / 1e6 * rates["openai_per_1m_input"]
+            + max(0, int(completion_tokens or 0)) / 1e6 * rates["openai_per_1m_output"]
+        )
+    return 0.0  # ollama / unknown: self-hosted, no marginal cost
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_ai_costs(request):
+    """Estimated AI spend (superuser-only). ?days=30
+
+    Modal calls are costed by GPU-seconds (latency x rate), OpenAI calls by
+    tokens, Ollama/self-hosted as zero marginal cost. Rates are configurable
+    via settings.ADMIN_AI_COST_RATES and echoed in the response so the admin
+    page can label the numbers as the estimates they are.
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    rates = {**DEFAULT_AI_COST_RATES, **getattr(settings, "ADMIN_AI_COST_RATES", {})}
+
+    logs = AIInteractionLog.objects.filter(created_at__gte=since).values(
+        "user__email", "provider", "kind", "latency_ms",
+        "prompt_tokens", "completion_tokens", "total_tokens", "created_at",
+    )
+
+    total_cost = 0.0
+    total_tokens = 0
+    calls = 0
+    by_provider: dict[str, dict] = {}
+    by_kind: dict[str, float] = {}
+    by_user: dict[str, dict] = {}
+    by_day: dict[str, float] = {}
+
+    for log in logs:
+        cost = _ai_call_cost(
+            log["provider"], log["latency_ms"], log["prompt_tokens"], log["completion_tokens"], rates)
+        tokens = int(log["total_tokens"] or 0)
+        provider = (log["provider"] or "unknown").lower()
+        kind = log["kind"] or "other"
+        email = log["user__email"] or "deleted user"
+        day = str(log["created_at"].date())
+
+        calls += 1
+        total_cost += cost
+        total_tokens += tokens
+        p = by_provider.setdefault(provider, {"calls": 0, "cost": 0.0, "tokens": 0})
+        p["calls"] += 1
+        p["cost"] += cost
+        p["tokens"] += tokens
+        by_kind[kind] = by_kind.get(kind, 0.0) + cost
+        u = by_user.setdefault(email, {"calls": 0, "cost": 0.0, "tokens": 0})
+        u["calls"] += 1
+        u["cost"] += cost
+        u["tokens"] += tokens
+        by_day[day] = by_day.get(day, 0.0) + cost
+
+    start_date = since.date()
+    axis = [str(start_date + timedelta(days=i)) for i in range(days + 1)]
+    daily = [{"date": d, "cost": round(by_day.get(d, 0.0), 4)} for d in axis]
+
+    top_users = sorted(
+        ({"email": e, **v, "cost": round(v["cost"], 4)} for e, v in by_user.items()),
+        key=lambda r: r["cost"], reverse=True,
+    )[:15]
+
+    return no_store(JsonResponse({
+        "days": days,
+        "totals": {
+            "cost": round(total_cost, 4),
+            "calls": calls,
+            "tokens": total_tokens,
+            "cost_per_call": round(total_cost / calls, 5) if calls else None,
+            "daily_avg_cost": round(total_cost / days, 4),
+        },
+        "by_provider": {
+            k: {"calls": v["calls"], "tokens": v["tokens"], "cost": round(v["cost"], 4)}
+            for k, v in by_provider.items()
+        },
+        "by_kind": {k: round(v, 4) for k, v in sorted(by_kind.items(), key=lambda kv: -kv[1])},
+        "daily": daily,
+        "top_users": top_users,
+        "rates": rates,
+    }))
+
+
+def _collect_dsl_usage(dsl_json) -> tuple[set, set, set, str | None]:
+    """(tickers, indicator names, timeframes, direction) referenced by one
+    strategy's DSL — each counted once per run, however often it appears."""
+    tickers: set = set()
+    indicators: set = set()
+    timeframes: set = set()
+    direction = None
+    if not isinstance(dsl_json, dict):
+        return tickers, indicators, timeframes, direction
+
+    for side in ("LONG", "SHORT"):
+        if side not in dsl_json:
+            continue
+        direction = side if direction is None else direction
+        ctx = dsl_json[side].get("context") if isinstance(dsl_json[side], dict) else None
+        if isinstance(ctx, dict):
+            tickers.update(str(t).upper() for t in (ctx.get("tickers") or []) if t)
+            tf = ctx.get("execution_timeframe")
+            if isinstance(tf, list):
+                tf = tf[0] if tf else None
+            if tf:
+                timeframes.add(str(tf))
+
+    def walk(node):
+        if isinstance(node, dict):
+            f = node.get("func")
+            if isinstance(f, str) and f:
+                indicators.add(f.upper())
+            arg = node.get("arg")
+            if isinstance(arg, dict):
+                tf = arg.get("timeframe")
+                if tf:
+                    timeframes.add(str(tf))
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for x in node:
+                walk(x)
+
+    walk(dsl_json)
+    return tickers, indicators, timeframes, direction
+
+
+@csrf_exempt
+@api_error_boundary
+@require_methods("GET")
+@token_required
+@rate_limit("general")
+def admin_strategy_insights(request):
+    """What users actually build (superuser-only). ?days=30
+
+    Mines every backtest's captured DSL for the tickers, indicators, and
+    timeframes used (each counted once per run), long/short split, and
+    per-ticker outcomes.
+    """
+    user = get_authenticated_user(request)
+    require_admin(user)
+
+    try:
+        days = min(max(int(request.GET.get("days", 30)), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    runs = BacktestRun.objects.filter(created_at__gte=since).values(
+        "dsl_json", "config", "pct_change")[:5000]
+
+    from collections import Counter
+
+    ticker_counts: Counter = Counter()
+    indicator_counts: Counter = Counter()
+    timeframe_counts: Counter = Counter()
+    directions: Counter = Counter()
+    ticker_outcomes: dict[str, dict] = {}
+    total_runs = 0
+
+    for run in runs:
+        total_runs += 1
+        tickers, indicators, timeframes, direction = _collect_dsl_usage(run["dsl_json"])
+        # config.tickers is what the engine actually loaded — most reliable.
+        cfg = run["config"] if isinstance(run["config"], dict) else {}
+        tickers.update(str(t).upper() for t in (cfg.get("tickers") or []) if t)
+
+        ticker_counts.update(tickers)
+        indicator_counts.update(indicators)
+        timeframe_counts.update(timeframes)
+        if direction:
+            directions[direction] += 1
+
+        pct = float(run["pct_change"] or 0)
+        for t in tickers:
+            o = ticker_outcomes.setdefault(t, {"runs": 0, "profitable": 0, "sum_pct": 0.0})
+            o["runs"] += 1
+            o["sum_pct"] += pct
+            if pct > 0:
+                o["profitable"] += 1
+
+    ticker_performance = [
+        {
+            "ticker": t,
+            "runs": o["runs"],
+            "profitable_rate": round(o["profitable"] / o["runs"], 4) if o["runs"] else None,
+            "avg_return_pct": round(o["sum_pct"] / o["runs"], 2) if o["runs"] else None,
+        }
+        for t, o in sorted(ticker_outcomes.items(), key=lambda kv: -kv[1]["runs"])[:12]
+    ]
+
+    return no_store(JsonResponse({
+        "days": days,
+        "total_runs": total_runs,
+        "tickers": dict(ticker_counts.most_common(12)),
+        "indicators": dict(indicator_counts.most_common(12)),
+        "timeframes": dict(timeframe_counts.most_common(8)),
+        "directions": dict(directions),
+        "ticker_performance": ticker_performance,
     }))

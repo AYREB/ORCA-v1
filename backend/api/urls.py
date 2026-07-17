@@ -52,6 +52,8 @@ urlpatterns = [
     path("strategy-to-dsl/", views.strategy_to_dsl),
     path('strategy/chat/', views.strategy_chat),
     path('strategy/chat/outcome/', views.strategy_chat_outcome),
+    # First-party page-view beacon (public; anonymous visitors included)
+    path("track/", views.track_event),
     # Admin analytics (superuser-only)
     path("admin/overview/", views.admin_overview),
     path("admin/analytics/", views.admin_analytics),
@@ -59,5 +61,11 @@ urlpatterns = [
     path("admin/users/<int:user_id>/", views.admin_user_detail),
     path("admin/ai-interactions/", views.admin_ai_interactions),
     path("admin/feedback/", views.admin_feedback),
+    path("admin/visitors/", views.admin_visitors),
+    path("admin/online/", views.admin_online),
+    path("admin/funnel/", views.admin_funnel),
+    path("admin/ai-quality/", views.admin_ai_quality),
+    path("admin/ai-costs/", views.admin_ai_costs),
+    path("admin/strategy-insights/", views.admin_strategy_insights),
     path("admin/backtests/<int:run_id>/", views.admin_backtest_detail),
 ]

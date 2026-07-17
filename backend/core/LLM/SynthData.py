@@ -279,8 +279,8 @@ def price_ind(ohlc="close", offset=0):
 def stoch_ind(tf, offset=0):
     return {"func": "STOCH", "arg": {"k_period": 14, "d_period": 3, "slowing": 3, "timeframe": tf, "offset": offset}}
 
-def bbands_ind(tf, offset=0):
-    return {"func": "BBANDS", "arg": {"period": 20, "stddev": 2, "timeframe": tf, "offset": offset}}
+def bbands_ind(tf, offset=0, band="upper"):
+    return {"func": "BBANDS", "arg": {"period": 20, "stddev": 2, "timeframe": tf, "offset": offset, "band": band}}
 
 def volume_ind(offset=0):
     return {"func": "VOLUME", "arg": {"offset": offset}}
@@ -941,7 +941,8 @@ def gen_bollinger(direction):
         direction: {
             "context": {"tickers": [ticker], "execution_timeframe": tf, "dateframe": {"start": start, "end": end}},
             "OPEN": {
-                "CONDITIONS": cond(price_ind("close", 0), op, bbands_ind(tf)),
+                "CONDITIONS": cond(price_ind("close", 0), op,
+                                   bbands_ind(tf, band="upper" if direction == "LONG" else "lower")),
                 "ARGUMENTS":  open_args(tp=tp, sl=sl)
             }
         }

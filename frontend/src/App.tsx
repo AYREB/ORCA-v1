@@ -2,8 +2,10 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { HelmetProvider } from "react-helmet-async";
+import { useEffect } from "react";
+import { trackPageView } from "@/lib/tracker";
 import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import Backtest from "./pages/Backtest";
@@ -31,6 +33,15 @@ import PlanLimitDialog from "./components/plan/PlanLimitDialog";
 
 const queryClient = new QueryClient();
 
+// Logs a page view on every route change (must live inside BrowserRouter).
+const PageTracker = () => {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    trackPageView(pathname);
+  }, [pathname]);
+  return null;
+};
+
 const App = () => (
   <HelmetProvider>
     <QueryClientProvider client={queryClient}>
@@ -41,6 +52,7 @@ const App = () => (
               <Toaster />
               <Sonner />
               <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                <PageTracker />
                 <PlanLimitDialog />
                 <Routes>
                   <Route path="/" element={<Index />} />
