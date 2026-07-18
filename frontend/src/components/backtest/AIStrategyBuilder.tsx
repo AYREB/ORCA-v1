@@ -499,6 +499,35 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
               </Button>
             )}
           </div>
+
+          {/* Catch people at the moment of failure: a common cause is an
+              indicator/market we don't support, so show what we do handle. */}
+          <div className="mt-3 border-t border-destructive/20 pt-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1">
+              Indicators it understands
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {supportedIndicators.map((ind) => (
+                <span
+                  key={ind}
+                  className="rounded bg-secondary/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                >
+                  {ind}
+                </span>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted-foreground/70">
+              Using an indicator or market that isn't listed is a common cause —{" "}
+              <button
+                type="button"
+                onClick={() => setHelpOpen(true)}
+                className="text-primary hover:underline"
+              >
+                see the full list
+              </button>
+              .
+            </p>
+          </div>
         </Card>
       )}
 
