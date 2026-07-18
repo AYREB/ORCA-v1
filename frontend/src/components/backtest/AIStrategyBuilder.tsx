@@ -41,6 +41,7 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  const [helpOpen, setHelpOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -221,6 +222,14 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
     }
   };
 
+  // What the assistant actually understands — surfaced up front so users phrase
+  // ideas in supported terms instead of guessing (and hitting a dead end).
+  const supportedMarkets = Object.keys(registryTickers);
+  const supportedIndicators =
+    Object.keys(registry.indicators?.INDICATORS ?? {}).length > 0
+      ? Object.keys(registry.indicators!.INDICATORS as Record<string, unknown>)
+      : ["RSI", "MACD", "SMA", "EMA", "BBANDS", "STOCH", "CCI", "OBV", "ATR", "PRICE", "VOLUME"];
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -233,7 +242,7 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
           <h3 className="text-sm font-semibold">Strategy Assistant</h3>
           <Badge variant="outline" className="text-[10px]">Beta</Badge>
           <div className="ml-auto flex items-center gap-1">
-            <Popover>
+            <Popover open={helpOpen} onOpenChange={setHelpOpen}>
               <PopoverTrigger asChild>
                 <Button variant="ghost" size="sm" className="h-7 text-[11px] text-muted-foreground gap-1">
                   <HelpCircle className="h-3 w-3" />
@@ -255,8 +264,7 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
                 <div>
                   <p className="font-semibold mb-1">Indicators</p>
                   <p className="text-muted-foreground text-[11px]">
-                    {Object.keys(registry.indicators?.INDICATORS ?? {}).join(" · ") ||
-                      "RSI · MACD · SMA · EMA · BBANDS · STOCH · CCI · OBV · ATR · PRICE · VOLUME"}
+                    {supportedIndicators.join(" · ")}
                   </p>
                 </div>
                 <div>
@@ -330,6 +338,36 @@ const AIStrategyBuilder = ({ onRunBacktest }: AIStrategyBuilderProps) => {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* What the AI understands — nudge users toward supported terms so
+                  they don't waste a prompt on indicators/markets we don't handle. */}
+              <div className="w-full max-w-md space-y-1.5 border-t border-border/60 pt-3">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
+                  Indicators it understands
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {supportedIndicators.map((ind) => (
+                    <span
+                      key={ind}
+                      className="rounded bg-secondary/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                    >
+                      {ind}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground/70">
+                  Plus {supportedMarkets.length} markets. Stick to these so the AI understands your
+                  idea —{" "}
+                  <button
+                    type="button"
+                    onClick={() => setHelpOpen(true)}
+                    className="text-primary hover:underline"
+                  >
+                    see the full list
+                  </button>
+                  .
+                </p>
               </div>
             </div>
           )}
