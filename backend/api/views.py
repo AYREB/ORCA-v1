@@ -292,18 +292,26 @@ def no_store(response: JsonResponse) -> JsonResponse:
     return response
 
 
-def send_verification_email(user) -> None:
-    """Create a fresh verification token and email the link. Never raises —
-    signup/resend must succeed even if the mail server hiccups."""
-    from django.core.mail import send_mail as _send_mail
-
+def build_verification_url(user) -> str:
+    """Invalidate any outstanding tokens, mint a fresh one, and return the
+    frontend verification link."""
     from .models import EmailVerificationToken
 
+    EmailVerificationToken.objects.filter(user=user, used=False).update(used=True)
+    token = EmailVerificationToken.objects.create(user=user)
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
+    return f"{frontend_url}/verify-email?token={token.token}"
+
+
+def send_verification_email(user) -> None:
+    """Create a fresh verification token and email the link. Never raises —
+    signup/resend must succeed even if the mail server hiccups. Used by the
+    standalone "resend verification" flow; new signups get the combined
+    welcome email instead (see send_welcome_email)."""
+    from django.core.mail import send_mail as _send_mail
+
     try:
-        EmailVerificationToken.objects.filter(user=user, used=False).update(used=True)
-        token = EmailVerificationToken.objects.create(user=user)
-        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
-        verify_url = f"{frontend_url}/verify-email?token={token.token}"
+        verify_url = build_verification_url(user)
         name = user.first_name or "there"
         _send_mail(
             subject="Verify your Orca email",
@@ -320,6 +328,108 @@ def send_verification_email(user) -> None:
         )
     except Exception:
         logger.exception("Failed to send verification email to %s", getattr(user, "email", "?"))
+
+
+# Copy-paste starter so new users land in the builder knowing exactly what to
+# type — uses a supported indicator (RSI) on purpose.
+_WELCOME_EXAMPLE_PROMPT = (
+    "Buy AAPL when RSI drops below 30 and sell above 70, daily, 10% stop loss."
+)
+
+
+def send_welcome_email(user, verify_url: str | None = None) -> None:
+    """One-shot onboarding email sent when an account is created: thanks the
+    user, points them at their first backtest, and shares a few tips. For
+    password signups it also carries the email-verification link (verify_url);
+    Google signups are pre-verified so it's omitted. Never raises — signup must
+    succeed even if mail fails."""
+    from django.core.mail import EmailMultiAlternatives
+
+    try:
+        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
+        cta_url = (
+            f"{frontend_url}/dashboard"
+            "?utm_source=welcome_email&utm_medium=email&utm_campaign=onboarding"
+        )
+        name = user.first_name or "there"
+
+        verify_text = ""
+        if verify_url:
+            verify_text = (
+                "\n\nOne housekeeping note: confirm your email so you can recover "
+                f"your account if you forget your password —\n{verify_url}\n"
+                "(link expires in 24 hours)\n"
+            )
+
+        text = (
+            f"Hi {name}, thanks for joining Orca!\n\n"
+            "You're about 60 seconds from your first backtest. The fastest way to "
+            "see what Orca does — paste this into the Strategy Assistant and hit run:\n\n"
+            f'  "{_WELCOME_EXAMPLE_PROMPT}"\n\n'
+            f"Run your first backtest: {cta_url}\n\n"
+            "Three things worth knowing:\n"
+            "  - Describe strategies in plain English — typos are fine, the AI works it out.\n"
+            "  - Stick to supported indicators (RSI, MACD, SMA, EMA, BBANDS and more) and "
+            "markets — the assistant shows you exactly what it handles.\n"
+            "  - Edit before you run — tweak any field on the review card, no need to re-prompt.\n"
+            f"{verify_text}\n"
+            "Reply to this email if you get stuck — a real person reads it.\n\n"
+            "— The Orca team\n"
+            "You're receiving this because you created an Orca account."
+        )
+
+        verify_html = ""
+        if verify_url:
+            verify_html = (
+                '<p style="margin:24px 0 0;padding:12px 16px;background:#f1f5f9;'
+                'border-radius:8px;font-size:13px;color:#475569;">One housekeeping note: '
+                f'<a href="{verify_url}" style="color:#0d9488;">confirm your email</a> so you '
+                "can recover your account if you forget your password (link expires in 24 hours).</p>"
+            )
+
+        html = f"""\
+<div style="margin:0;padding:24px;background:#f8fafc;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+  <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:16px;padding:32px;border:1px solid #e2e8f0;">
+    <p style="margin:0 0 16px;font-size:20px;font-weight:700;color:#0f172a;">Hi {name}, thanks for joining Orca! 🐋</p>
+    <p style="margin:0 0 20px;font-size:15px;line-height:1.6;color:#334155;">
+      You're about 60 seconds from your first backtest. The fastest way to see what Orca does —
+      paste this into the Strategy Assistant and hit run:
+    </p>
+    <p style="margin:0 0 20px;padding:14px 16px;background:#f1f5f9;border-radius:8px;font-size:14px;color:#0f172a;font-style:italic;">
+      "{_WELCOME_EXAMPLE_PROMPT}"
+    </p>
+    <p style="margin:0 0 24px;text-align:center;">
+      <a href="{cta_url}" style="display:inline-block;background:#0d9488;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;padding:12px 28px;border-radius:10px;">
+        Run your first backtest &rarr;
+      </a>
+    </p>
+    <p style="margin:0 0 8px;font-size:14px;font-weight:600;color:#0f172a;">Three things worth knowing</p>
+    <ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.7;color:#334155;">
+      <li><strong>Describe strategies in plain English</strong> — typos are fine, the AI works it out.</li>
+      <li><strong>Stick to supported indicators</strong> (RSI, MACD, SMA, EMA, BBANDS and more) and markets — the assistant shows you exactly what it handles.</li>
+      <li><strong>Edit before you run</strong> — tweak any field on the review card, no need to re-prompt.</li>
+    </ul>
+    {verify_html}
+    <p style="margin:24px 0 0;font-size:14px;line-height:1.6;color:#334155;">
+      Reply to this email if you get stuck — a real person reads it.
+    </p>
+    <p style="margin:16px 0 0;font-size:13px;color:#64748b;">— The Orca team</p>
+    <p style="margin:20px 0 0;padding-top:16px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;">
+      You're receiving this because you created an Orca account.
+    </p>
+  </div>
+</div>"""
+
+        msg = EmailMultiAlternatives(
+            subject="You're in — let's run your first backtest 🐋",
+            body=text,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[user.email],
+        )
+        msg.attach_alternative(html, "text/html")
+        msg.send(fail_silently=False)
+    except Exception:
+        logger.exception("Failed to send welcome email to %s", getattr(user, "email", "?"))
 
 
 def user_payload(user) -> dict[str, Any]:
@@ -1097,7 +1207,8 @@ def register(request):
         password=password,
         first_name=name,
     )
-    send_verification_email(user)
+    # Single onboarding email that also carries the verification link.
+    send_welcome_email(user, verify_url=build_verification_url(user))
     token, _ = Token.objects.get_or_create(user=user)
 
     return no_store(JsonResponse({"token": token.key, "user": user_payload(user)}, status=201))
@@ -1186,8 +1297,13 @@ def google_login(request):
     name = str(payload.get("name") or payload.get("given_name") or "").strip()
 
     user = User.objects.filter(email__iexact=email).first()
-    if user is None:
+    created = user is None
+    if created:
         user = User.objects.create_user(username=email, email=email, password=None, first_name=name[:150])
+        # New account via Google — welcome them. Address is already verified, so
+        # no verification link. (This endpoint also handles returning logins, so
+        # gate on `created` to avoid emailing on every sign-in.)
+        send_welcome_email(user)
     # Google has already verified this address — no nudge needed.
     _gp = entitlements.get_profile(user)
     if not _gp.email_verified:

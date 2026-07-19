@@ -40,6 +40,13 @@ class ResendApiEmailBackend(BaseEmailBackend):
                 "subject": message.subject,
                 "text": message.body,
             }
+            # EmailMultiAlternatives carries an HTML version alongside the plain
+            # text — send both so clients render the rich version and fall back
+            # to text.
+            for content, mimetype in getattr(message, "alternatives", None) or []:
+                if mimetype == "text/html":
+                    payload["html"] = content
+                    break
             if message.cc:
                 payload["cc"] = list(message.cc)
             if message.bcc:
